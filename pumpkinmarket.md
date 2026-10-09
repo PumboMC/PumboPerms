@@ -42,6 +42,12 @@ Ranks and permissions for Pumpkin servers. Put players into groups, give the gro
 
 `/pp help` shows every command you may use. `/pp` is short for `/pumboperms`, and `u`, `g`, `t` work for `user`, `group`, `track`. Permissions are named `pumboperms:<name>` and default to operators of level 3.
 
+## Screenshots
+
+![/pp help](assets/market/help.webp)
+![/pp user commands](assets/market/user-help.webp)
+![A group with its permissions](assets/market/group-info.webp)
+
 ## Installation
 
 Drop the file into `plugins/` and start the server. The config is created in `plugins/data/pumboperms/`. Works with Pumpkin 0.2.0 (Minecraft 26.3).
