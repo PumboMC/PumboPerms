@@ -109,7 +109,7 @@ The config file is written on the first start, with a short comment on every opt
 
 ## Commands and permissions
 
-`/pumboperms`, or the short `/pp`, on PumboProx and on Pumpkin; on PumboProx also `/pumbo perms`. `/pp help` lists the commands you may use, with clicks and tooltips.
+`/pumboperms`, or the short `/pp`, on PumboProx and on Pumpkin. `/pp help` lists the commands you may use, with clicks and tooltips.
 
 | Command | What it does | Permission |
 | --- | --- | --- |
