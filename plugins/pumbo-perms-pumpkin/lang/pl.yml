@@ -1,0 +1,9 @@
+# PumboPerms na Pumpkinie (polski).
+prefix: "&#f28c28PumboPerms &8» "
+reloaded-warnings: "Wczytano, ostrzeżenia: {0}. Szczegóły w logu serwera."
+version-mode: Tryb
+mode-attachments: uprawnienia ustawiane graczom
+mode-event: uprawnienia ustawiane graczom + zdarzenie sprawdzania
+version-online: Online
+mode-proxy: rangi z PumboPerms na proxy (przez PumboBridge)
+proxy-rules: Rangami tej sieci zarządza PumboPerms na proxy, zmiany tutaj nie działają. Użyj /pp na proxy.

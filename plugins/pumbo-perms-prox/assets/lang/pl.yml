@@ -1,0 +1,239 @@
+# --- common ---
+# Komunikaty wspólne dla wszystkich wtyczek Pumbo (polski).
+# Komunikaty zwrotne dostają od wtyczki prefiks i kolor swojego tonu (zielony
+# sukces, czerwony błąd, żółte ostrzeżenie, szara informacja), więc pisze się je
+# bez nich. Kody & nadal działają: &f...&r wyróżnia wartość, &r wraca do koloru
+# tonu. {0}, {1}, ... to argumenty, {nl} zaczyna nową linię. Pusta wartość
+# wyłącza komunikat. Formy rozdzielone | zależą od liczby:
+# "{0} dzień|{0} dni|{0} dni" (1, 2-4, 5+).
+command-no-permission: Nie masz do tego uprawnień.
+command-unknown: Nieznana podkomenda {0}. Użyj {1}.
+command-unknown-hover: Kliknij, żeby zobaczyć komendy
+command-usage: "Użycie: {0}"
+command-usage-hover: Kliknij, żeby wpisać komendę
+command-players-only: Tej komendy mogą używać tylko gracze.
+command-player-not-found: Nie znaleziono gracza {0}.
+command-invalid-duration: "Nieprawidłowy czas {0}. Przykłady: &f30m&r, &f1d12h&r, &fperm"
+command-reloaded: Konfiguracja przeładowana.
+command-reload-failed: "Nic nie przeładowano, plik ma błąd: {0}"
+command-error: Coś poszło nie tak, szczegóły w logu serwera.
+command-help-empty: Nie ma komend, których możesz użyć.
+command-help-hint: Najedź na komendę po opis, kliknij, by ją wpisać.
+command-help-previous: Poprzednia strona
+command-help-next: Następna strona
+command-help-permission: "Uprawnienie: {0}"
+command-help-click: Kliknij, żeby wpisać na czacie
+version-description: Wersja i platforma
+version-platform: Platforma
+time-permanent: na zawsze
+time-day: "{0} dzień|{0} dni|{0} dni"
+time-hour: "{0} godzina|{0} godziny|{0} godzin"
+time-minute: "{0} minuta|{0} minuty|{0} minut"
+time-second: "{0} sekunda|{0} sekundy|{0} sekund"
+number-separator: " "
+
+# --- perms ---
+# Komunikaty PumboPerms (polski).
+# Odpowiedzi dostają prefiks wtyczki i kolor rodzaju (zielony sukces, czerwony
+# błąd, szary informacja) od wtyczki, więc są tu same słowa.
+# Wartości przychodzą wyróżnione; &r wraca do koloru odpowiedzi.
+# {0}, {nazwa}: argumenty. Pusta wartość wyłącza komunikat.
+
+# pomoc
+help-section: Uprawnienia
+
+desc-user: Zarządzanie graczem
+desc-group: Zarządzanie grupą
+desc-track: Zarządzanie ścieżką
+desc-groups: Lista grup
+desc-tracks: Lista ścieżek
+desc-group-create: Tworzy grupę
+desc-group-delete: Usuwa grupę
+desc-track-create: Tworzy ścieżkę
+desc-track-delete: Usuwa ścieżkę
+desc-promote: Awans gracza na ścieżce
+desc-promote-details: "Przykład: /pp promote Steve obsluga"
+desc-demote: Obniżenie gracza na ścieżce
+desc-log: Ostatnie zmiany
+desc-export: Zapis danych do pliku
+desc-export-details: Zapisuje exports/<plik>.json w folderze wtyczki.
+desc-import: Wczytanie danych z pliku
+desc-import-details: Zastępuje wszystko danymi z exports/<plik>.json. Obecne dane są najpierw eksportowane.
+desc-import-source: Przejęcie innego źródła uprawnień (proxy, wtyczka, attachmenty)
+desc-editor: Edytor w przeglądarce (planowany)
+desc-reload: Przeładowanie configu
+desc-version: Wersja, baza i tryb
+desc-info: Grupy, uprawnienia i meta
+desc-perm-info: Lista uprawnień
+desc-perm-set: Ustawia uprawnienie
+desc-perm-set-details: "Przykład: permission set minecraft:command.gamemode true world=world"
+desc-perm-settemp: Uprawnienie na czas
+desc-perm-settemp-details: "Przykład: permission settemp fly true 1h30m"
+desc-perm-unset: Usuwa uprawnienie
+desc-perm-unsettemp: Usuwa uprawnienie czasowe
+desc-perm-check: Sprawdza uprawnienie
+desc-perm-check-details: Pokazuje wartość oraz grupę i węzeł, które o niej decydują.
+desc-perm-clear: Usuwa wszystkie uprawnienia
+desc-parent-info: Lista grup nadrzędnych
+desc-parent-add: Dodaje dziedziczenie grupy
+desc-parent-add-details: "Przykład: parent add vip server=survival"
+desc-parent-addtemp: Grupa nadrzędna na czas
+desc-parent-remove: Usuwa dziedziczenie grupy
+desc-parent-set: Jedyna grupa nadrzędna
+desc-parent-set-details: Usuwa inne grupy nadrzędne w tych kontekstach.
+desc-meta-info: Prefiksy, sufiksy i meta
+desc-meta-set: Ustawia wartość meta
+desc-meta-unset: Usuwa wartość meta
+desc-meta-setprefix: Ustawia prefiks
+desc-meta-setprefix-details: "Zastępuje inne prefiksy. Przykład: meta setprefix 100 \"&c[Admin] \""
+desc-meta-addprefix: Dodaje prefiks
+desc-meta-addtempprefix: Prefiks na czas
+desc-meta-removeprefix: Usuwa prefiksy
+desc-meta-setsuffix: Ustawia sufiks
+desc-meta-addsuffix: Dodaje sufiks
+desc-meta-addtempsuffix: Sufiks na czas
+desc-meta-removesuffix: Usuwa sufiksy
+desc-user-promote: Awans o grupę na ścieżce
+desc-user-demote: Obniżenie o grupę na ścieżce
+desc-user-clear: Usuwa graczowi wszystko
+desc-group-rename: Zmienia nazwę grupy
+desc-group-setweight: Ustawia wagę
+desc-group-setweight-details: W konflikcie wygrywa grupa o wyższej wadze.
+desc-group-setdisplayname: Ustawia pokazywaną nazwę
+desc-group-listmembers: Lista członków
+desc-track-info: Grupy ścieżki
+desc-track-append: Dodaje grupę na końcu
+desc-track-insert: Dodaje grupę na pozycji
+desc-track-remove: Usuwa grupę ze ścieżki
+desc-track-clear: Usuwa wszystkie grupy
+
+# błędy
+database-broken: Baza jest niedostępna, nic nie zmieniono. Szczegóły w logu serwera.
+save-failed: "Nie udało się zapisać zmiany: {0}"
+bad-file-name: "{0} to nie jest poprawna nazwa pliku: dozwolone a-z, 0-9, _ i -."
+group-exists: Grupa {0} już istnieje.
+group-not-found: Grupa {0} nie istnieje.
+track-exists: Ścieżka {0} już istnieje.
+track-not-found: Ścieżka {0} nie istnieje.
+bad-name: "{0} to nie jest poprawna nazwa: 1-36 znaków a-z, 0-9, _ i -."
+default-group: Grupy domyślnej nie można usunąć ani przemianować.
+parent-cycle: "{0} już dziedziczy tę grupę, powstałaby pętla."
+unchanged: Nic się nie zmieniło, już jest tak ustawione.
+bad-node-empty: Uprawnienie jest puste.
+bad-node-long: Uprawnienie {0} jest za długie.
+bad-node-char: "{0} to nie jest poprawne uprawnienie: dozwolone a-z, 0-9, _, -, . i :."
+bad-node-segment: "{0} to nie jest poprawne uprawnienie: ma pustą część."
+bad-node-namespace: "{0} to nie jest poprawne uprawnienie: dozwolony jest jeden znak :."
+bad-node-wildcard: "{0} to nie jest poprawne uprawnienie: * może być tylko ostatnią częścią (a.b.*)."
+bad-value: "{0} to nie jest true ani false."
+bad-number: "{0} to nie jest liczba całkowita."
+bad-context: "Zły kontekst: {0}. Użyj server=, group= albo world=."
+editor-later: Edytora w przeglądarce jeszcze nie ma. Na razie użyj export i import (JSON).
+
+# części komunikatów
+in-context: " w {0}"
+target-user: "{0}"
+target-group: grupa {0}
+expires-in: wygasa za {0}
+time-ago: "{0} temu"
+kind-prefix: prefiks
+kind-suffix: sufiks
+
+# zmiany
+perm-set: "{node} = {value} dla: {target}{context}."
+perm-settemp: "{node} = {value} dla: {target}{context}, na {duration}."
+perm-unset: "Usunięto {node} dla: {target}{context}."
+perm-unset-none: "{target}: brak {node}{context}."
+perm-clear: "Usunięto uprawnienia ({count}) dla: {target}{context}."
+perm-check: "{node} dla: {target}: {value}"
+perm-check-source: "decyduje {source}: {node}{context} "
+perm-check-undecided: "{node} dla: {target}: nie ustawiono, decyduje domyślne zachowanie serwera."
+parent-add: "{target} dziedziczy teraz {group}{context}."
+parent-addtemp: "{target} dziedziczy teraz {group}{context}, przez {duration}."
+parent-already: "{target} już dziedziczy {group}{context}."
+parent-remove: "{target} nie dziedziczy już {group}{context}."
+parent-remove-none: "{target} nie dziedziczy {group}{context}."
+parent-set: "{target} dziedziczy teraz tylko {group}{context}."
+meta-set: "{key} = {value} dla: {target}{context}."
+meta-unset: "Usunięto {key} dla: {target}{context}."
+meta-unset-none: "{target}: brak meta {key}{context}."
+affix-set: "{kind} dla: {target} to teraz {text} (priorytet {priority}){context}."
+affix-add: "Dodano {kind} {text} (priorytet {priority}) dla: {target}{context}."
+affix-addtemp: "Dodano {kind} {text} (priorytet {priority}) dla: {target}{context}, na {duration}."
+affix-remove: "Usunięto wpisy ({count}) typu {kind} o priorytecie {priority} dla: {target}{context}."
+affix-remove-none: "{target}: brak wpisu typu {kind} o priorytecie {priority}{context}."
+user-cleared: Usunięto wszystkie grupy, uprawnienia i meta gracza {0}.
+group-created: Utworzono grupę {0}.
+group-deleted: Usunięto grupę {0}.
+group-renamed: Grupa {0} nazywa się teraz {1}.
+group-weight: "Waga grupy {0}: {1}."
+group-displayname: Grupa {0} jest teraz pokazywana jako {1}.
+group-displayname-cleared: Grupa {0} jest znów pokazywana pod swoją nazwą.
+track-created: Utworzono ścieżkę {0}.
+track-deleted: Usunięto ścieżkę {0}.
+track-cleared: Ścieżka {0} nie ma teraz grup.
+track-added: Dodano {0} do ścieżki {1}.
+track-removed: Usunięto {0} ze ścieżki {1}.
+track-on: Grupa {0} już jest na ścieżce.
+track-empty: Ścieżka {0} nie ma grup.
+track-end: "{target} jest już na najwyższej grupie ścieżki {track} ({group})."
+track-start: "{target} jest już na najniższej grupie ścieżki {track} ({group})."
+track-ambiguous: "{target} jest na kilku grupach ścieżki {track}: {groups}. Usuń nadmiarowe przez parent remove."
+not-on-track: "{target} nie jest na ścieżce {track}{context}."
+promoted: "Awans {target} na ścieżce {track}: {from} → {to}{context}."
+promoted-first: "{target} ma teraz {to}, pierwszą grupę ścieżki {track}{context}."
+demoted: "Obniżono {target} na ścieżce {track}: {from} → {to}{context}."
+exported: Wyeksportowano do {0}.
+export-failed: "Eksport nie powiódł się: {0}"
+imported: Zaimportowano grupy ({0}), graczy ({1}) i ścieżki ({2}) z {3}. Poprzednie dane zapisano jako {4}.
+import-failed: "Import nie powiódł się: {0}"
+import-source-done: "Zaimportowano {0}: dodano wpisów: {1}, konflikty pozostawione bez zmian: {2} (zob. /pp log)."
+import-source-same: "{0} nie zmieniło się od ostatniego importu."
+import-source-preview: "Import {0} doda wpisów: {1} (konflikty pozostawione bez zmian: {2}):"
+import-source-undone: "Usunięto wpisy zaimportowane z {0}: {1}."
+import-source-failed: "Nie można zaimportować {0}: {1}"
+import-source-pending: "Gracze znani tylko z nicku ({0}) dostaną swoje wpisy przy pierwszym wejściu: {1}"
+import-source-joined: "{0}: {1} wszedł pierwszy raz, dodano wpisów: {2}."
+import-missing: Nie ma pliku {0}.
+notify: "{0} zmienia {1}: {2}"
+log-empty: Na razie bez zmian.
+
+# widoki
+title-user: Gracz {0}
+title-group: Grupa {0}
+title-track: Ścieżka {0}
+title-groups: "Grupy: {0}"
+title-tracks: "Ścieżki: {0}"
+title-members: "Członkowie grupy {0}: {1}"
+title-log: Ostatnie zmiany
+label-uuid: UUID
+label-rank: Ranga
+label-prefix: Prefiks
+label-suffix: Sufiks
+label-inherits: Wszystkie grupy
+label-parents: Grupy nadrzędne
+label-permissions: Uprawnienia
+label-meta: Meta
+label-display-name: Pokazywana jako
+label-weight: Waga
+label-members: Członkowie
+label-tracks: Ścieżki
+label-child-groups: Dziedziczona przez grupy
+label-none: brak
+label-storage: Baza
+label-context: Kontekst
+version-storage: "grupy: {0}, gracze: {1}, ścieżki: {2}"
+hover-remove: Kliknij, żeby wpisać komendę, która to usuwa
+hover-members: Kliknij, żeby zobaczyć członków
+hover-info: Kliknij, żeby pokazać
+
+# --- perms-prox ---
+# PumboPerms na PumboProx (polski).
+prefix: "&#f28c28PumboPerms &8» "
+reloaded-warnings: "Wczytano, ostrzeżenia: {0}. Szczegóły w logu proxy."
+version-mode: Tryb
+mode-provider: dostawca uprawnień proxy
+mode-not-provider: "nie jest dostawcą: ustaw permissions.provider w pumboprox.yml"
+version-online: Online
+version-servers: Serwery
+

@@ -1,0 +1,9 @@
+# PumboPerms on Pumpkin (English).
+prefix: "&#f28c28PumboPerms &8» "
+reloaded-warnings: Reloaded with {0} warnings, see the server log.
+version-mode: Mode
+mode-attachments: permission attachments
+mode-event: permission attachments + check event
+version-online: Online
+mode-proxy: ranks from PumboPerms on the proxy (through PumboBridge)
+proxy-rules: PumboPerms on the proxy manages the ranks of this network, changes here do not apply. Use /pp on the proxy.

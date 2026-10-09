@@ -1,0 +1,239 @@
+# --- common ---
+# Messages shared by all Pumbo plugins (English).
+# Feedback messages get the plugin prefix and the colour of their tone (green
+# success, red error, yellow warning, grey information) from the plugin, so they
+# are written without either. & codes still work: &f...&r highlights a value, &r
+# goes back to the colour of the tone. {0}, {1}, ... are arguments, {nl} starts a
+# new line. An empty value disables a message. Forms separated by | depend on a
+# number: "{0} day|{0} days".
+command-no-permission: You don't have permission to do that.
+command-unknown: Unknown subcommand {0}. Use {1}.
+command-unknown-hover: Click to see the commands
+command-usage: "Usage: {0}"
+command-usage-hover: Click to type the command
+command-players-only: Only players can use this command.
+command-player-not-found: Player {0} was not found.
+command-invalid-duration: "Invalid time {0}. Examples: &f30m&r, &f1d12h&r, &fperm"
+command-reloaded: Configuration reloaded.
+command-reload-failed: "Nothing was reloaded, a file has an error: {0}"
+command-error: Something went wrong, see the server log.
+command-help-empty: There are no commands you can use.
+command-help-hint: Hover a command for details, click to type it.
+command-help-previous: Previous page
+command-help-next: Next page
+command-help-permission: "Permission: {0}"
+command-help-click: Click to type it in chat
+version-description: Version and platform
+version-platform: Platform
+time-permanent: permanent
+time-day: "{0} day|{0} days"
+time-hour: "{0} hour|{0} hours"
+time-minute: "{0} minute|{0} minutes"
+time-second: "{0} second|{0} seconds"
+number-separator: ","
+
+# --- perms ---
+# PumboPerms messages (English).
+# Replies get the plugin prefix and the colour of their kind (green success, red
+# error, grey information) from the plugin, so they are written without either.
+# Values arrive highlighted; &r goes back to the colour of the reply.
+# {0}, {name}: arguments. An empty value disables a message.
+
+# help
+help-section: Permissions
+
+desc-user: Manage a player
+desc-group: Manage a group
+desc-track: Manage a track
+desc-groups: List all groups
+desc-tracks: List all tracks
+desc-group-create: Create a group
+desc-group-delete: Delete a group
+desc-track-create: Create a track
+desc-track-delete: Delete a track
+desc-promote: Move a player up a track
+desc-promote-details: "Example: /pp promote Steve staff"
+desc-demote: Move a player down a track
+desc-log: Recent changes
+desc-export: Save all data to a file
+desc-export-details: Writes exports/<file>.json in the plugin folder.
+desc-import: Load all data from a file
+desc-import-details: Replaces everything with exports/<file>.json. The current data is exported first.
+desc-import-source: Take over another permission source (proxy, a plugin, attachments)
+desc-editor: Web editor (planned)
+desc-reload: Reload config and messages
+desc-version: Version, storage and mode
+desc-info: Groups, permissions and meta
+desc-perm-info: List the permissions
+desc-perm-set: Set a permission
+desc-perm-set-details: "Example: permission set minecraft:command.gamemode true world=world"
+desc-perm-settemp: Set a permission for a time
+desc-perm-settemp-details: "Example: permission settemp fly true 1h30m"
+desc-perm-unset: Remove a permission
+desc-perm-unsettemp: Remove a temporary permission
+desc-perm-check: Check a permission
+desc-perm-check-details: Shows the value and which group and node decide it.
+desc-perm-clear: Remove all permissions
+desc-parent-info: List the parent groups
+desc-parent-add: Inherit a group
+desc-parent-add-details: "Example: parent add vip server=survival"
+desc-parent-addtemp: Inherit a group for a time
+desc-parent-remove: Stop inheriting a group
+desc-parent-set: Make it the only parent
+desc-parent-set-details: Removes the other parent groups in these contexts.
+desc-meta-info: Prefixes, suffixes and meta
+desc-meta-set: Set a meta value
+desc-meta-unset: Remove a meta value
+desc-meta-setprefix: Set the prefix
+desc-meta-setprefix-details: "Replaces the other prefixes. Example: meta setprefix 100 \"&c[Admin] \""
+desc-meta-addprefix: Add a prefix
+desc-meta-addtempprefix: Add a prefix for a time
+desc-meta-removeprefix: Remove prefixes
+desc-meta-setsuffix: Set the suffix
+desc-meta-addsuffix: Add a suffix
+desc-meta-addtempsuffix: Add a suffix for a time
+desc-meta-removesuffix: Remove suffixes
+desc-user-promote: Move one group up a track
+desc-user-demote: Move one group down a track
+desc-user-clear: Remove everything
+desc-group-rename: Rename the group
+desc-group-setweight: Set the weight
+desc-group-setweight-details: The group with the higher weight wins conflicts.
+desc-group-setdisplayname: Set the shown name
+desc-group-listmembers: List the members
+desc-track-info: Groups of the track
+desc-track-append: Add a group at the end
+desc-track-insert: Add a group at a position
+desc-track-remove: Remove a group from the track
+desc-track-clear: Remove all groups
+
+# errors
+database-broken: The database is not available, nothing was changed. See the server log.
+save-failed: "Could not save the change: {0}"
+bad-file-name: "{0} is not a valid file name: use a-z, 0-9, _ and -."
+group-exists: Group {0} already exists.
+group-not-found: Group {0} does not exist.
+track-exists: Track {0} already exists.
+track-not-found: Track {0} does not exist.
+bad-name: "{0} is not a valid name: use 1-36 characters a-z, 0-9, _ and -."
+default-group: The default group cannot be deleted or renamed.
+parent-cycle: "{0} already inherits this group, that would be a loop."
+unchanged: Nothing changed, it is already set like that.
+bad-node-empty: The permission is empty.
+bad-node-long: The permission {0} is too long.
+bad-node-char: "{0} is not a valid permission: use a-z, 0-9, _, -, . and :."
+bad-node-segment: "{0} is not a valid permission: it has an empty part."
+bad-node-namespace: "{0} is not a valid permission: only one : is allowed."
+bad-node-wildcard: "{0} is not a valid permission: * may only be the last part (a.b.*)."
+bad-value: "{0} is not true or false."
+bad-number: "{0} is not a whole number."
+bad-context: "Invalid context: {0}. Use server=, group= or world=."
+editor-later: The web editor is not available yet. Use export and import (JSON) meanwhile.
+
+# parts of messages
+in-context: " in {0}"
+target-user: "{0}"
+target-group: group {0}
+expires-in: expires in {0}
+time-ago: "{0} ago"
+kind-prefix: prefix
+kind-suffix: suffix
+
+# changes
+perm-set: Set {node} to {value} for {target}{context}.
+perm-settemp: Set {node} to {value} for {target}{context} for {duration}.
+perm-unset: Removed {node} from {target}{context}.
+perm-unset-none: "{target} has no {node}{context}."
+perm-clear: Removed {count} permissions from {target}{context}.
+perm-check: "{node} for {target}: {value}"
+perm-check-source: "decided by {source}: {node}{context} "
+perm-check-undecided: "{node} for {target}: not set, the server's default decides."
+parent-add: "{target} now inherits {group}{context}."
+parent-addtemp: "{target} now inherits {group}{context} for {duration}."
+parent-already: "{target} already inherits {group}{context}."
+parent-remove: "{target} no longer inherits {group}{context}."
+parent-remove-none: "{target} does not inherit {group}{context}."
+parent-set: "{target} now inherits only {group}{context}."
+meta-set: Set {key} = {value} for {target}{context}.
+meta-unset: Removed {key} from {target}{context}.
+meta-unset-none: "{target} has no meta {key}{context}."
+affix-set: Set the {kind} of {target} to {text} (priority {priority}){context}.
+affix-add: Added the {kind} {text} (priority {priority}) to {target}{context}.
+affix-addtemp: Added the {kind} {text} (priority {priority}) to {target}{context} for {duration}.
+affix-remove: Removed {count} {kind} entries with priority {priority} from {target}{context}.
+affix-remove-none: "{target} has no {kind} with priority {priority}{context}."
+user-cleared: Removed all groups, permissions and meta of {0}.
+group-created: Group {0} created.
+group-deleted: Group {0} deleted.
+group-renamed: Group {0} renamed to {1}.
+group-weight: Weight of group {0} set to {1}.
+group-displayname: Group {0} is now shown as {1}.
+group-displayname-cleared: Group {0} is shown by its name again.
+track-created: Track {0} created.
+track-deleted: Track {0} deleted.
+track-cleared: Track {0} has no groups now.
+track-added: Added {0} to track {1}.
+track-removed: Removed {0} from track {1}.
+track-on: Group {0} is already on the track.
+track-empty: Track {0} has no groups.
+track-end: "{target} is already on the highest group of {track} ({group})."
+track-start: "{target} is already on the lowest group of {track} ({group})."
+track-ambiguous: "{target} is on several groups of {track}: {groups}. Remove the extra ones with parent remove."
+not-on-track: "{target} is not on track {track}{context}."
+promoted: "Promoted {target} on {track}: {from} → {to}{context}."
+promoted-first: "{target} is now {to}, the first group of {track}{context}."
+demoted: "Demoted {target} on {track}: {from} → {to}{context}."
+exported: Exported to {0}.
+export-failed: "Export failed: {0}"
+imported: Imported {0} groups, {1} users and {2} tracks from {3}. The previous data was saved as {4}.
+import-failed: "Import failed: {0}"
+import-source-done: "Imported {0}: {1} entries added, {2} conflicts kept as they were (see /pp log)."
+import-source-same: "{0} has not changed since the last import."
+import-source-preview: "Importing {0} would add {1} entries ({2} conflicts kept as they are):"
+import-source-undone: "Removed {1} entries imported from {0}."
+import-source-failed: "Cannot import {0}: {1}"
+import-source-pending: "{0} players are known only by name; their entries are added at their first join: {1}"
+import-source-joined: "{0}: {1} joined for the first time, {2} entries added."
+import-missing: There is no file {0}.
+notify: "{0} changed {1}: {2}"
+log-empty: No changes yet.
+
+# views
+title-user: Player {0}
+title-group: Group {0}
+title-track: Track {0}
+title-groups: "Groups: {0}"
+title-tracks: "Tracks: {0}"
+title-members: "Members of {0}: {1}"
+title-log: Recent changes
+label-uuid: UUID
+label-rank: Rank
+label-prefix: Prefix
+label-suffix: Suffix
+label-inherits: All groups
+label-parents: Parent groups
+label-permissions: Permissions
+label-meta: Meta
+label-display-name: Shown as
+label-weight: Weight
+label-members: Members
+label-tracks: Tracks
+label-child-groups: Inherited by groups
+label-none: none
+label-storage: Storage
+label-context: Context
+version-storage: "{0} groups, {1} users, {2} tracks"
+hover-remove: Click to type the command that removes it
+hover-members: Click to list the members
+hover-info: Click to show
+
+# --- perms-prox ---
+# PumboPerms on PumboProx (English).
+prefix: "&#f28c28PumboPerms &8» "
+reloaded-warnings: Reloaded with {0} warnings, see the proxy log.
+version-mode: Mode
+mode-provider: permission provider of the proxy
+mode-not-provider: "not the provider: set permissions.provider in pumboprox.yml"
+version-online: Online
+version-servers: Servers
+

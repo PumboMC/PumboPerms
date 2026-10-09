@@ -1,0 +1,16 @@
+[package]
+name = "pumbo-perms-core"
+description = "PumboPerms core: groups, inheritance, permission resolution, meta and rank tracks without platform code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+pumbo-common.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

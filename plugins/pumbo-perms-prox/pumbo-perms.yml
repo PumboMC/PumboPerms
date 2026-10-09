@@ -1,0 +1,116 @@
+# Manifest of PumboPerms for PumboProx, built into pumbo-perms.wasm (pumbo_sdk::embed!).
+id: pumbo-perms
+version: 0.1.0-beta.1
+api: "0.1"
+events: [disconnect, command, timer]
+short-name: perms
+
+# The proxy asks PumboPerms for the permissions of every player (permissions.yml
+# stays the fallback while PumboPerms is not running) and hands them on to the
+# servers behind it through PumboBridge.
+permission-provider: true
+provides:
+  - { service: "pumbo:permissions", version: "1.0", max-timeout-ms: 2000 }
+
+# pumbo.perms.<action>, also as pumboperms:<action> for PumboPerms on the servers.
+permissions:
+  - node: pumbo.perms.command
+    description: See /pp at all (PumboPerms sets it for everyone with any pumbo.perms permission)
+  - node: pumbo.perms.version
+    description: Version of PumboPerms (/pp version)
+  - node: pumbo.perms.reload
+    description: Reload the config and messages (/pp reload)
+  - node: pumbo.perms.debug
+    description: Debug log on and off (/pumbo perms debug)
+  - node: pumbo.perms.log
+    description: Read the change log (/pp log)
+  - node: pumbo.perms.log.notify
+    description: Get a message about every change made by others
+  - node: pumbo.perms.export
+    description: Export everything to a JSON file (/pp export)
+  - node: pumbo.perms.import
+    description: Import a JSON file or another source (/pp import)
+  - node: pumbo.perms.editor
+    description: Web editor, planned (/pp editor)
+  - node: pumbo.perms.user.info
+    description: Show a player's ranks and permissions
+  - node: pumbo.perms.user.permission.info
+    description: List a player's permissions
+  - node: pumbo.perms.user.permission.set
+    description: Give a player a permission
+  - node: pumbo.perms.user.permission.unset
+    description: Take a permission from a player
+  - node: pumbo.perms.user.permission.check
+    description: Check a player's permission
+  - node: pumbo.perms.user.permission.clear
+    description: Clear a player's permissions
+  - node: pumbo.perms.user.parent.info
+    description: List a player's groups
+  - node: pumbo.perms.user.parent.add
+    description: Add a player to a group
+  - node: pumbo.perms.user.parent.remove
+    description: Remove a player from a group
+  - node: pumbo.perms.user.parent.set
+    description: Set a player's only group
+  - node: pumbo.perms.user.meta.info
+    description: Show a player's prefix, suffix and meta
+  - node: pumbo.perms.user.meta.set
+    description: Set a player's prefix, suffix or meta
+  - node: pumbo.perms.user.meta.unset
+    description: Remove a player's prefix, suffix or meta
+  - node: pumbo.perms.user.promote
+    description: Promote a player on a track
+  - node: pumbo.perms.user.demote
+    description: Demote a player on a track
+  - node: pumbo.perms.user.clear
+    description: Clear all data of a player
+  - node: pumbo.perms.group.list
+    description: List groups (/pp groups)
+  - node: pumbo.perms.group.info
+    description: Show a group
+  - node: pumbo.perms.group.create
+    description: Create groups
+  - node: pumbo.perms.group.delete
+    description: Delete groups
+  - node: pumbo.perms.group.rename
+    description: Rename groups
+  - node: pumbo.perms.group.setweight
+    description: Set the weight of a group
+  - node: pumbo.perms.group.setdisplayname
+    description: Set the display name of a group
+  - node: pumbo.perms.group.listmembers
+    description: List the members of a group
+  - node: pumbo.perms.group.permission.info
+    description: List a group's permissions
+  - node: pumbo.perms.group.permission.set
+    description: Give a group a permission
+  - node: pumbo.perms.group.permission.unset
+    description: Take a permission from a group
+  - node: pumbo.perms.group.permission.check
+    description: Check a group's permission
+  - node: pumbo.perms.group.permission.clear
+    description: Clear a group's permissions
+  - node: pumbo.perms.group.parent.info
+    description: List a group's parent groups
+  - node: pumbo.perms.group.parent.add
+    description: Add a parent group
+  - node: pumbo.perms.group.parent.remove
+    description: Remove a parent group
+  - node: pumbo.perms.group.parent.set
+    description: Set the only parent group
+  - node: pumbo.perms.group.meta.info
+    description: Show a group's prefix, suffix and meta
+  - node: pumbo.perms.group.meta.set
+    description: Set a group's prefix, suffix or meta
+  - node: pumbo.perms.group.meta.unset
+    description: Remove a group's prefix, suffix or meta
+  - node: pumbo.perms.track.list
+    description: List tracks (/pp tracks)
+  - node: pumbo.perms.track.info
+    description: Show a track
+  - node: pumbo.perms.track.create
+    description: Create tracks
+  - node: pumbo.perms.track.delete
+    description: Delete tracks
+  - node: pumbo.perms.track.edit
+    description: Change the groups of a track

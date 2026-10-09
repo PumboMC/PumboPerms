@@ -1,0 +1,8 @@
+# PumboPerms on PumboProx (English).
+prefix: "&#f28c28PumboPerms &8» "
+reloaded-warnings: Reloaded with {0} warnings, see the proxy log.
+version-mode: Mode
+mode-provider: permission provider of the proxy
+mode-not-provider: "not the provider: set permissions.provider in pumboprox.yml"
+version-online: Online
+version-servers: Servers

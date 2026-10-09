@@ -1,0 +1,21 @@
+# ══════════════════════════════════════════════════════════════
+#  PumboPerms for PumboProx · plugins/pumbo-perms/config.yml
+#  Apply changes:  /pp reload  (or /pumbo perms reload)
+#  Groups, users and tracks are not here: /pp keeps them in
+#  plugins/data/pumbo-perms/perms.redb
+#  Full reference: README.md → Configuration
+# ══════════════════════════════════════════════════════════════
+
+language: en                 # en | pl  (texts can be changed in lang/<code>.yml)
+
+
+# ── Change log ────────────────────────────────────────────────
+log:
+  max-entries: 10000         # changes kept for /pp log (0 = unlimited)
+  notify: true               # tell players with pumbo.perms.log.notify about changes
+
+
+# ── Taking over permissions.yml ───────────────────────────────
+import:
+  enabled: true              # at the first start: groups and players of the proxy's permissions.yml
+  follow: false              # import permissions.yml again when it changes (otherwise once; /pp import run file)
