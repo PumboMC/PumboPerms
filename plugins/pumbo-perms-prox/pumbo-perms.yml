@@ -1,6 +1,6 @@
 # Manifest of PumboPerms for PumboProx, built into pumbo-perms.wasm (pumbo_sdk::embed!).
 id: pumbo-perms
-version: 0.1.0-beta.1
+version: 0.1.1-beta.1
 api: "0.1"
 events: [disconnect, command, timer]
 short-name: perms

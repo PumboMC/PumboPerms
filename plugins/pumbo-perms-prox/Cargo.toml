@@ -2,7 +2,7 @@
 name = "pumbo-perms-prox"
 description = "PumboPerms for the PumboProx proxy: ranks and permissions for the whole network, set in one place"
 # Product version of PumboPerms on PumboProx (the core crates share the workspace version).
-version = "0.1.0-beta.1"
+version = "0.1.1-beta.1"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
