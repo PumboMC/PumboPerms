@@ -34,7 +34,7 @@
 <p align="center"><b>Running more than one server?</b> <a href="https://github.com/PumboMC/PumboProx">PumboProx</a> is the proxy for Pumpkin networks, with plugins in WebAssembly.<br>PumboPerms runs on it too: ranks live in one place for the whole network and can differ from server to server.</p>
 
 > [!NOTE]
-> PumboPerms is in **beta** (0.1.0-beta.1). Try it on a test server before you put players on it.
+> PumboPerms is in **beta** (0.1.1-beta.1). Try it on a test server before you put players on it.
 
 ## What it does
 
