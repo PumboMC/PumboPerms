@@ -114,3 +114,14 @@ permissions:
     description: Delete tracks
   - node: pumbo.perms.track.edit
     description: Change the groups of a track
+
+# %pumboperms_prefix% and friends for other plugins (meta: %pumboperms_meta:<key>%).
+placeholders:
+  namespace: pumboperms
+  keys:
+    - { name: prefix, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }
+    - { name: suffix, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }
+    - { name: rank, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }
+    - { name: group, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }
+    - { name: groups, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }
+    - { name: meta, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }

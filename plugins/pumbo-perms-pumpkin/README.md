@@ -180,9 +180,24 @@ Send JSON to the plugin `pumboperms` with Pumpkin's inter-plugin call (`ipc::sen
 {"op": "hello"}
 {"op": "check", "uuid": "…", "node": "pumbo.bans.ban", "world": "world", "op-level": 0}
 {"op": "info", "uuid": "…", "world": "world"}
+{"op": "fill", "uuid": "…", "world": "world", "text": "%pumboperms_prefix%Steve"}
 ```
 
 `check` answers `{"ok": true, "value": true}`, `false`, or `null` when nobody decides (use your own default). It works for offline players too. `info` gives the rank (primary group and its display name), prefix, suffix, all inherited groups and meta values: what `%rank%`, `%prefix%` and `%suffix%` will show. Errors are `{"ok": false, "error": "..."}`.
+
+### Placeholders
+
+`fill` returns the text with the placeholders filled in: `{"ok": true, "text": "&6[VIP] Steve"}`. On PumboProx the same placeholders are in the proxy's placeholder registry, for every proxy plugin.
+
+| Placeholder | Shows |
+| --- | --- |
+| `%pumboperms_prefix%` / `%pumboperms_suffix%` | the player's prefix / suffix |
+| `%pumboperms_rank%` | display name of the primary group |
+| `%pumboperms_group%` | name of the primary group |
+| `%pumboperms_groups%` | every inherited group, most important first |
+| `%pumboperms_meta:<key>%` | a meta value, e.g. `%pumboperms_meta:color%` |
+
+Unknown placeholders stay in the text as they are.
 
 ## License
 

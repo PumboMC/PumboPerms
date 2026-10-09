@@ -33,6 +33,7 @@ use pumbo_perms_core::command::{self, Action, Env, SourceMode, Who, split_args};
 use pumbo_perms_core::context::Query;
 use pumbo_perms_core::engine::Engine;
 use pumbo_perms_core::export::{self, Snapshot};
+use pumbo_perms_core::ipc;
 use pumbo_perms_core::merge::Ledger;
 use pumbo_perms_core::perms::KnownName;
 use pumbo_perms_core::store::PermsStore;
@@ -42,8 +43,8 @@ use pumbo_sdk::contracts::{
     PermissionsFile,
 };
 use pumbo_sdk::{
-    CallReject, Command, CommandEvent, Context, PermissionEntry, PermissionSet, PlayerId, PlayerInfo, QueryContext,
-    ServiceCall, Text, log, permissions, players, scheduler, servers,
+    CallReject, Command, CommandEvent, Context, PermissionEntry, PermissionSet, PlaceholderRequest, PlayerId,
+    PlayerInfo, QueryContext, ServiceCall, Text, log, permissions, players, scheduler, servers,
 };
 
 /// The source name of the proxy's `permissions.yml` (`/pp import ... file`).
@@ -483,6 +484,24 @@ impl pumbo_sdk::Plugin for PumboPerms {
         let mut words = if e.name == "pp" { Vec::new() } else { vec![e.name] };
         words.extend(e.args);
         self.run(e.player, split_args(&words.join(" ")));
+    }
+
+    /// `%pumboperms_prefix%`, `_suffix`, `_rank`, `_group`, `_groups` and
+    /// `%pumboperms_meta:<key>%` of the player on their current server.
+    async fn on_placeholder(&self, reqs: Vec<PlaceholderRequest>) -> Vec<Option<Text>> {
+        let now = now_ms();
+        let mut state = self.state.borrow_mut();
+        let Some(s) = state.as_mut() else {
+            return vec![None; reqs.len()];
+        };
+        reqs.iter()
+            .map(|r| {
+                let uuid = s.loaded.get(&r.player?)?.0.clone();
+                let q = s.engine.place(r.context.server.as_deref().unwrap_or(""), "");
+                let info = ipc::info(&mut s.engine, &uuid, &q, now)?;
+                ipc::placeholder(&info, &r.key, r.arg.as_deref()).map(Text::Legacy)
+            })
+            .collect()
     }
 
     async fn on_permission_load(&self, p: PlayerInfo) -> Result<PermissionSet, String> {
