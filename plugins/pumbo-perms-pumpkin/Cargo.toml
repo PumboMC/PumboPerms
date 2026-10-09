@@ -1,7 +1,7 @@
 [package]
 name = "pumbo-perms-pumpkin"
 # The PumboPerms product version (not the workspace version of the crates).
-version = "0.1.1-beta.1"
+version = "0.1.1-beta"
 description = "PumboPerms: permissions, groups and ranks for the Pumpkin Minecraft server"
 edition.workspace = true
 license.workspace = true
