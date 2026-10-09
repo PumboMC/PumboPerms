@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.1.2-beta)
+## 0.1.2-beta
 
 - Placeholders for other plugins: `%pumboperms_prefix%`, `_suffix`, `_rank`, `_group`, `_groups` and `%pumboperms_meta:<key>%`, on Pumpkin (`fill` request) and in the PumboProx placeholder registry. See [INTEGRATION.md](INTEGRATION.md).
 
