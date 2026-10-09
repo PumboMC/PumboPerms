@@ -12,6 +12,7 @@ Ranks and permissions for Pumpkin servers. Put players into groups, give the gro
 - **Rank ladders** with `/pp promote` and `/pp demote`.
 - **Change log, JSON export and import**, with undo.
 - **Tab completion** for players, groups, tracks and permission nodes.
+- **Placeholders for other plugins** (from 0.1.2-beta): `%pumboperms_prefix%`, `%pumboperms_rank%` and more for chat, tab and scoreboard plugins. How to use them: [INTEGRATION.md](https://github.com/PumboMC/PumboPerms/blob/main/INTEGRATION.md).
 - **Closes a Pumpkin 0.2.0 hole.** There `/tp`, `/xp`, `/banip` and `/pardonip` skip the permission check. PumboPerms blocks them for players without the permission.
 
 ## Quick start

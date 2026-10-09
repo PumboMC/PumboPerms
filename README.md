@@ -59,6 +59,7 @@ PumboPerms decides who may do what on your server. You put players into groups, 
 | 📒 | **Log** | Every change is logged in `/pp log`. Staff can get a message about changes made by others. |
 | 📤 | **Export** | `/pp export` writes everything into one JSON file. |
 | 📥 | **Import** | `/pp import` reads such a file back. At start PumboPerms also takes over ranks from PumboProx and from other plugins. `/pp import undo` takes an import back. |
+| 🧩 | **Placeholders** | `%pumboperms_prefix%`, `%pumboperms_rank%` and more for chat, tab and scoreboard plugins (from 0.1.2-beta). See [INTEGRATION.md](INTEGRATION.md). |
 | ⌨️ | **Autocomplete** | Tab completes players, groups, tracks and permission nodes. After a change each player's command list is updated. On the proxy, tab completion for `/pp` comes later. |
 
 ## Two builds
@@ -134,6 +135,10 @@ Shorter names work too: `u`, `g` and `t` for `user`, `group` and `track`, `listg
 Durations: `30s`, `10m`, `1h30m`, `7d`, `2w`, `1mo`, `1y`. Contexts go at the end of a command: `server=lobby`, `group=lobbies`, `world=world_nether`.
 
 On Pumpkin the permissions are registered as `pumboperms:<name>` (the same node) and default to operators of level 3. The console may do everything.
+
+## For plugin developers
+
+Your plugin can ask PumboPerms about permissions, ranks and prefixes, and use its placeholders, on Pumpkin and on PumboProx. See [INTEGRATION.md](INTEGRATION.md).
 
 ## Works with other Pumbo plugins
 
