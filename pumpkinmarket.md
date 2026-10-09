@@ -54,3 +54,5 @@ PumboPerms also runs on [PumboProx](https://github.com/PumboMC/PumboProx): one s
 
 PumboPerms is in beta. Try it on a test server before you put players on it.
 Source, documentation and issues: https://github.com/PumboMC/PumboPerms (GPL-3.0)
+
+[![PumboProx: everything you need to run a network on Pumpkin](assets/pumboprox.webp)](https://github.com/PumboMC/PumboProx)
