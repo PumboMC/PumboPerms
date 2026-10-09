@@ -27,14 +27,14 @@
 
 ---
 
-> [!NOTE]
-> PumboPerms is in **beta** (0.1.0-beta.1). Try it on a test server before you put players on it.
-
 <p align="center">
-  <a href="https://github.com/PumboMC/PumboProx"><img src="assets/pumboprox.webp" alt="PumboProx: everything you need to run a network on Pumpkin" width="80%"></a>
+  <a href="https://github.com/PumboMC/PumboProx"><img src="assets/pumboprox.webp" alt="PumboProx: everything you need to run a network on Pumpkin" width="100%"></a>
 </p>
 
 <p align="center"><b>Running more than one server?</b> <a href="https://github.com/PumboMC/PumboProx">PumboProx</a> is the proxy for Pumpkin networks, with plugins in WebAssembly.<br>PumboPerms runs on it too: ranks live in one place for the whole network and can differ from server to server.</p>
+
+> [!NOTE]
+> PumboPerms is in **beta** (0.1.0-beta.1). Try it on a test server before you put players on it.
 
 ## What it does
 
