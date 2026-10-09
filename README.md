@@ -65,15 +65,15 @@ PumboPerms decides who may do what on your server. You put players into groups, 
 
 | Build | File | Where it goes | Status |
 | --- | --- | --- | --- |
-| 🌐 **PumboProx** (whole network) | `pumbo-perms.wasm` | `plugins/` of the proxy | Beta. One set of ranks for the whole network: set them with `/pp` on the proxy and they apply on every server right away, through [PumboBridge](https://github.com/PumboMC/PumboBridge). Imports the proxy's `permissions.yml` at the first start. |
-| 🎃 **Pumpkin** (one server) | `PumboPerms-26.3.wasm` or `PumboPerms-26.2.wasm` | `plugins/` of the server | Beta. Ranks and permissions for that server. |
+| 🌐 **PumboProx** (whole network) | `PumboPerms-Proxy-<version>.wasm` | `plugins/` of the proxy | Beta. One set of ranks for the whole network: set them with `/pp` on the proxy and they apply on every server right away, through [PumboBridge](https://github.com/PumboMC/PumboBridge). Imports the proxy's `permissions.yml` at the first start. |
+| 🎃 **Pumpkin** (one server) | `PumboPerms-Pumpkin-26.3-<version>.wasm` or `PumboPerms-Pumpkin-26.2-<version>.wasm` | `plugins/` of the server | Beta. Ranks and permissions for that server. |
 
 When PumboPerms runs on the proxy, a PumboPerms on a server steps back and lets the proxy decide. Remove it from the proxy and the one on the server takes over again, with its own data untouched.
 
 ## Installation
 
-> [!IMPORTANT]
-> Ready-made files come with release 0.1. Until then, [build from source](#building).
+> [!TIP]
+> Download the files from [Releases](https://github.com/PumboMC/PumboPerms/releases/latest), or [build from source](#building).
 
 1. Put the file that matches your Pumpkin version into the server's `plugins/` folder.
 2. Start the server. The first start creates `plugins/data/pumboperms/config.yml` and the language files.
