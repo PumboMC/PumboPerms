@@ -37,7 +37,7 @@ pub struct Ledger {
     pub at: u64,
     pub entries: Vec<Entry>,
     /// Players of the source known only by nickname: their entries are added
-    /// at their first join ([`crate::command::import_pending`]).
+    /// when they join with an online-mode account ([`crate::command::import_pending`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<crate::model::User>,
 }
@@ -292,6 +292,7 @@ mod tests {
             tracks: vec![],
             by_name: vec![],
             proxy_rules: false,
+            fixed: Vec::new(),
         }
     }
 
@@ -348,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn players_by_name_wait_for_their_first_join() {
+    fn players_by_name_wait_for_an_online_join() {
         use crate::command::{SourceMode, Who, import_pending, import_source};
         use pumbo_common::lang::{COMMON, Lang};
         let mut e = crate::engine::Engine::in_memory(
@@ -370,12 +371,12 @@ mod tests {
         let who = Who::console();
         let (out, ledger) =
             import_source(&mut e, &who, "file", Ok(("f1".into(), s)), &Ledger::default(), SourceMode::Run, 1);
-        assert!(out.reply.plain().contains("first join: Jeb_"), "{}", out.reply.plain());
+        assert!(out.reply.plain().contains("premium) account: Jeb_"), "{}", out.reply.plain());
         let mut ledger = ledger.unwrap();
         assert_eq!(ledger.pending.len(), 1);
         assert_eq!(e.perms.user(known).unwrap().data.parents[0].group, "builder", "a known name is a UUID now");
-        assert!(import_pending(&mut e, "file", &mut ledger, known, "Known", 2).is_none());
-        let out = import_pending(&mut e, "file", &mut ledger, jeb, "JEB_", 3).unwrap();
+        assert!(import_pending(&mut e, "file", &mut ledger, known, "Known", true, 2).is_none());
+        let out = import_pending(&mut e, "file", &mut ledger, jeb, "JEB_", true, 3).unwrap();
         assert!(out.changed && out.reply.plain().contains("joined"), "{}", out.reply.plain());
         assert_eq!(e.perms.user(jeb).unwrap().data.parents[0].group, "builder");
         assert!(

@@ -74,7 +74,7 @@ impl Default for ProviderCfg {
 
 impl Config {
     pub fn core(&self) -> CoreCfg {
-        CoreCfg { context: self.context.clone(), defaults: self.defaults.clone(), log: self.log.clone() }
+        CoreCfg { context: self.context.clone(), defaults: self.defaults.clone(), log: self.log.clone(), worlds: true }
     }
 }
 

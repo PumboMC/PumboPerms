@@ -24,6 +24,10 @@ fn server(name: &str, groups: &[&str]) -> ServerInfo {
 }
 
 fn plugin(config: Option<&str>) -> (PumboPerms, std::path::PathBuf) {
+    plugin_on(config, PermsStore::in_memory().unwrap())
+}
+
+fn plugin_on(config: Option<&str>, store: PermsStore) -> (PumboPerms, std::path::PathBuf) {
     testing::reset();
     testing::with(|h| h.servers = vec![server("lobby", &["hubs"]), server("survival", &[])]);
     let dir = std::env::temp_dir().join(format!(
@@ -34,12 +38,13 @@ fn plugin(config: Option<&str>) -> (PumboPerms, std::path::PathBuf) {
     let _ = std::fs::create_dir_all(dir.join("imports"));
     let _ = std::fs::remove_file(dir.join("imports/file.json"));
     let _ = std::fs::remove_file(dir.join("config.yml"));
+    let _ = std::fs::remove_file(dir.join(common_config::LAST_GOOD));
     if let Some(c) = config {
         std::fs::write(dir.join("config.yml"), c).unwrap();
     }
     let d = dir.to_string_lossy().to_string();
     let p = PumboPerms { state: RefCell::new(None), config_dir: d.clone(), data_dir: d };
-    p.start(Ok(PermsStore::in_memory().unwrap())).unwrap();
+    p.start(Ok(store)).unwrap();
     (p, dir)
 }
 
@@ -68,8 +73,15 @@ fn file(json: &str) -> Vec<u8> {
     cbor(&PermissionsFile { fingerprint: digest, data: json.to_string() }).unwrap()
 }
 
+/// A service call from the proxy host.
 fn call(p: &PumboPerms, method: &str, payload: Vec<u8>) -> Result<Vec<u8>, CallReject> {
-    block_on(p.on_service_call(testing::service_call(PERMISSIONS.name, 1, method, payload)))
+    call_as(p, HOST, method, payload)
+}
+
+fn call_as(p: &PumboPerms, caller: &str, method: &str, payload: Vec<u8>) -> Result<Vec<u8>, CallReject> {
+    let mut c = testing::service_call(PERMISSIONS.name, 1, method, payload);
+    c.caller = caller.into();
+    block_on(p.on_service_call(c))
 }
 
 #[test]
@@ -130,8 +142,10 @@ fn takes_over_permissions_yml() {
     assert!(has(&set, "group.vip", Context::Global, true));
     assert!(std::fs::read_to_string(dir.join("imports/file.json")).unwrap().contains("Jeb_"));
 
-    // Jeb_ joins for the first time: the entries waiting for the name.
+    // Jeb_ joins for the first time with an online-mode account: the entries
+    // waiting for the name.
     let jeb = testing::add_player("jeb_", Some("survival"));
+    testing::with(|h| h.players.get_mut(&jeb).unwrap().online_mode = true);
     let set = load(&p, jeb);
     assert!(has(&set, "group.vip", Context::Global, true), "{set:?}");
     assert!(logs().contains("joined for the first time"), "{}", logs());
@@ -201,11 +215,11 @@ fn changes_reach_the_proxy_per_server() {
     assert_eq!(ask("pumbo.proxy.glist", "global"), None);
     assert_eq!(ask("pumboperms:user.info", "global"), Some(true), "both spellings are one node");
 
-    // The export says that the proxy rules.
+    // The export only says that the proxy rules.
     let out = call(&p, METHOD_EXPORT, cbor(&contracts_request()).unwrap()).unwrap();
     let ans: PermissionsExport = pumbo_sdk::ciborium::from_reader(out.as_slice()).unwrap();
     let snap = export::parse(&ans.data).unwrap();
-    assert!(snap.proxy_rules && snap.groups.iter().any(|g| g.name == "vip"));
+    assert!(snap.proxy_rules && snap.groups.is_empty() && snap.users.is_empty(), "{snap:?}");
     assert_eq!(snap.exported, 0, "stable text for the fingerprint");
     block_on(p.on_disconnect(bob));
     assert!(p.with(|s| s.loaded.is_empty()).unwrap());
@@ -227,8 +241,7 @@ fn broken_database_fails_closed() {
     assert!(r.unwrap_err().contains("disk on fire"));
 }
 
-/// 1 000 changes with 20 players loaded: each one reaches the proxy, and a
-/// set for one player takes well under a millisecond.
+/// 1 000 changes with 20 players loaded: each one reaches the proxy.
 #[test]
 fn many_changes() {
     let (p, _) = plugin(None);
@@ -237,17 +250,88 @@ fn many_changes() {
         load(&p, *id);
     }
     console(&p, "creategroup vip");
-    let t = std::time::Instant::now();
     for i in 0..500 {
         console(&p, &format!("user P{} parent add vip server=lobby", i % 20));
         console(&p, &format!("user P{} parent remove vip server=lobby", i % 20));
     }
-    let took = t.elapsed();
     let sent = testing::with(|h| h.replaced.len());
     assert!(sent >= 1000, "{sent}");
-    eprintln!("[measure] 1000 changes, 20 players loaded: {took:?}, {sent} sets sent");
     let errors = logs().matches("did not take").count();
     assert_eq!(errors, 0);
+}
+
+/// Change notices go only to players whose permission set has the notify node.
+#[test]
+fn notify_reaches_only_players_with_the_node() {
+    let (p, _) = plugin(None);
+    let staff = testing::add_player("Staff", Some("lobby"));
+    let joe = testing::add_player("Joe", Some("lobby"));
+    load(&p, staff);
+    load(&p, joe);
+    console(&p, "user Staff permission set pumbo.perms.log.notify");
+    let (staff_before, joe_before) = (testing::messages(staff).len(), testing::messages(joe).len());
+    console(&p, "creategroup vip");
+    let got = testing::messages(staff);
+    assert!(got.get(staff_before..).is_some_and(|new| new.iter().any(|m| m.contains("vip"))), "{got:?}");
+    assert_eq!(testing::messages(joe).len(), joe_before);
+}
+
+const EVERYTHING: &str = r#"{"format":"pumboperms","version":1,
+    "groups":[{"name":"default","data":{"permissions":[{"node":"*","value":true}]}}]}"#;
+
+#[test]
+fn file_method_rejects_other_plugins() {
+    let (p, _) = plugin(None);
+    let steve = testing::add_player("Steve", Some("lobby"));
+    let got = call_as(&p, "evil-plugin", METHOD_FILE, file(EVERYTHING));
+    assert!(matches!(got, Err(CallReject::Rejected(_))), "{got:?}");
+    assert!(!has(&load(&p, steve), "*", Context::Global, true));
+    call_as(&p, "proxy", METHOD_FILE, file(EVERYTHING)).unwrap();
+    assert!(has(&load(&p, steve), "*", Context::Global, true), "the host may hand over permissions.yml");
+}
+
+#[test]
+fn export_method_rejects_other_plugins() {
+    let (p, _) = plugin(None);
+    let got = call_as(&p, "evil-plugin", METHOD_EXPORT, cbor(&contracts_request()).unwrap());
+    assert!(matches!(got, Err(CallReject::Rejected(_))), "{got:?}");
+    call_as(&p, "proxy", METHOD_EXPORT, cbor(&contracts_request()).unwrap()).unwrap();
+}
+
+#[test]
+fn pending_import_skips_offline_accounts() {
+    let (p, _) = plugin(None);
+    let data = r#"{"format":"pumboperms","version":1,
+        "groups":[{"name":"mod","data":{"permissions":[{"node":"pumbo.bans.ban","value":true}]}}],
+        "by-name":[{"name":"Mod1","data":{"parents":[{"group":"mod"}]}}]}"#;
+    call_as(&p, "proxy", METHOD_FILE, file(data)).unwrap();
+    let offline = testing::add_player("Mod1", Some("lobby"));
+    assert!(!has(&load(&p, offline), "group.mod", Context::Global, true), "an offline account took the rank");
+    let online = testing::add_player("Mod1", Some("lobby"));
+    testing::with(|h| h.players.get_mut(&online).unwrap().online_mode = true);
+    assert!(has(&load(&p, online), "group.mod", Context::Global, true));
+}
+
+/// A `config.yml` that is not valid YAML at start: the last good copy, not the
+/// defaults (which would import permissions.yml again, for one).
+#[test]
+fn broken_config_at_start_keeps_last_good() {
+    let (_, dir) = plugin(Some("language: pl\nimport:\n  enabled: false\n"));
+    std::fs::write(dir.join("config.yml"), "language: [pl\n").unwrap();
+    let d = dir.to_string_lossy().to_string();
+    let p = PumboPerms { state: RefCell::new(None), config_dir: d.clone(), data_dir: d };
+    p.start(Ok(PermsStore::in_memory().unwrap())).unwrap();
+    assert_eq!(p.with(|s| (s.cfg.language.clone(), s.cfg.import.enabled)).unwrap(), ("pl".into(), false));
+    assert!(testing::with(|h| h.logs.iter().any(|(_, l)| l.contains(common_config::LAST_GOOD))), "{}", logs());
+    // Without the copy the plugin does not start.
+    std::fs::remove_file(dir.join(common_config::LAST_GOOD)).unwrap();
+    let p = PumboPerms {
+        state: RefCell::new(None),
+        config_dir: dir.to_string_lossy().into(),
+        data_dir: dir.to_string_lossy().into(),
+    };
+    assert!(p.start(Ok(PermsStore::in_memory().unwrap())).unwrap_err().contains("not valid YAML"));
+    let _ = std::fs::remove_file(dir.join("config.yml"));
 }
 
 #[test]
@@ -255,4 +339,313 @@ fn built_in_language_files_are_current() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/lang");
     let written = Lang::write_templates(&setup::BUNDLES, &dir);
     assert!(written.is_empty(), "rewritten from the message bundles, commit them: {written:?}");
+}
+
+/// Every answer for the same data is equal: the core, the proxy's table,
+/// the PumboBridge perm-set of a backend and Pumpkin reading its attributes.
+/// Where the core has no answer, the hosts have none either; a catalog child
+/// under a parent node set to true is false on the hosts (Pumpkin reads an
+/// exact parent like a wildcard), and on the proxy too when the data has it.
+#[test]
+fn host_and_core_agree() {
+    use std::collections::HashMap;
+
+    use pumbo_contracts::permissions::{Layers, PermContext, PermissionEntry as Entry, backend_set, levels, resolve};
+    use pumbo_perms_core::config::CoreCfg;
+    use pumbo_perms_core::context::Contexts;
+    use pumbo_perms_core::engine::Engine;
+    use pumbo_perms_core::host::{Catalog, wanted};
+    use pumbo_perms_core::model::{ParentNode, PermNode};
+    use pumbo_perms_core::node;
+    use pumbo_perms_core::testing::pumpkin_has;
+
+    let mut e = Engine::in_memory(CoreCfg::default(), Lang::load(&setup::BUNDLES, "en", None).0);
+    // As the plugin keeps them: lower case, while players report `Survival`.
+    e.server_groups = [("lobby".to_string(), vec!["hub".to_string()]), ("survival".to_string(), Vec::new())].into();
+    let groups: &[(&str, &[(&str, bool)])] = &[
+        ("default", &[]),
+        ("mod", &[("pumbo.bans.*", true), ("pumbo.bans.exempt.*", false), ("pumbo.bans.notify", true)]),
+        ("admin", &[("pumbo.*", true)]),
+        ("helper", &[("pumbo.bans.limit.helper", true)]),
+        ("vip", &[("minecraft:command.random", true), ("myplugin:home", true)]),
+        ("owner", &[("*", true), ("minecraft:command.*", false)]),
+        (
+            "jr",
+            &[
+                ("pumbo.bans.*", true),
+                ("pumbo.bans.ban", false),
+                ("minecraft:command.*", true),
+                ("minecraft:command.kick", false),
+            ],
+        ),
+    ];
+    for (name, nodes) in groups {
+        if e.perms.group(name).is_none() {
+            e.perms.create_group(name).unwrap();
+        }
+        e.perms
+            .edit_group(name, |g| {
+                for (n, v) in *nodes {
+                    g.data.set_permission(PermNode {
+                        node: (*n).into(),
+                        value: *v,
+                        context: Contexts::global(),
+                        expiry: None,
+                    });
+                }
+            })
+            .unwrap();
+    }
+    // (group, node, value, context)
+    let contextual: &[(&str, &str, bool, &str)] = &[
+        ("admin", "myplugin:home.others", true, ""),
+        ("helper", "minecraft:command.seed", true, "server=lobby"),
+        ("helper", "minecraft:command.list", true, "group=hub"),
+    ];
+    for (group, n, v, context) in contextual {
+        let context =
+            if context.is_empty() { Contexts::global() } else { Contexts::parse(&[context.to_string()]).unwrap() };
+        let perm = PermNode { node: (*n).into(), value: *v, context, expiry: None };
+        e.perms.edit_group(group, |g| g.data.set_permission(perm)).unwrap();
+    }
+    // (uuid, parent, context of the parent, operator level)
+    let players: &[(&str, &str, &str, u8)] = &[
+        ("00000000-0000-0000-0000-000000000001", "mod", "", 0),
+        ("00000000-0000-0000-0000-000000000002", "admin", "", 0),
+        ("00000000-0000-0000-0000-000000000003", "helper", "", 0),
+        ("00000000-0000-0000-0000-000000000004", "vip", "", 0),
+        ("00000000-0000-0000-0000-000000000005", "vip", "server=survival", 0),
+        ("00000000-0000-0000-0000-000000000006", "default", "", 3),
+        ("00000000-0000-0000-0000-000000000007", "owner", "", 0),
+        ("00000000-0000-0000-0000-000000000008", "jr", "", 0),
+        ("00000000-0000-0000-0000-000000000009", "mod", "", 3),
+    ];
+    for (uuid, group, context, _) in players {
+        let context =
+            if context.is_empty() { Contexts::global() } else { Contexts::parse(&[context.to_string()]).unwrap() };
+        let parent = ParentNode { group: (*group).into(), context, expiry: None };
+        e.perms.edit_user(uuid, "Player", |d| d.add_parent(parent));
+    }
+
+    let bridge_catalog: Vec<String> = pumbo_common::pumpkin::COMMAND_NODES
+        .iter()
+        .chain(pumbo_common::pumpkin::PUMBO_NODES)
+        .map(|n| n.to_string())
+        .collect();
+    let mut catalog = Catalog::pumpkin();
+    catalog.refresh(&e.perms, pumbo_perms_core::command::own_nodes().iter().map(|n| node::host_form(n)));
+    let mut nodes: Vec<String> = catalog.nodes().iter().filter(|n| !node::is_wildcard(n)).cloned().collect();
+    nodes.extend(
+        ["pumbobans:ban", "pumbobans:exempt.ban", "pumbobans:limit.helper", "pumbobans:notify"].map(String::from),
+    );
+    nodes.sort();
+    nodes.dedup();
+    // `pumboperms:command` is whether /pp shows: operator levels count only on Pumpkin.
+    let command = node::host_form(&pumbo_common::command::permission(command::PLUGIN, "command"));
+    // The proxy gets the same false as the hosts for these (data nodes, decision 10).
+    let data_nodes: Vec<String> = e.perms.all_nodes().iter().map(|n| node::host_form(n)).collect();
+
+    let mut wrong = Vec::new();
+    for (uuid, _, _, op_level) in players {
+        // The proxy's engine has no server of its own; Pumpkin's is set per place below.
+        e.cfg.context.server.clear();
+        let provider: Vec<Entry> = setup::provider_set(&mut e, uuid, 0)
+            .into_iter()
+            .map(|(server, node, value)| Entry {
+                node,
+                value,
+                context: server.map_or(PermContext::Global, |s| PermContext::server(&s)),
+            })
+            .collect();
+        let layers = Layers { provider: &provider, ..Layers::default() };
+        for place in ["", "lobby", "Survival"] {
+            let server_groups = e.server_groups.get(&place.to_lowercase()).cloned().unwrap_or_default();
+            let lv = levels((!place.is_empty()).then_some(place), &server_groups);
+            let bridge: HashMap<String, bool> = backend_set(layers, &bridge_catalog, &lv).into_iter().collect();
+            e.cfg.context.server = place.to_lowercase();
+            let attributes = wanted(&mut e, uuid, "world", *op_level, 0, &catalog);
+            let q = e.place(place, "");
+            let shows = |e: &mut Engine, op_level: u8| {
+                let who = Who { server: place.to_string(), ..Who::player("", uuid, op_level, "world") };
+                Some(command::allowed_any(e, &who, 0))
+            };
+            let (shows_proxy, shows_pumpkin) = (shows(&mut e, 0), shows(&mut e, *op_level));
+            let mut core = |n: &str| e.perms.check(uuid, &node::normalize(n).unwrap_or_default(), &q, 0);
+            for host in &nodes {
+                let want = core(host);
+                let parent_true = host.split_once(':').is_some_and(|(ns, key)| {
+                    key.match_indices('.').any(|(i, _)| core(&format!("{ns}:{}", &key[..i])) == Some(true))
+                });
+                let on_host = if want.is_none() && parent_true { Some(false) } else { want };
+                let canonical = node::normalize(host).unwrap_or_default();
+                let on_proxy = if data_nodes.contains(host) { on_host } else { want };
+                let mut answers = vec![
+                    ("proxy", resolve(layers, &canonical, &lv).map(|d| d.value), on_proxy),
+                    ("pumpkin", pumpkin_has(&attributes, host), on_host),
+                    ("bridge", pumpkin_has(&bridge, host), on_host),
+                ];
+                if *host == command {
+                    answers = vec![
+                        ("proxy", resolve(layers, &canonical, &lv).map(|d| d.value), shows_proxy),
+                        ("bridge", pumpkin_has(&bridge, host), shows_proxy),
+                        ("pumpkin", pumpkin_has(&attributes, host), shows_pumpkin),
+                    ];
+                }
+                for (side, got, expected) in answers {
+                    if got != expected {
+                        wrong.push(format!("{uuid} {place:?} {host}: core {want:?}, {side} {got:?}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{} disagreements:\n{}", wrong.len(), wrong.join("\n"));
+    let lobby = e.place("lobby", "");
+    let helper = players[2].0;
+    assert_eq!(e.perms.check(helper, "minecraft:command.list", &lobby, 0), Some(true), "server group reaches lobby");
+}
+
+#[test]
+fn proxy_refuses_world_context() {
+    let (p, _) = plugin(None);
+    console(&p, "creategroup vip");
+    let refused = |p: &PumboPerms, line: &str| {
+        console(p, line);
+        let out = testing::with(|h| h.logs.last().map(|(_, l)| l.clone())).unwrap_or_default();
+        assert!(out.contains("does not see worlds"), "{line}: {out}");
+    };
+    refused(&p, "group vip permission set fly true world=nether");
+    refused(&p, "group vip parent add default world=nether");
+    refused(&p, "group vip meta set color red world=nether");
+    refused(&p, "group vip permission check fly world=nether");
+    assert!(p.with(|s| s.engine.perms.group("vip").unwrap().data.is_empty()).unwrap());
+}
+
+#[test]
+fn export_answer_fits_the_host_payload_limit() {
+    let (p, _) = plugin(None);
+    console(&p, "creategroup vip");
+    p.with(|s| {
+        let mut dirty = pumbo_perms_core::perms::Dirty::default();
+        for i in 0..3000u64 {
+            let uuid = Uuid::from_high_low(1, i).to_string();
+            let parent = pumbo_perms_core::model::ParentNode {
+                group: "vip".into(),
+                context: pumbo_perms_core::context::Contexts::global(),
+                expiry: None,
+            };
+            let (_, d) = s.engine.perms.edit_user(&uuid, &format!("Player{i}"), |d| d.add_parent(parent));
+            dirty.merge(d);
+        }
+        s.engine.commit(&dirty, None).unwrap();
+    })
+    .unwrap();
+    let out = call_as(&p, "proxy", METHOD_EXPORT, cbor(&contracts_request()).unwrap()).unwrap();
+    // Only the flag, whatever the database holds (the host takes up to 256 KiB).
+    assert!(out.len() < 1024, "{} bytes", out.len());
+}
+
+#[test]
+fn expiry_reaches_the_proxy_when_the_store_fails() {
+    let backend = pumbo_common::store::FaultyBackend::default();
+    let writes_fail = backend.fail_writes.clone();
+    let (p, _) = plugin_on(None, PermsStore::new(pumbo_common::store::Store::new(backend)).unwrap());
+    let bob = testing::add_player("Bob", Some("lobby"));
+    load(&p, bob);
+    console(&p, "creategroup vip");
+    console(&p, "user Bob parent addtemp vip 1s");
+    assert!(has(&last_replace(bob).unwrap(), "group.vip", Context::Global, true));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    writes_fail.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+    let timer = p.with(|s| s.timer).unwrap();
+    block_on(p.on_timer(timer));
+    let set = last_replace(bob).unwrap();
+    assert!(!has(&set, "group.vip", Context::Global, true), "expired vip still on the proxy: {set:?}");
+}
+
+#[test]
+fn info_method_answers_for_a_server() {
+    let (p, _) = plugin(None);
+    let steve = testing::add_player("Steve", Some("lobby"));
+    load(&p, steve);
+    console(&p, "creategroup vip");
+    console(&p, "group vip meta addprefix 10 \"[VIP] \" server=lobby");
+    console(&p, "user Steve parent add vip");
+    let uuid = uuid_of(&players::get(steve).unwrap()).replace('-', "");
+    let ask = |server: &str| {
+        let req = PermissionsInfoRequest { uuid: uuid.clone(), server: server.into(), groups: vec!["hubs".into()] };
+        let out = call(&p, METHOD_INFO, cbor(&req).unwrap()).unwrap();
+        let ans: PermissionsInfo = pumbo_sdk::ciborium::from_reader(out.as_slice()).unwrap();
+        serde_json::from_str::<ipc::Info>(&ans.data.unwrap()).unwrap()
+    };
+    let lobby = ask("Lobby");
+    assert_eq!((lobby.rank.as_str(), lobby.prefix.as_str()), ("vip", "[VIP] "));
+    assert_eq!(ask("survival").prefix, "");
+    let req = PermissionsInfoRequest { uuid, server: "lobby".into(), groups: Vec::new() };
+    let got = call_as(&p, "other-plugin", METHOD_INFO, cbor(&req).unwrap());
+    assert!(matches!(got, Err(CallReject::Rejected(_))), "{got:?}");
+}
+
+/// A change that leaves the decisions alone but changes what the player
+/// shows (a prefix) still reaches the proxy, which then asks for the info.
+#[test]
+fn prefix_change_alone_reaches_the_proxy() {
+    let (p, _) = plugin(None);
+    let steve = testing::add_player("Steve", Some("lobby"));
+    load(&p, steve);
+    let before = testing::with(|h| h.replaced.len());
+    console(&p, "user Steve meta addprefix 10 \"[S] \"");
+    assert_eq!(testing::with(|h| h.replaced.len()), before + 1);
+    console(&p, "user Steve meta addprefix 10 \"[S] \"");
+    assert_eq!(testing::with(|h| h.replaced.len()), before + 1, "the same prefix again changes nothing");
+}
+
+/// The info kept for a player is the one the host asks for: on the
+/// player's server with that server's groups.
+#[test]
+fn group_context_prefix_reaches_the_proxy() {
+    let (p, _) = plugin(None);
+    let steve = testing::add_player("Steve", Some("lobby"));
+    load(&p, steve);
+    let before = testing::with(|h| h.replaced.len());
+    console(&p, "user Steve meta addprefix 10 \"[H] \" group=hubs");
+    assert_eq!(testing::with(|h| h.replaced.len()), before + 1);
+    let uuid = uuid_of(&players::get(steve).unwrap());
+    let kept = p.with(|s| s.loaded.get(&steve).unwrap().2.clone()).unwrap();
+    let req = PermissionsInfoRequest { uuid, server: "lobby".into(), groups: vec!["hubs".into()] };
+    let out = call(&p, METHOD_INFO, cbor(&req).unwrap()).unwrap();
+    let ans: PermissionsInfo = pumbo_sdk::ciborium::from_reader(out.as_slice()).unwrap();
+    assert_eq!(kept, ans.data.unwrap());
+    // A player between servers: the host asks with no server and no groups.
+    let walker = testing::add_player("Walker", None);
+    load(&p, walker);
+    let kept = p.with(|s| s.loaded.get(&walker).unwrap().2.clone()).unwrap();
+    let req = PermissionsInfoRequest {
+        uuid: uuid_of(&players::get(walker).unwrap()),
+        server: String::new(),
+        groups: Vec::new(),
+    };
+    let out = call(&p, METHOD_INFO, cbor(&req).unwrap()).unwrap();
+    let ans: PermissionsInfo = pumbo_sdk::ciborium::from_reader(out.as_slice()).unwrap();
+    assert_eq!(kept, ans.data.unwrap());
+}
+
+/// Known bugs: each test shows the correct behaviour and is ignored until fixed.
+mod known_bugs {
+    use super::*;
+
+    #[test]
+    #[ignore = "known bug, fixed in a following change"]
+    fn export_on_broken_database_keeps_existing_file() {
+        testing::reset();
+        let dir = std::env::temp_dir().join(format!("pumbo-perms-prox-broken-export-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("exports")).unwrap();
+        let path = dir.join("exports/nightly.json");
+        std::fs::write(&path, "precious").unwrap();
+        let d = dir.to_string_lossy().to_string();
+        let p = PumboPerms { state: RefCell::new(None), config_dir: d.clone(), data_dir: d };
+        p.start(Err(pumbo_common::store::StoreError::new("disk on fire"))).unwrap();
+        console(&p, "export nightly");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "precious");
+    }
 }

@@ -4,9 +4,11 @@
 //!
 //! 1. **Holders.** A user inherits the groups of its parent nodes that apply
 //!    where the player is (contexts) and have not expired, and their parents in
-//!    turn. A user without any such parent is in the default group. The order of
-//!    importance is: the user itself, then the groups by weight (highest first),
-//!    then by distance (direct parents before their parents), then by name.
+//!    turn. A user without an active parent that has no context is also in the
+//!    default group, the same everywhere, so every host computes it alike. The
+//!    order of importance is: the user itself, then the groups by weight
+//!    (highest first), then by distance (direct parents before their parents),
+//!    then by name.
 //! 2. **Specific beats general.** For a checked node, the exact node wins over
 //!    any wildcard, and a longer wildcard over a shorter one
 //!    (`pumbo.bans.ban` > `pumbo.bans.*` > `pumbo.*` > `*`), no matter which
@@ -18,7 +20,8 @@
 //! 5. Nothing set: undecided (`None`); the platform falls back to its defaults
 //!    (operator levels on Pumpkin).
 //!
-//! Every inherited group also answers its `group.<name>` node with `true`.
+//! Every inherited group answers its `group.<name>` node with `true`, before
+//! any node set by hand, so `group.<name>` always tells the real membership.
 //!
 //! Prefix and suffix: the highest priority among all holders wins; on a tie the
 //! more important holder, then the more specific context. Meta keys: the first
@@ -414,11 +417,11 @@ impl Perms {
     }
 
     fn inheritance_of(&self, data: &Data, query: &Query, now: u64) -> Vec<(String, usize)> {
-        let mut direct: Vec<&str> = applicable_parents(data, query, now)
-            .filter(|p| self.groups.contains_key(&p.group))
-            .map(|p| p.group.as_str())
-            .collect();
-        if direct.is_empty() && self.groups.contains_key(&self.default_group) {
+        let active = |p: &&ParentNode| self.groups.contains_key(&p.group);
+        let mut direct: Vec<&str> =
+            applicable_parents(data, query, now).filter(active).map(|p| p.group.as_str()).collect();
+        let global_parent = applicable_parents(data, query, now).filter(active).any(|p| p.context.is_global());
+        if !global_parent && self.groups.contains_key(&self.default_group) {
             direct.push(&self.default_group);
         }
         self.closure(&direct, query, now)
@@ -482,8 +485,22 @@ impl Perms {
             }
         }
 
-        // permissions: holders in order, on each holder the best node first
         let mut exact: HashMap<String, Decision> = HashMap::new();
+        // membership first: a `group.<name>` set by hand never hides it
+        for (g, _) in &groups {
+            let n = node::group_node(g);
+            exact.insert(
+                n.clone(),
+                Decision {
+                    value: true,
+                    node: n,
+                    source: Source::Group(g.clone()),
+                    context: Contexts::global(),
+                    expiry: None,
+                },
+            );
+        }
+        // permissions: holders in order, on each holder the best node first
         for (source, data) in &holders {
             let mut nodes: Vec<_> =
                 data.permissions.iter().filter(|p| alive(p.expiry, now) && p.context.applies(query)).collect();
@@ -504,16 +521,6 @@ impl Perms {
                     expiry: p.expiry,
                 });
             }
-        }
-        for (g, _) in &groups {
-            let n = node::group_node(g);
-            exact.entry(n.clone()).or_insert_with(|| Decision {
-                value: true,
-                node: n,
-                source: Source::Group(g.clone()),
-                context: Contexts::global(),
-                expiry: None,
-            });
         }
 
         // prefix and suffix: highest priority, then holder order, then context

@@ -59,6 +59,21 @@ pub struct MetaNode {
     pub expiry: Option<u64>,
 }
 
+/// Longest prefix, suffix, display name or meta value, in bytes.
+pub const MAX_TEXT: usize = 256;
+
+/// Whether a prefix, suffix, display name or meta value may be stored: at most
+/// [`MAX_TEXT`] bytes and no control characters (a line break would add a fake
+/// line to the views).
+pub fn is_valid_text(text: &str) -> bool {
+    text.len() <= MAX_TEXT && !text.chars().any(char::is_control)
+}
+
+/// Whether a meta key may be stored: a valid text, not empty, with no spaces.
+pub fn is_valid_meta_key(key: &str) -> bool {
+    !key.is_empty() && !key.contains(char::is_whitespace) && is_valid_text(key)
+}
+
 /// Whether a node is still valid at `now`.
 pub fn alive(expiry: Option<u64>, now: u64) -> bool {
     expiry.is_none_or(|e| e > now)

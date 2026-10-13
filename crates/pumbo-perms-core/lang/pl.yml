@@ -93,11 +93,14 @@ bad-node-wildcard: "{0} to nie jest poprawne uprawnienie: * może być tylko ost
 bad-value: "{0} to nie jest true ani false."
 bad-number: "{0} to nie jest liczba całkowita."
 bad-context: "Zły kontekst: {0}. Użyj server=, group= albo world=."
+no-worlds: "Proxy nie widzi światów, więc world= nie działa tutaj."
+bad-text: Tekst jest za długi albo ma znaki sterujące (najwyżej 256 bajtów, bez łamania linii).
+import-file-console: "Cały plik importuje tylko konsola: import podmienia wszystkie grupy i graczy."
 editor-later: Edytora w przeglądarce jeszcze nie ma. Na razie użyj export i import (JSON).
 
 # części komunikatów
 in-context: " w {0}"
-target-user: "{0}"
+target-user: "{0} &8({1})&r"
 target-group: grupa {0}
 expires-in: wygasa za {0}
 time-ago: "{0} temu"
@@ -113,6 +116,9 @@ perm-clear: "Usunięto uprawnienia ({count}) dla: {target}{context}."
 perm-check: "{node} dla: {target}: {value}"
 perm-check-source: "decyduje {source}: {node}{context} "
 perm-check-undecided: "{node} dla: {target}: nie ustawiono, decyduje domyślne zachowanie serwera."
+perm-check-no-worlds: "Proxy nie widzi światów: wpisy z world= nie działają nigdzie w tej sieci."
+perm-hidden: "nie trafia do Pumpkina: {0} zasłania {1}"
+perm-group-node: "{node} to grupa, nie uprawnienie. Użyj {command} parent add {group}."
 parent-add: "{target} dziedziczy teraz {group}{context}."
 parent-addtemp: "{target} dziedziczy teraz {group}{context}, przez {duration}."
 parent-already: "{target} już dziedziczy {group}{context}."
@@ -157,8 +163,11 @@ import-source-same: "{0} nie zmieniło się od ostatniego importu."
 import-source-preview: "Import {0} doda wpisów: {1} (konflikty pozostawione bez zmian: {2}):"
 import-source-undone: "Usunięto wpisy zaimportowane z {0}: {1}."
 import-source-failed: "Nie można zaimportować {0}: {1}"
-import-source-pending: "Gracze znani tylko z nicku ({0}) dostaną swoje wpisy przy pierwszym wejściu: {1}"
+import-source-pending: "Gracze znani tylko z nicku ({0}) dostaną swoje wpisy, gdy wejdą z kontem online (premium): {1}"
 import-source-joined: "{0}: {1} wszedł pierwszy raz, dodano wpisów: {2}."
+import-source-offline: "{0}: {1} wszedł z kontem offline i nic nie dostał; wpisy dla tego nicku czekają na konto online (premium)."
+import-fixed: "Poprawione albo pominięte wpisy z pliku: {0}"
+import-worlds: "Zachowano wpisy z world= ({0}): proxy nie widzi światów, więc nigdzie nie działają."
 import-missing: Nie ma pliku {0}.
 notify: "{0} zmienia {1}: {2}"
 log-empty: Na razie bez zmian.

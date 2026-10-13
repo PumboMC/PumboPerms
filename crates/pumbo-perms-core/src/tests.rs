@@ -210,7 +210,43 @@ fn parents_with_contexts() {
     assert_eq!(p.check(U, "group.default", &here(), 0), Some(true), "no parent applies here: default");
     let creative = Query::new("creative", "", "world");
     assert_eq!(p.check(U, "worldedit.wand", &creative, 0), Some(true));
-    assert_eq!(p.check(U, "group.default", &creative, 0), None);
+    assert_eq!(p.check(U, "group.default", &creative, 0), Some(true), "no parent without context: default too");
+}
+
+#[test]
+fn default_group_without_global_parent() {
+    let mut p = Perms::new();
+    group(&mut p, "default", 0, &[perm("chat", true)]);
+    group(&mut p, "vip", 10, &[perm("chat", false), perm("fly", true)]);
+    p.edit_user(U, "Steve", |d| {
+        d.add_parent(ParentNode { group: "vip".into(), context: ctx("server=survival"), expiry: None });
+    });
+    let survival = Query::new("survival", "", "world");
+    for q in [here(), survival.clone(), Query::default()] {
+        assert_eq!(p.check(U, "group.default", &q, 0), Some(true), "{q:?}");
+    }
+    assert_eq!(p.check(U, "fly", &survival, 0), Some(true));
+    assert_eq!(p.check(U, "chat", &survival, 0), Some(false), "the heavier group wins");
+    assert_eq!(p.check(U, "chat", &here(), 0), Some(true));
+    p.edit_user(U, "Steve", |d| {
+        d.add_parent(ParentNode { group: "vip".into(), context: Contexts::global(), expiry: None });
+    });
+    for q in [here(), survival, Query::default()] {
+        assert_eq!(p.check(U, "group.default", &q, 0), None, "a parent without context replaces default");
+    }
+}
+
+#[test]
+fn group_node_answers_membership() {
+    let mut p = Perms::new();
+    group(&mut p, "vip", 0, &[]);
+    group(&mut p, "mod", 0, &[]);
+    p.edit_user(U, "Steve", |d| {
+        d.add_parent(ParentNode { group: "vip".into(), context: Contexts::global(), expiry: None });
+        d.set_permission(perm("group.vip", false));
+    });
+    assert_eq!(p.check(U, "group.vip", &here(), 0), Some(true), "membership beats a node set by hand");
+    assert_eq!(p.check(U, "group.mod", &here(), 0), None);
 }
 
 #[test]

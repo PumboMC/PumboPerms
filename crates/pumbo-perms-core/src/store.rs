@@ -222,6 +222,7 @@ fn write_dirty(tx: &mut dyn WriteOps, perms: &Perms, dirty: &Dirty) -> Result<()
     Ok(())
 }
 
+#[expect(clippy::integer_division, reason = "batch size, rounded down")]
 fn append_log(tx: &mut dyn WriteOps, entry: &LogEntry, log_max: u64) -> Result<()> {
     let seq = tx.get_u64(META, "log_seq")?.unwrap_or(0).saturating_add(1);
     tx.put_u64(META, "log_seq", seq)?;

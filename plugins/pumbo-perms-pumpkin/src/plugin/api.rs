@@ -4,6 +4,7 @@
 
 pub use crate::papi::command::{Arg, ArgumentType, Command, CommandNode, CommandSender, ConsumedArgs, StringType};
 pub use crate::papi::command::{CommandError, CommandSuggestion, CommandSuggestions, SuggestionRequest};
+pub use crate::papi::command_wit::CommandSenderType;
 pub use crate::papi::commands::{CommandHandler, CommandSuggestionHandler};
 pub use crate::papi::common::{NamedColor, RgbColor};
 pub use crate::papi::events::{

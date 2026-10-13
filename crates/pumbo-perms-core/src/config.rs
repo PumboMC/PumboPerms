@@ -20,9 +20,9 @@ pub struct ContextCfg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct DefaultsCfg {
-    /// Operators with at least this level get every `pumbo.*` node that no
-    /// group or user decides (0: off). Other nodes keep the defaults of the
-    /// platform.
+    /// Operators with at least this level get every `pumbo.perms.*` node that
+    /// no group or user decides (0: off). Other nodes keep the defaults of the
+    /// platform, where each plugin registers its own.
     pub op_level: u8,
 }
 
@@ -48,12 +48,26 @@ impl Default for LogCfg {
 }
 
 /// The sections of the core, put into the platform's config struct.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct CoreCfg {
     pub context: ContextCfg,
     pub defaults: DefaultsCfg,
     pub log: LogCfg,
+    /// Whether the platform sees worlds (`world=`); not in the file, the
+    /// proxy sets it to false.
+    #[serde(skip, default = "yes")]
+    pub worlds: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for CoreCfg {
+    fn default() -> Self {
+        Self { context: ContextCfg::default(), defaults: DefaultsCfg::default(), log: LogCfg::default(), worlds: true }
+    }
 }
 
 impl CoreCfg {

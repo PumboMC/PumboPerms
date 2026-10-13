@@ -17,6 +17,16 @@ pub fn load_config(dir: &str) -> (Config, Vec<Warning>) {
     (cfg, warnings)
 }
 
+/// [`load_config`] at start: a `config.yml` that is not valid YAML gives way to
+/// the last good copy; without one the plugin does not start.
+pub fn load_config_at_start(dir: &str) -> Result<(Config, Vec<Warning>), String> {
+    let (_, warning) = config::read_or_create(&format!("{dir}/config.yml"), TEMPLATE);
+    let (cfg, mut warnings) = config::load_with_last_good::<Config>(dir, dir)?;
+    warnings.extend(warning);
+    warnings.extend(config::old_files(dir));
+    Ok((cfg, warnings))
+}
+
 pub fn load_lang(dir: &str, code: &str) -> (Lang, Vec<Warning>) {
     let template = Lang::template(&BUNDLES, code);
     let (text, warning) = config::read_or_create(&format!("{dir}/lang/{code}.yml"), &template);
@@ -43,6 +53,7 @@ pub fn reload(rt: &mut Rt) -> Text {
     rt.engine.cfg = cfg.core();
     rt.engine.lang = lang;
     rt.cfg = cfg;
+    warnings.extend(config::keep_last_good(&rt.dir, &rt.dir));
     for w in &warnings {
         rt.warn(format!("PumboPerms: config: {w}"));
     }

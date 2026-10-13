@@ -101,18 +101,19 @@ pub fn fill(info: &Info, text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find(START) {
-        out.push_str(&rest[..at]);
-        let token = &rest[at + START.len()..];
-        let Some(end) = token.find('%') else {
-            out.push_str(&rest[at..]);
+        let Some((before, from)) = rest.split_at_checked(at) else { break };
+        out.push_str(before);
+        let token = from.get(START.len()..).unwrap_or_default();
+        let Some((name, after)) = token.find('%').and_then(|end| token.split_at_checked(end)) else {
+            out.push_str(from);
             return out;
         };
-        let (key, arg) = token[..end].split_once(':').map_or((&token[..end], None), |(k, a)| (k, Some(a)));
+        let (key, arg) = name.split_once(':').map_or((name, None), |(k, a)| (k, Some(a)));
         match placeholder(info, key, arg) {
             Some(v) => out.push_str(&v),
-            None => out.push_str(&rest[at..at + START.len() + end + 1]),
+            None => out.push_str(from.get(..START.len() + name.len() + 1).unwrap_or_default()),
         }
-        rest = &token[end + 1..];
+        rest = after.get(1..).unwrap_or_default();
     }
     out.push_str(rest);
     out
@@ -206,8 +207,10 @@ mod tests {
         assert_eq!(ask(&mut e, r#"{"op":"ping"}"#)["protocol"], 1);
         let r = ask(&mut e, &format!(r#"{{"op":"check","uuid":"{U}","node":"group.vip"}}"#));
         assert_eq!(r["value"], true);
+        let r = ask(&mut e, &format!(r#"{{"op":"check","uuid":"{U}","node":"pumboperms:reload","op-level":3}}"#));
+        assert_eq!(r["value"], true, "operator fallback for PumboPerms nodes");
         let r = ask(&mut e, &format!(r#"{{"op":"check","uuid":"{U}","node":"pumbobans:ban","op-level":3}}"#));
-        assert_eq!(r["value"], true, "operator fallback for Pumbo nodes");
+        assert!(r["value"].is_null(), "other plugins keep their own operator levels");
         let r = ask(&mut e, &format!(r#"{{"op":"check","uuid":"{U}","node":"other.node"}}"#));
         assert!(r["value"].is_null());
         let r = ask(&mut e, &format!(r#"{{"op":"info","uuid":"{U}"}}"#));
