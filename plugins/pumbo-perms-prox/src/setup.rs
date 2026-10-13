@@ -53,10 +53,10 @@ impl Default for Config {
 }
 
 impl Config {
-    /// The core sections: places come from the player's server and the proxy
-    /// has no operator levels.
+    /// The core sections: places come from the player's server, and the proxy
+    /// has no operator levels and does not see worlds.
     pub fn core(&self) -> CoreCfg {
-        CoreCfg { defaults: DefaultsCfg { op_level: 0 }, log: self.log.clone(), ..CoreCfg::default() }
+        CoreCfg { defaults: DefaultsCfg { op_level: 0 }, log: self.log.clone(), worlds: false, ..CoreCfg::default() }
     }
 }
 
@@ -81,6 +81,14 @@ pub fn load_config(dir: &str) -> (Config, Vec<Warning>) {
     };
     w.extend(config::old_files(dir));
     (cfg, w)
+}
+
+/// [`load_config`] at start: a `config.yml` that is not valid YAML gives way to
+/// the last good copy in the data folder; without one the plugin does not start.
+pub fn load_config_at_start(config_dir: &str, data_dir: &str) -> Result<(Config, Vec<Warning>), String> {
+    let (cfg, mut w) = config::load_with_last_good::<Config>(config_dir, data_dir)?;
+    w.extend(config::old_files(config_dir));
+    Ok((cfg, w))
 }
 
 /// The messages in `code`, with `lang/<code>.yml` from the config folder over

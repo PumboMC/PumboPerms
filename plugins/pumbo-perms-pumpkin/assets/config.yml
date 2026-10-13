@@ -16,7 +16,7 @@ context:
 
 # ── Operators ─────────────────────────────────────────────────
 defaults:
-  op-level: 3                # operators from this level get every undecided pumbo.* node (0 = off)
+  op-level: 3                # operators from this level may use /pp where no group decides (0 = off)
 
 
 # ── Change log ────────────────────────────────────────────────
@@ -36,4 +36,5 @@ provider:
 import:
   enabled: true              # at start: the proxy's table (PumboBridge), the plugins below, or else attachments
   follow: false              # import a source again when it changes (otherwise once; /pp import run <source>)
+                             # (`proxy` changes when the proxy reloads permissions.yml without PumboPerms there)
   plugins: []                # other plugins that answer {"op":"export-permissions"}

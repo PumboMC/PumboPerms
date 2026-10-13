@@ -6,7 +6,7 @@ PumboPerms is a permission and rank system for the [Pumpkin](https://github.com/
 
 - **Groups** with inheritance (a group can have parent groups) and a **weight**: when two groups disagree, the heavier one wins. A player without any group is in `default`.
 - **Permissions** set to `true` or `false` on players and groups, in Pumpkin's spelling (`minecraft:command.gamemode`) or the Pumbo one (`pumbo.bans.ban`, the same node as `pumbobans:ban`).
-- **Wildcards**: `pumbo.bans.*`, `minecraft:command.*`, `*`. The most specific node always wins: an exact node beats `pumbo.bans.*`, which beats `pumbo.*`, which beats `*`.
+- **Wildcards**: `pumbo.bans.*`, `minecraft:command.*`, `*`. In PumboPerms an exact node beats `pumbo.bans.*`, which beats `pumbo.*`, which beats `*`; how Pumpkin gets them is below.
 - **Temporary** permissions, groups, prefixes and suffixes (`1h30m`, `7d`); they end on their own, also while the player is online.
 - **Contexts**: `server=<name>`, `group=<server group>`, `world=<name>` limit a permission, a group or a prefix to where the player is.
 - **Prefixes, suffixes and meta** with priorities; the rank is the heaviest group of the player (with a display name).
@@ -18,15 +18,25 @@ PumboPerms is a permission and rank system for the [Pumpkin](https://github.com/
 
 ## How it works on Pumpkin
 
-Pumpkin keeps a list of permission values per player ("attachments") and checks it before its own defaults. PumboPerms decides every permission it knows about for each online player and writes the result into that list: Pumpkin's built-in command permissions, every permission that appears in a group or user, and its own permissions. The list is updated when a player joins, after every change, when the player changes worlds (if world contexts are used), when something temporary ends (checked every second) and when an operator level changes. After a change that affects commands, the player gets the command list again, so Tab completion shows exactly what they may use.
+Pumpkin keeps a list of permission values per player ("attachments") and checks it before its own defaults. PumboPerms decides every permission it knows about for each online player and writes the result into that list: Pumpkin's built-in command permissions, every permission that appears in a group or user, and its own permissions. The list is updated when a player joins, after every change, when the player changes worlds (if world contexts are used), when something temporary ends (checked every second) and when an operator level changes. After a change that affects commands, the player gets the command list again, so Tab completion shows exactly what they may use. When a player leaves, PumboPerms takes everything it set off them (Pumpkin would keep it until the server stops), and when they join again it checks the whole list, so a rank taken away meanwhile is gone.
+
+`/tick freeze` also stops the check of temporary permissions every second. An expired one still goes at the next moment PumboPerms runs: a player joins, leaves, changes worlds or sends any command, or another plugin asks PumboPerms.
+
+If PumboPerms itself crashes (Pumpkin then shows the plugin as failed), the permissions it last set stay on online players until the server restarts, temporary ones included. Restart the server; `/plugin unload` does not take them off.
 
 Pumpkin never has to call PumboPerms while it checks a permission, which keeps the server safe under load.
 
-What this cannot do: a permission that nobody named anywhere (not built into Pumpkin, not in any group or user) is decided by Pumpkin alone. Wildcards inside a namespace (`minecraft:*`, `someplugin:*`) still reach such permissions, but Pumpkin reads them from the broadest one. Pumbo plugins can ask PumboPerms directly (below), which always gives the full answer.
+The list also holds every permission of the Pumbo plugins (`pumbobans:ban`, `pumbofilter:bypass` and so on), so each gets its own value even when the data only has a wildcard. Pumpkin reads wildcards from the broadest one, and it reads a permission set exactly as a wildcard for everything below it. So PumboPerms sends a player's list in a form Pumpkin reads the same way:
+
+- A wildcard with a narrower wildcard of another value below it is not sent (`pumbobans:*` true with `pumbobans:exempt.*` false: only the narrower one goes). The server log names it once per player and change, and `/pp user <name> info` and `permission check` show "not sent to Pumpkin: pumbobans:* hides pumbobans:exempt.*".
+- A permission set exactly also wins over a narrower wildcard below it. With `essentials:fly` true and `essentials:fly.*` false, a permission below it that no group or user names gets true from Pumpkin. The log and `/pp` show "not sent to Pumpkin: essentials:fly hides essentials:fly.*"; give such a permission its own value.
+- A permission from the list without its own decision, below a permission set to true, gets false. A moderator with `pumbo.bans.notify` does not get `pumbobans:notify.silent` from Pumpkin's operator level; give it to them on its own.
+
+What this cannot do: a permission that nobody named anywhere (not built into Pumpkin, not in any group or user, not a Pumbo permission) is decided by Pumpkin alone. Wildcards inside a namespace (`minecraft:*`, `someplugin:*`) still reach such permissions, but not a wildcard that was left out as above: there Pumpkin's own default decides, so an operator may get such a permission even when PumboPerms says no. Pumbo plugins can ask PumboPerms directly (below), which always gives the full answer.
 
 `provider.check-event: true` makes PumboPerms also answer Pumpkin's permission check event. **Do not use it on Pumpkin 0.2.0 or 0.1.0-dev**: there the server hangs when a plugin is hot-reloaded while players are online, and under a few hundred commands per second (every permission check then waits for the plugin, and Pumpkin runs out of threads). It is there for Pumpkin versions that fix this.
 
-Pumpkin 0.2.0 and 0.1.0-dev run `/tp`, `/xp`, `/banip` and `/pardonip` without any permission check (fixed upstream after 0.2.0, Pumpkin #3801). PumboPerms checks these four against the permission of their command (`minecraft:command.teleport`, `.experience`, `.banip`, `.pardonip`) and answers a player without it like an unknown command, as vanilla does (not with `provider.check-event: true`).
+Pumpkin 0.2.0 and 0.1.0-dev run `/tp`, `/xp`, `/banip` and `/pardonip` without any permission check (fixed upstream after 0.2.0, Pumpkin #3801), also after `/execute ... run`. PumboPerms checks these four, typed directly or after any `run` of `/execute`, against the permission of their command (`minecraft:command.teleport`, `.experience`, `.banip`, `.pardonip`) and answers a player without it like an unknown command, as vanilla does. Tab completion still shows the four aliases to everyone, because Pumpkin builds that list; only running them is refused.
 
 ## Compatibility
 
@@ -53,6 +63,10 @@ Pumpkin checks the plugin API strictly: a file only loads on the server version 
 ```
 
 The plugin needs the `fs.read.data` and `fs.write.data` permissions of Pumpkin's plugin sandbox and nothing else (no network).
+
+## Updating
+
+Replace the file with the new one of the same name (`PumboPerms-26.3.wasm` or `PumboPerms-26.2.wasm`) and restart the server. Keep the name, so the update overwrites the old file instead of adding a second PumboPerms next to it. `plugins/data/pumboperms/` stays.
 
 ## Building
 
@@ -112,6 +126,8 @@ Rust stable with the `wasm32-wasip2` target is required.
 | `/pp version` | `version` |
 | `/pp editor` (planned) | `editor` |
 
+`/pp` runs for players, the console and RCON. Command blocks, signs and functions get a refusal and change nothing (anyone who can place one would otherwise act as the console); use the console or RCON for automation. `/pp import <file>` replaces the whole database, so only the console may run it.
+
 Durations: `30s`, `10m`, `1h30m`, `7d`, `2w`, `1mo`, `1y`. Contexts: `server=lobby`, `group=lobbies`, `world=world_nether`. Text with spaces goes in quotes: `"&6[VIP] "`.
 
 Export writes `plugins/data/pumboperms/exports/<file>.json`; import reads such a file, saves the current data as `before-import-<date>.json` first and then replaces everything.
@@ -120,7 +136,7 @@ Export writes `plugins/data/pumboperms/exports/<file>.json`; import reads such a
 
 PumboPerms is meant to be the only plugin that writes permissions on a server. At start (in its first tick, before it writes anything) it imports what other sources hold, and from then on it rules alone:
 
-1. `proxy`: the ranks of PumboProx for this server, through PumboBridge (the proxy's `permissions.yml` with this server's contexts merged in). The bridge keeps the last copy on disk, so this works even before it reaches the proxy.
+1. `proxy`: the ranks of PumboProx for this server, through PumboBridge (the proxy's `permissions.yml` with this server's contexts merged in). Only the copy the bridge got from the proxy since it last connected counts; an older one from disk is not imported. While the bridge has a proxy key and no such copy yet, PumboPerms waits before its first pass and Pumpkin's own defaults apply; after 10 seconds it says so in the log and keeps waiting, also when the proxy cannot be reached.
 2. The plugins listed in `import.plugins` that answer `{"op":"export-permissions"}` in the PumboPerms export format.
 3. Only when neither gave anything: the attachments other plugins set on online players (`attachments`), as player permissions.
 
@@ -128,7 +144,7 @@ An import only adds. A group or player entry that is already there stays as it i
 
 After the first import PumboPerms asks PumboBridge to release the attachments it wrote for the proxy (`release-permissions`), and writes them alone. When the plugin is unloaded, it takes its attachments back.
 
-**When PumboPerms runs on the proxy too**, the proxy rules: its export (through PumboBridge) says `proxy-rules`, and this PumboPerms steps back within 10 seconds. It hands its attachments to PumboBridge, which writes the proxy's decisions from then on, writes nothing itself and adds a note to every `/pp` answer ("PumboPerms on the proxy manages the ranks of this network"); `/pp version` shows the mode. Its data stays as it was, and when the proxy no longer has PumboPerms it takes over again. Set ranks on the proxy instead, with `server=<name>` for this server (see `plugins/pumbo-perms-prox/README.md`).
+**When PumboPerms runs on the proxy too**, the proxy rules: its export (through PumboBridge) says `proxy-rules` and nothing else, and this PumboPerms steps back within 10 seconds; `/pp import run proxy` answers that there is nothing to import. It hands its attachments to PumboBridge, which writes the proxy's decisions from then on, writes nothing itself and adds a note to every `/pp` answer ("PumboPerms on the proxy manages the ranks of this network"); `/pp version` shows the mode. Its data stays as it was, and when the proxy no longer has PumboPerms it takes over again. Set ranks on the proxy instead, with `server=<name>` for this server (see `plugins/pumbo-perms-prox/README.md`).
 
 ## Permissions
 
@@ -145,20 +161,22 @@ How a permission is decided:
 1. The most specific node wins: the exact node over `a.b.*` over `a.*` over `*`.
 2. Between equally specific nodes, the player's own beat their groups', and a heavier group beats a lighter one (then the closer one in the inheritance, then by name).
 3. On one player or group, a node limited by contexts beats a global one (server over server group over world), and a temporary one beats a permanent one.
-4. Nothing set: Pumpkin decides (operator levels). For `pumbo.*` permissions nobody set, operators of level `defaults.op-level` and up get them.
+4. Nothing set: Pumpkin decides (operator levels, and each plugin registers its own). For PumboPerms permissions nobody set, operators of level `defaults.op-level` and up may use `/pp`.
 
-Every group a player inherits also answers `group.<name>` with `true`.
+A player without a group that applies everywhere (no context) is also in `default`, on every server and in every world: a player whose only group is `vip` in `server=survival` has `vip` and `default` there, and `default` elsewhere.
+
+Every group a player inherits also answers `group.<name>` with `true`, whatever is set by hand. `permission set group.<name>` is refused: use `parent add <name>`, and an import leaves such permissions out with a line in its reply.
 
 ## Configuration
 
-`plugins/data/pumboperms/config.yml` (reload with `/pp reload`; the database is not reloaded). The file is written with short comments on first start; the options:
+`plugins/data/pumboperms/config.yml` (reload with `/pp reload`; the database is not reloaded). The file is written with short comments on first start. Each time it loads, PumboPerms keeps a copy as `config.last-good.yml`; if the file is not valid YAML at start, PumboPerms starts from that copy and logs an error, and without a copy it does not start. The options:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `language` | `en` | messages from `lang/<code>.yml` (`en`, `pl` built in) |
 | `context.server` | empty | name of this server: nodes added with `server=<name>` apply only on the server with that name; empty: such nodes never apply here |
 | `context.group` | empty | group of servers this one belongs to (`group=<name>` nodes), for networks |
-| `defaults.op-level` | `3` | operators of this level (1-4) and up get every `pumbo.*` permission that no group or user decides; Pumpkin's own commands keep Pumpkin's operator rules; 0: off, only groups and users decide |
+| `defaults.op-level` | `3` | operators of this level (1-4) and up may use every `/pp` subcommand that no group or user decides; other plugins and Pumpkin's own commands keep their own operator rules; 0: off, only groups and users decide. Pumpkin's own default for the `pumboperms:` nodes changes only after a server restart |
 | `log.max-entries` | `10000` | changes kept in the log (0: unlimited) |
 | `log.notify` | `true` | tell players with `pumbo.perms.log.notify` about changes |
 | `provider.check-event` | `false` | also answer each of Pumpkin's permission checks (see below, needs a restart) |
@@ -169,6 +187,8 @@ Every group a player inherits also answers `group.<name>` with `true`.
 | `import.plugins` | `[]` | other plugins that answer `{"op":"export-permissions"}` |
 
 Groups, users and tracks are not in this file: they are managed with `/pp` and stored in `perms.redb`.
+
+After an update, an existing `lang/<code>.yml` keeps its old texts. If it has `target-user: "{0}"`, replies about a player do not show the UUID: delete that line, or write `"{0} &8({1})&r"`.
 
 `provider.check-event`: PumboPerms gives every online player the permissions it decides as Pumpkin permission attachments. That is all Pumpkin needs, and Pumpkin never has to call PumboPerms while it checks a permission. With `check-event: true` PumboPerms also answers each of Pumpkin's permission checks itself (also for permissions nobody listed). Do not use it on Pumpkin 0.2.0 or 0.1.0-dev: the server hangs when a plugin registers commands while players are online (plugin hot reload) and under many checks at once (several hundred commands per second). It is meant for testing and changes only after a restart. In this mode command lists are not sent again after a change: the resend makes Pumpkin check every command through the same event, from inside a call of this plugin, and on 0.2.0 that hangs the server now and then for good.
 
@@ -183,7 +203,7 @@ Send JSON to the plugin `pumboperms` with Pumpkin's inter-plugin call (`ipc::sen
 {"op": "fill", "uuid": "…", "world": "world", "text": "%pumboperms_prefix%Steve"}
 ```
 
-`check` answers `{"ok": true, "value": true}`, `false`, or `null` when nobody decides (use your own default). It works for offline players too. `info` gives the rank (primary group and its display name), prefix, suffix, all inherited groups and meta values: what `%rank%`, `%prefix%` and `%suffix%` will show. Errors are `{"ok": false, "error": "..."}`.
+`check` answers `{"ok": true, "value": true}`, `false`, or `null` when nobody decides (use your own default). It works for offline players too. While PumboPerms on the proxy manages the network, the answers come from the proxy, in the same format: `check` reads the permissions the proxy sent for the player (`null` for a permission it did not send, whatever Pumpkin's default for it is), `info` and `fill` use what PumboBridge brings from the proxy, and `hello` has `"passive": true`. For a player who is offline, or whose data has not arrived yet, they answer `{"ok": false, "error": "proxy-rules", "passive": true}`. `info` gives the rank (primary group and its display name), prefix, suffix, all inherited groups and meta values: what `%rank%`, `%prefix%` and `%suffix%` will show. Errors are `{"ok": false, "error": "..."}`.
 
 ### Placeholders
 

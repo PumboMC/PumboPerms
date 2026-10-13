@@ -15,9 +15,50 @@
 //!   sends it through the service method `file`); players named there only by
 //!   nickname get their entries at their first join,
 //! - for others: `check-offline` (offline players), `export` (PumboBridge
-//!   `perms-export`: a PumboPerms on a server sees that the proxy rules).
+//!   `perms-export`: only the flag that the proxy rules, so a PumboPerms on
+//!   a server steps back) and `info` (rank, prefix, meta of a player on a
+//!   server, which PumboBridge carries to the PumboPerms there).
 //!
 //! [`setup`] holds the parts that do not need the host.
+
+// Panics trap the host and stdout is lost; these stay errors outside tests.
+#![deny(
+    clippy::string_slice,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::await_holding_lock,
+    clippy::await_holding_refcell_ref,
+    clippy::integer_division,
+    clippy::modulo_arithmetic,
+    clippy::unchecked_time_subtraction,
+    clippy::get_unwrap,
+    clippy::exit,
+    clippy::large_stack_arrays,
+    clippy::large_stack_frames,
+    clippy::unwrap_in_result,
+    clippy::panic_in_result_fn,
+    clippy::significant_drop_in_scrutinee
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::string_slice,
+        clippy::print_stdout,
+        clippy::print_stderr,
+        clippy::await_holding_lock,
+        clippy::await_holding_refcell_ref,
+        clippy::integer_division,
+        clippy::modulo_arithmetic,
+        clippy::unchecked_time_subtraction,
+        clippy::get_unwrap,
+        clippy::exit,
+        clippy::large_stack_arrays,
+        clippy::large_stack_frames,
+        clippy::unwrap_in_result,
+        clippy::panic_in_result_fn,
+        clippy::significant_drop_in_scrutinee
+    )
+)]
 
 pub mod setup;
 
@@ -39,8 +80,8 @@ use pumbo_perms_core::perms::KnownName;
 use pumbo_perms_core::store::PermsStore;
 use pumbo_perms_core::ui;
 use pumbo_sdk::contracts::{
-    CheckOffline, CheckOfflineAnswer, METHOD_CHECK_OFFLINE, METHOD_EXPORT, METHOD_FILE, PERMISSIONS, PermissionsExport,
-    PermissionsFile,
+    CheckOffline, CheckOfflineAnswer, HOST, METHOD_CHECK_OFFLINE, METHOD_EXPORT, METHOD_FILE, METHOD_INFO, PERMISSIONS,
+    PERMISSIONS_HOST_ONLY, PermissionsExport, PermissionsFile, PermissionsInfo, PermissionsInfoRequest,
 };
 use pumbo_sdk::{
     CallReject, Command, CommandEvent, Context, PermissionEntry, PermissionSet, PlaceholderRequest, PlayerId,
@@ -51,6 +92,8 @@ use pumbo_sdk::{
 pub const SOURCE: &str = "file";
 /// Expired nodes and changed server lists are looked for this often.
 const TICK_MS: u64 = 1000;
+/// A broken database is logged again after this long.
+const BROKEN_LOG_MS: u64 = 60_000;
 /// Whether a player sees `/pp` at all (set for everyone with any `/pp` right).
 const COMMAND_NODE: &str = "pumbo.perms.command";
 /// `/pp` subcommands also under `/pumboperms` and `/pumbo perms` (`reload`,
@@ -78,8 +121,9 @@ const UMBRELLA: &[(&str, &[&str])] = &[
 struct State {
     engine: Engine,
     cfg: setup::Config,
-    /// Players the proxy loaded from this plugin: UUID and the last set sent.
-    loaded: HashMap<PlayerId, (String, Vec<PermissionEntry>)>,
+    /// Players the proxy loaded from this plugin: UUID, the last set the proxy
+    /// took and the info (`ipc::Info` as JSON) on the player's server then.
+    loaded: HashMap<PlayerId, (String, Vec<PermissionEntry>, String)>,
     /// `permissions.yml` as the proxy sent it last (fingerprint, contents).
     file: Option<(String, Snapshot)>,
     /// What `permissions.yml` added (`imports/file.json`).
@@ -87,6 +131,8 @@ struct State {
     timer: u64,
     /// The proxy refused `replace`: another provider is configured.
     not_provider: bool,
+    /// When the broken database was last logged.
+    broken_logged: Option<u64>,
 }
 
 pub struct PumboPerms {
@@ -162,6 +208,14 @@ fn save_ledger(dir: &str, ledger: &Ledger) {
     }
 }
 
+/// [`ipc::info`] on `server` (empty: global) as JSON, built as the host's
+/// `info` call builds it: the server and its groups, no fallback context.
+fn info_json(e: &mut Engine, uuid: &str, server: &str, now: u64) -> String {
+    let groups = e.server_groups.get(&server.to_lowercase()).cloned().unwrap_or_default();
+    let q = Query::at(server, groups, "");
+    ipc::info(e, uuid, &q, now).and_then(|i| serde_json::to_string(&i).ok()).unwrap_or_default()
+}
+
 /// A place from a contract context string (`global`, `server=x`, `group=x`).
 fn query_of(e: &Engine, context: &str) -> Query {
     match context.split_once('=') {
@@ -188,13 +242,21 @@ impl PumboPerms {
         self.state.try_borrow_mut().ok().and_then(|mut g| g.as_mut().map(f))
     }
 
-    /// Loads config, messages and the database, registers the commands.
+    /// Loads config, messages and the database, registers the commands. A
+    /// broken `config.yml` starts from the last good copy, or not at all.
     pub fn start(&self, store: Result<PermsStore, pumbo_common::store::StoreError>) -> Result<(), String> {
-        let (cfg, mut warnings) = setup::load_config(&self.config_dir);
+        let (cfg, mut warnings) = setup::load_config_at_start(&self.config_dir, &self.data_dir).map_err(|e| {
+            log::error(&format!("PumboPerms: config: {e}"));
+            e
+        })?;
         let (lang, w) = setup::load_lang(&self.config_dir, &cfg.language);
         warnings.extend(w);
         for w in &warnings {
-            log::warn(&format!("PumboPerms: config: {w}"));
+            if w.fatal {
+                log::error(&format!("PumboPerms: config: {w}"));
+            } else {
+                log::warn(&format!("PumboPerms: config: {w}"));
+            }
         }
         let mut engine = Engine::new(store, cfg.core(), lang);
         if let Some(why) = &engine.broken {
@@ -227,8 +289,16 @@ impl PumboPerms {
         );
         let ledger = load_ledger(&self.data_dir);
         let timer = scheduler::every(TICK_MS);
-        *self.state.borrow_mut() =
-            Some(State { engine, cfg, loaded: HashMap::new(), file: None, ledger, timer, not_provider: false });
+        *self.state.borrow_mut() = Some(State {
+            engine,
+            cfg,
+            loaded: HashMap::new(),
+            file: None,
+            ledger,
+            timer,
+            not_provider: false,
+            broken_logged: None,
+        });
         log::info(&summary);
         Ok(())
     }
@@ -243,6 +313,7 @@ impl PumboPerms {
             log::warn(&format!("PumboPerms: reload refused, the current settings stay: {w}"));
             return Err(w.message.clone());
         }
+        warnings.extend(pumbo_common::config::keep_last_good(&self.config_dir, &self.data_dir));
         for w in &warnings {
             log::warn(&format!("PumboPerms: config: {w}"));
         }
@@ -260,30 +331,43 @@ impl PumboPerms {
         .ok_or_else(|| "PumboPerms is not loaded".to_string())
     }
 
-    /// Sends the proxy the new set of every loaded player whose set changed.
+    /// Sends the proxy the new set of every loaded player whose set or info
+    /// changed (a new set also makes the proxy ask for the info again).
     fn push_all(&self) {
         let groups = server_groups();
+        let at: HashMap<PlayerId, String> =
+            players::all().into_iter().map(|p| (p.id, p.context.server.unwrap_or_default())).collect();
         let now = now_ms();
         let changes = self
             .with(|s| {
                 s.engine.server_groups = groups;
                 let State { engine, loaded, .. } = s;
                 let mut out = Vec::new();
-                for (id, (uuid, last)) in loaded.iter_mut() {
+                for (id, (uuid, last, last_info)) in loaded.iter() {
                     let set = entries(engine, uuid, now);
-                    if *last != set {
-                        *last = set.clone();
-                        out.push((*id, set));
+                    let info = info_json(engine, uuid, at.get(id).map_or("", String::as_str), now);
+                    if *last != set || *last_info != info {
+                        out.push((*id, set, info));
                     }
                 }
                 out
             })
             .unwrap_or_default();
-        for (id, set) in changes {
+        for (id, set, info) in changes {
             if pumbo_sdk::debug_enabled() {
                 log::debug(&format!("PumboPerms: player {id}: {} entries", set.len()));
             }
-            if let Err(e) = permissions::replace(id, &PermissionSet { entries: set }) {
+            let sent = PermissionSet { entries: set };
+            let result = permissions::replace(id, &sent);
+            if result.is_ok() {
+                // Kept only once the proxy has it: a refused set is sent again next time.
+                self.with(|s| {
+                    if let Some(l) = s.loaded.get_mut(&id) {
+                        (l.1, l.2) = (sent.entries, info);
+                    }
+                });
+            }
+            if let Err(e) = result {
                 let first = self.with(|s| !std::mem::replace(&mut s.not_provider, true)).unwrap_or(false);
                 if first {
                     log::warn(&format!(
@@ -471,6 +555,7 @@ fn import_file(e: &mut Engine, dir: &str, who: &Who, name: &str, now: u64) -> co
 
 impl pumbo_sdk::Plugin for PumboPerms {
     async fn init(&self) -> Result<(), String> {
+        pumbo_common::panic::install(log::error);
         let store = Store::open(format!("{}/perms.redb", self.data_dir)).and_then(PermsStore::new);
         self.start(store)
     }
@@ -519,12 +604,14 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 if let Err(e) = s.engine.seen(&uuid, &name) {
                     log::warn(&format!("PumboPerms: cannot save the name of {name}: {e}"));
                 }
-                let joined = command::import_pending(&mut s.engine, SOURCE, &mut s.ledger, &uuid, &name, now);
-                if joined.is_some() {
+                let joined =
+                    command::import_pending(&mut s.engine, SOURCE, &mut s.ledger, &uuid, &name, p.online_mode, now);
+                if joined.as_ref().is_some_and(|o| o.changed) {
                     save_ledger(&dir, &s.ledger);
                 }
                 let set = entries(&mut s.engine, &uuid, now);
-                s.loaded.insert(p.id, (uuid.clone(), set.clone()));
+                let info = info_json(&mut s.engine, &uuid, p.context.server.as_deref().unwrap_or(""), now);
+                s.loaded.insert(p.id, (uuid.clone(), set.clone(), info));
                 Ok((set, joined.map(|o| o.reply.plain())))
             })
             .ok_or_else(|| "PumboPerms is not loaded".to_string())??;
@@ -546,14 +633,19 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 if s.timer != timer {
                     return false;
                 }
-                let expired = match s.engine.expire(now) {
-                    Ok(x) => x,
-                    Err(e) => {
-                        log::warn(&format!("PumboPerms: cannot remove expired entries: {e}"));
-                        false
-                    }
-                };
-                expired || s.engine.server_groups != groups
+                if let Some(why) = &s.engine.broken
+                    && s.broken_logged.is_none_or(|t| now >= t.saturating_add(BROKEN_LOG_MS))
+                {
+                    s.broken_logged = Some(now);
+                    log::error(&format!(
+                        "PumboPerms: the database is not available ({why}); logins wait for it and changes are refused"
+                    ));
+                }
+                let (due, saved) = s.engine.expire(now);
+                if let Err(e) = saved {
+                    log::warn(&format!("PumboPerms: cannot save the removal of expired entries, trying again: {e}"));
+                }
+                due || s.engine.server_groups != groups
             })
             .unwrap_or(false);
         if push {
@@ -564,6 +656,10 @@ impl pumbo_sdk::Plugin for PumboPerms {
     async fn on_service_call(&self, c: ServiceCall) -> Result<Vec<u8>, CallReject> {
         if c.service != PERMISSIONS.name {
             return Err(CallReject::UnknownMethod);
+        }
+        // Another plugin could replace every rank or read the whole database.
+        if PERMISSIONS_HOST_ONLY.contains(&c.method.as_str()) && c.caller != HOST {
+            return Err(CallReject::Rejected("host only".into()));
         }
         match c.method.as_str() {
             METHOD_CHECK_OFFLINE => {
@@ -585,15 +681,29 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 cbor(&true)
             }
             METHOD_EXPORT => {
+                // Only the flag: servers behind the proxy step back and get
+                // their sets through the bridge. The whole database would not
+                // fit the host's payload limit, and nothing there reads it.
+                let snap = Snapshot {
+                    format: export::FORMAT.into(),
+                    version: export::VERSION,
+                    proxy_rules: true,
+                    ..Snapshot::default()
+                };
+                cbor(&PermissionsExport { data: serde_json::to_string(&snap).unwrap_or_default() })
+            }
+            METHOD_INFO => {
+                let req: PermissionsInfoRequest = uncbor(&c.payload)?;
+                let uuid = Uuid::parse(&req.uuid).ok_or_else(|| CallReject::Rejected("bad uuid".into()))?.to_string();
+                let now = now_ms();
                 let data = self
                     .with(|s| {
-                        // Stable text for a stable fingerprint: no export time.
-                        let mut snap = export::snapshot(&s.engine.perms, 0);
-                        snap.proxy_rules = true;
-                        serde_json::to_string(&snap).unwrap_or_default()
+                        let groups = req.groups.iter().map(|g| g.to_lowercase()).collect();
+                        let q = Query::at(&req.server.to_lowercase(), groups, "");
+                        ipc::info(&mut s.engine, &uuid, &q, now).and_then(|i| serde_json::to_string(&i).ok())
                     })
                     .ok_or_else(|| CallReject::Rejected("PumboPerms is busy".into()))?;
-                cbor(&PermissionsExport { data })
+                cbor(&PermissionsInfo { data })
             }
             _ => Err(CallReject::UnknownMethod),
         }

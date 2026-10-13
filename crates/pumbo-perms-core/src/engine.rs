@@ -11,8 +11,9 @@ use crate::context::Query;
 use crate::perms::{Decision, Dirty, Perms};
 use crate::store::{LogEntry, PermsStore};
 
-/// Permission nodes of Pumbo plugins start with this.
-pub const PUMBO_NODES: &str = "pumbo.";
+/// The operator fallback covers only these nodes: every other Pumbo plugin
+/// registers its own operator levels on Pumpkin.
+pub const OWN_NODES: &str = "pumbo.perms.";
 
 pub struct Engine {
     pub perms: Perms,
@@ -70,20 +71,20 @@ impl Engine {
         self.place("", world)
     }
 
-    /// Where a player on `server` (empty: this server) in `world` is, with
-    /// the server's groups.
+    /// Where a player on `server` (empty: this server; any letter case) in
+    /// `world` is, with the server's groups.
     pub fn place(&self, server: &str, world: &str) -> Query {
         let here = &self.cfg.context;
-        let server = if server.is_empty() { here.server.as_str() } else { server };
-        let groups = match self.server_groups.get(server) {
+        let server = if server.is_empty() { here.server.to_lowercase() } else { server.to_lowercase() };
+        let groups = match self.server_groups.get(&server) {
             Some(g) => g.clone(),
             None if server == here.server && !here.group.is_empty() => vec![here.group.clone()],
             None => Vec::new(),
         };
-        Query::at(server, groups, world)
+        Query::at(&server, groups, world)
     }
 
-    /// The decision for a player, with the operator fallback for Pumbo nodes:
+    /// The decision for a player, with the operator fallback for PumboPerms nodes:
     /// `Some(value)`, or `None` when the platform's own defaults should decide.
     pub fn decide(&mut self, uuid: &str, node: &str, world: &str, op_level: u8, now: u64) -> Option<bool> {
         let q = self.query(world);
@@ -104,10 +105,10 @@ impl Engine {
         self.perms.explain(uuid, node, &q, now)
     }
 
-    /// `Some(true)` for a Pumbo node and an operator of a high enough level.
+    /// `Some(true)` for a PumboPerms node and an operator of a high enough level.
     pub fn op_fallback(&self, node: &str, op_level: u8) -> Option<bool> {
         let level = self.cfg.defaults.op_level;
-        (level > 0 && op_level >= level && node.starts_with(PUMBO_NODES)).then_some(true)
+        (level > 0 && op_level >= level && node.starts_with(OWN_NODES)).then_some(true)
     }
 
     /// Saves a change with its log entry. On failure the database is read back
@@ -152,17 +153,16 @@ impl Engine {
         Ok(())
     }
 
-    /// Drops expired nodes and saves that. True when something expired.
-    pub fn expire(&mut self, now: u64) -> Result<bool, String> {
+    /// Drops expired nodes and saves that. Returns whether something was due
+    /// and the result of saving: a node past its time is gone from every
+    /// answer either way (they skip expired nodes), so the platform sends the
+    /// new decisions even when saving failed; the next call tries again.
+    pub fn expire(&mut self, now: u64) -> (bool, Result<(), String>) {
         if self.perms.next_expiry().is_none_or(|t| t > now) {
-            return Ok(false);
+            return (false, Ok(()));
         }
         let dirty = self.perms.expire(now);
-        if dirty.is_empty() {
-            return Ok(false);
-        }
-        self.commit(&dirty, None)?;
-        Ok(true)
+        (true, if dirty.is_empty() { Ok(()) } else { self.commit(&dirty, None) })
     }
 
     /// Whether changes can be saved.
@@ -185,33 +185,47 @@ mod tests {
     }
 
     #[test]
-    fn op_fallback_only_for_pumbo_nodes() {
+    fn op_fallback_only_for_own_nodes() {
         let mut e = engine();
-        assert_eq!(e.decide(U, "pumbo.bans.ban", "world", 3, 0), Some(true));
-        assert_eq!(e.decide(U, "pumbo.bans.ban", "world", 2, 0), None);
+        assert_eq!(e.decide(U, "pumbo.perms.reload", "world", 3, 0), Some(true));
+        assert_eq!(e.decide(U, "pumbo.perms.reload", "world", 2, 0), None);
         assert_eq!(e.decide(U, "minecraft:command.op", "world", 4, 0), None);
         let (_, d) = e.perms.edit_user(U, "Steve", |d| {
             d.set_permission(PermNode {
-                node: "pumbo.bans.ban".into(),
+                node: "pumbo.perms.reload".into(),
                 value: false,
                 context: Contexts::global(),
                 expiry: None,
             })
         });
         e.commit(&d, None).unwrap();
-        assert_eq!(e.decide(U, "pumbo.bans.ban", "world", 4, 0), Some(false), "an explicit false beats the fallback");
+        assert_eq!(
+            e.decide(U, "pumbo.perms.reload", "world", 4, 0),
+            Some(false),
+            "an explicit false beats the fallback"
+        );
         e.cfg.defaults.op_level = 0;
-        assert_eq!(e.decide(U, "pumbo.bans.kick", "world", 4, 0), None);
+        assert_eq!(e.decide(U, "pumbo.perms.log", "world", 4, 0), None);
     }
 
     #[test]
-    fn broken_store_refuses_changes_but_answers() {
+    fn op_fallback_does_not_override_plugin_defaults() {
+        let mut e = engine();
+        for node in ["pumbo.bans.ban", "pumbo.bans.limit.helper", "pumbo.bans.exempt.ban"] {
+            assert_eq!(e.decide(U, node, "world", 4, 0), None, "{node}: Pumpkin's registry decides");
+        }
+    }
+
+    #[test]
+    fn broken_store_at_start_decides_nothing() {
         let mut e =
             Engine::new(Err(StoreError::new("disk on fire")), CoreCfg::default(), Lang::load(&[COMMON], "en", None).0);
         assert!(!e.writable());
         let (_, d) = e.perms.create_group("vip").map(|d| ((), d)).unwrap();
         assert_eq!(e.commit(&d, None), Err("disk on fire".into()));
-        assert_eq!(e.decide(U, "pumbo.x.y", "", 3, 0), Some(true));
+        assert_eq!(e.decide(U, "pumbo.bans.ban", "", 4, 0), None);
+        assert_eq!(e.decide(U, "minecraft:command.op", "", 4, 0), None);
+        assert_eq!(e.decide(U, "pumbo.perms.reload", "", 3, 0), Some(true), "operators can still repair it with /pp");
     }
 
     #[test]
@@ -221,8 +235,8 @@ mod tests {
             d.set_permission(PermNode { node: "a".into(), value: true, context: Contexts::global(), expiry: Some(100) })
         });
         e.commit(&d, None).unwrap();
-        assert_eq!(e.expire(50), Ok(false));
-        assert_eq!(e.expire(100), Ok(true));
+        assert_eq!(e.expire(50), (false, Ok(())));
+        assert_eq!(e.expire(100), (true, Ok(())));
         e.reload_data();
         assert!(e.perms.user(U).is_none());
     }

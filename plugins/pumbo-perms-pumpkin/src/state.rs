@@ -1,0 +1,1083 @@
+//! The plugin state, reachable from every handler, and the decisions the
+//! handlers make on it. Plain Rust: the event handlers in `plugin/` only read
+//! the host, call these methods and apply the result, so the logic is tested
+//! natively.
+//!
+//! A handler takes what it needs from the host first, decides inside [`with`]
+//! and calls the host only after the state is released. That matters: a host
+//! call can make Pumpkin check a permission, which (in check-event mode) comes
+//! back into this plugin while the first handler still runs. Such a nested
+//! call finds the state busy ([`with`] returns `None`) instead of waiting for
+//! itself.
+
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap};
+
+use pumbo_common::lang::Lang;
+use pumbo_perms_core::command::{self, SourceMode, Who};
+use pumbo_perms_core::engine::Engine;
+use pumbo_perms_core::export::{self, Snapshot};
+use pumbo_perms_core::host::{self, Catalog, Op};
+use pumbo_perms_core::merge::Ledger;
+use serde::Deserialize;
+
+use crate::config::Config;
+
+/// What is known about an online player.
+#[derive(Debug, Clone)]
+pub struct Online {
+    pub name: String,
+    pub world: String,
+    pub op_level: u8,
+}
+
+/// Host changes for one online player and what it has once they are applied
+/// ([`Rt::applied`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Plan {
+    pub uuid: String,
+    pub ops: Vec<Op>,
+    pub wanted: HashMap<String, bool>,
+}
+
+pub struct Rt {
+    pub dir: String,
+    pub cfg: Config,
+    pub engine: Engine,
+    pub catalog: Catalog,
+    pub online: HashMap<String, Online>,
+    /// What is set on the host per online player. Pumpkin keeps attachments
+    /// after a player leaves, so leaving takes them off and forgets them.
+    pub pushed: HashMap<String, HashMap<String, bool>>,
+    /// Whether the permission check event is answered (fixed at load).
+    pub check_event: bool,
+    /// Permission checks answered from memory (check-event mode).
+    pub answered: u64,
+    /// Log lines collected inside [`with`], written after it.
+    pub logs: Vec<(bool, String)>,
+    /// The first import pass is done and the bridge released the
+    /// attachments: from now on this plugin writes them (spec §5.3).
+    pub ready: bool,
+    /// A source answered "pending": ask again until this time (ms).
+    pub waiting_until: Option<u64>,
+    /// Wildcards last left out per player ([`host::hidden`]), logged once.
+    pub hidden: HashMap<String, Vec<(String, String)>>,
+    /// When the periodic import pass runs next (ms).
+    pub next_pass: u64,
+    /// Since when the first pass waits for a live export from PumboBridge,
+    /// and whether that was logged.
+    pub holding: Option<(u64, bool)>,
+}
+
+impl Rt {
+    pub fn new(dir: String, cfg: Config, engine: Engine, check_event: bool) -> Self {
+        let mut rt = Self {
+            dir,
+            cfg,
+            engine,
+            catalog: Catalog::pumpkin(),
+            online: HashMap::new(),
+            pushed: HashMap::new(),
+            check_event,
+            answered: 0,
+            logs: Vec::new(),
+            ready: false,
+            waiting_until: None,
+            hidden: HashMap::new(),
+            next_pass: 0,
+            holding: None,
+        };
+        rt.refresh_catalog();
+        rt
+    }
+
+    pub fn lang(&self) -> &Lang {
+        &self.engine.lang
+    }
+
+    pub fn warn(&mut self, msg: String) {
+        self.logs.push((true, msg));
+    }
+
+    /// Whether to resend command lists after a change. Never in check-event
+    /// mode: the resend (`set-permission-level`) makes Pumpkin check every
+    /// command node from a pumping import, and a check handed back to this
+    /// plugin before the host is ready for it hangs the server for good
+    /// (Pumpkin 0.2.0 and 0.1.0-dev).
+    pub fn resend(&self) -> bool {
+        self.cfg.provider.resend_commands && !self.check_event
+    }
+
+    /// Rebuilds the list of nodes set on the host and remembers new ones in the
+    /// database (so that they can be unset after a restart of the plugin).
+    pub fn refresh_catalog(&mut self) {
+        let mut known: Vec<String> =
+            pumbo_perms_core::command::own_nodes().iter().map(|n| pumbo_perms_core::node::host_form(n)).collect();
+        if let Some(store) = self.engine.store() {
+            match store.host_nodes() {
+                Ok(nodes) => known.extend(nodes),
+                Err(e) => self.logs.push((true, format!("PumboPerms: cannot read the node list: {e}"))),
+            }
+        }
+        self.catalog.refresh(&self.engine.perms, known);
+        if let Some(store) = self.engine.store() {
+            let stored = store.host_nodes().unwrap_or_default();
+            let new: Vec<&String> = self.catalog.nodes().iter().filter(|n| !stored.contains(*n)).collect();
+            if let Err(e) = store.add_host_nodes(new) {
+                self.logs.push((true, format!("PumboPerms: cannot save the node list: {e}")));
+            }
+        }
+    }
+
+    /// The host changes for one online player; `None` when there are none.
+    /// Nothing before the first import pass (the bridge may still own them),
+    /// and nothing while the proxy's PumboPerms rules ([`passive`]).
+    pub fn plan_player(&mut self, uuid: &str, now: u64) -> Option<Plan> {
+        if !self.ready || passive() {
+            return None;
+        }
+        let o = self.online.get(uuid).cloned()?;
+        let (wanted, hidden) =
+            host::wanted_and_hidden(&mut self.engine, uuid, &o.world, o.op_level, now, &self.catalog);
+        if self.hidden.get(uuid).map_or(&[][..], Vec::as_slice) != hidden.as_slice() {
+            for (w, narrower) in &hidden {
+                self.warn(format!("PumboPerms: not sent to Pumpkin for {}: {w} hides {narrower}", o.name));
+            }
+            if hidden.is_empty() {
+                self.hidden.remove(uuid);
+            } else {
+                self.hidden.insert(uuid.to_string(), hidden);
+            }
+        }
+        let ops = host::plan(&wanted, self.pushed.get(uuid), &self.catalog);
+        (!ops.is_empty()).then(|| Plan { uuid: uuid.to_string(), ops, wanted })
+    }
+
+    /// Remembers what the players have on the host once the plans are
+    /// applied; a player who left meanwhile is skipped (leaving took
+    /// everything off).
+    pub fn applied(&mut self, plans: Vec<Plan>) {
+        for p in plans {
+            if self.online.contains_key(&p.uuid) {
+                self.pushed.insert(p.uuid, p.wanted);
+            }
+        }
+    }
+
+    /// A player joined (or was online at load): the host changes to apply.
+    pub fn join(&mut self, uuid: &str, online: Online, now: u64) -> Vec<Plan> {
+        if let Err(e) = self.engine.seen(uuid, &online.name) {
+            self.warn(format!("PumboPerms: cannot save the name of {}: {e}", online.name));
+        }
+        self.online.insert(uuid.to_string(), online);
+        let mut plans = self.due_expiry(now);
+        if !plans.iter().any(|p| p.uuid == uuid) {
+            plans.extend(self.plan_player(uuid, now));
+        }
+        plans
+    }
+
+    /// A player left: everything this plugin set on them goes (Pumpkin keeps
+    /// attachments until it stops) and is forgotten, so the next join sets
+    /// the whole catalog again.
+    pub fn leave(&mut self, uuid: &str, now: u64) -> (Vec<Op>, Vec<Plan>) {
+        self.online.remove(uuid);
+        self.hidden.remove(uuid);
+        let mut ops: Vec<Op> =
+            self.pushed.remove(uuid).into_iter().flat_map(|p| p.into_keys().map(Op::Unset)).collect();
+        ops.sort();
+        (ops, self.due_expiry(now))
+    }
+
+    /// A player changed worlds; a cancelled change keeps the old world.
+    pub fn change_world(&mut self, uuid: &str, world: String, cancelled: bool, now: u64) -> Vec<Plan> {
+        let mut plans = self.due_expiry(now);
+        if cancelled || plans.iter().any(|p| p.uuid == uuid) {
+            return plans;
+        }
+        let Some(o) = self.online.get_mut(uuid) else { return plans };
+        o.world = world;
+        if self.engine.perms.uses_context("world") {
+            plans.extend(self.plan_player(uuid, now));
+        }
+        plans
+    }
+
+    /// Operator levels and worlds of online players as the server reports
+    /// them (`(uuid, level, world)`), and expired nodes: the changes.
+    pub fn refresh(&mut self, players: &[(String, u8, String)], now: u64) -> Vec<Plan> {
+        let mut changed = Vec::new();
+        let world_context = self.engine.perms.uses_context("world");
+        for (uuid, level, world) in players {
+            if let Some(o) = self.online.get_mut(uuid)
+                && (o.op_level != *level || o.world != *world)
+            {
+                if o.op_level != *level || world_context {
+                    changed.push(uuid.clone());
+                }
+                (o.op_level, o.world) = (*level, world.clone());
+            }
+        }
+        let mut plans = self.due_expiry(now);
+        for uuid in changed {
+            if !plans.iter().any(|p| p.uuid == uuid) {
+                plans.extend(self.plan_player(&uuid, now));
+            }
+        }
+        plans
+    }
+
+    /// Nodes past their time: removed and the changes planned for everyone.
+    /// Every entry into the plugin calls this, so a stopped periodic task
+    /// (`/tick freeze`) does not keep a node alive. A failed save is only
+    /// logged: answers skip expired nodes anyway, and the next call saves.
+    pub fn due_expiry(&mut self, now: u64) -> Vec<Plan> {
+        let (due, saved) = self.engine.expire(now);
+        if let Err(e) = saved {
+            self.warn(format!("PumboPerms: cannot save the removal of expired permissions, trying again: {e}"));
+        }
+        if !due {
+            return Vec::new();
+        }
+        self.refresh_catalog();
+        self.plan_all(now)
+    }
+
+    /// Whether an online player may run an alias Pumpkin leaves unchecked
+    /// (`pumbo_common::pumpkin::UNGUARDED_ALIASES`), from memory: in check-event
+    /// mode `has-permission` would call back into this plugin. Without a
+    /// decision Pumpkin's default for the node counts (its operator level).
+    pub fn alias_allowed(&mut self, uuid: &str, node: &str, now: u64) -> bool {
+        let Some(o) = self.online.get(uuid).cloned() else { return false };
+        let canonical = pumbo_perms_core::node::normalize(node).unwrap_or_default();
+        self.engine
+            .decide(uuid, &canonical, &o.world, o.op_level, now)
+            .unwrap_or(o.op_level >= pumbo_common::pumpkin::alias_op_level(node))
+    }
+
+    /// The proxy's PumboPerms took over: everything set so far, per online
+    /// player, for PumboBridge to unset.
+    pub fn hand_over(&mut self) -> BTreeMap<String, Vec<String>> {
+        self.pushed.drain().map(|(uuid, nodes)| (uuid, nodes.into_keys().collect())).collect()
+    }
+
+    /// One import pass over the sources that answered (and the attachments of
+    /// other plugins, when they are the fallback). Returns whether it was the
+    /// first pass, the host changes and whether to resend command lists.
+    pub fn import_pass(
+        &mut self,
+        answers: Vec<(String, Answer)>,
+        fallback: Option<(String, Snapshot)>,
+        now: u64,
+    ) -> (bool, Vec<Plan>, bool) {
+        let follow = self.cfg.import.follow;
+        let pending = answers.iter().any(|(_, a)| matches!(a, Answer::Pending));
+        let mut changed = false;
+        let who = Who::console();
+        let mut runs: Vec<(String, String, Snapshot)> = Vec::new();
+        for (source, answer) in answers {
+            match answer {
+                Answer::Data(f, s) => runs.push((source, f, s)),
+                Answer::Bad(e) => self.warn(format!("PumboPerms: cannot read permissions of {source}: {e}")),
+                Answer::Pending | Answer::Absent => {}
+            }
+        }
+        if let Some((f, s)) = fallback {
+            runs.push(("attachments".into(), f, s));
+        }
+        for (source, fingerprint, snap) in runs {
+            let ledger = load_ledger(&self.dir, &source);
+            // Once per source unless `follow` (a ledger means it was imported).
+            if ledger.at != 0 && !follow {
+                continue;
+            }
+            let (out, new) = command::import_source(
+                &mut self.engine,
+                &who,
+                &source,
+                Ok((fingerprint, snap)),
+                &ledger,
+                SourceMode::Run,
+                now,
+            );
+            if let Some(l) = new {
+                save_ledger(self, &source, &l);
+                changed = true;
+                self.logs.push((false, out.reply.plain()));
+            }
+        }
+        if pending && !self.ready {
+            self.waiting_until = Some(now + WAIT_MS);
+        } else if !pending {
+            self.waiting_until = None;
+        }
+        let first = !self.ready;
+        self.ready = true;
+        if changed || first {
+            self.refresh_catalog();
+        }
+        let plans = if changed || first { self.plan_all(now) } else { Vec::new() };
+        (first, plans, self.resend())
+    }
+
+    /// Host changes for every online player.
+    pub fn plan_all(&mut self, now: u64) -> Vec<Plan> {
+        let uuids: Vec<String> = self.online.keys().cloned().collect();
+        uuids.into_iter().filter_map(|u| self.plan_player(&u, now)).collect()
+    }
+
+    /// Before the periodic pass asks PumboBridge: whether it is time.
+    pub fn pass_due(&self, now: u64) -> bool {
+        now >= self.next_pass
+    }
+
+    /// After PumboBridge answered: whether the pass stops here. Before the
+    /// first pass, a bridge that connects to a proxy but has no live export
+    /// yet holds everything: no import, no attachments, no release of the
+    /// bridge, so Pumpkin's defaults apply instead of an old local database.
+    /// The bridge is asked again at every run for [`HOLD_MS`], then every
+    /// [`PASS_MS`] with one warning.
+    pub fn hold(&mut self, bridge: &Bridge, now: u64) -> bool {
+        let waiting = !self.ready && matches!(bridge, Bridge::Mode(m) if m.connected && !m.live);
+        if !waiting {
+            self.holding = None;
+            self.next_pass = now.saturating_add(PASS_MS);
+            return false;
+        }
+        let (since, warned) = *self.holding.get_or_insert((now, false));
+        if now.saturating_sub(since) < HOLD_MS {
+            self.next_pass = now;
+        } else {
+            if !warned {
+                self.warn("PumboPerms: PumboBridge has no permission table from the proxy yet; waiting for it (Pumpkin's defaults apply until then)".into());
+                self.holding = Some((since, true));
+            }
+            self.next_pass = now.saturating_add(PASS_MS);
+        }
+        true
+    }
+}
+
+thread_local! {
+    static RT: RefCell<Option<Rt>> = const { RefCell::new(None) };
+    /// The proxy's PumboPerms rules the network (PumboPerms spec §16): this
+    /// plugin writes no attachments and PumboBridge does. Outside the state, so
+    /// that `hello` from the bridge never finds it busy.
+    static PASSIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+pub fn passive() -> bool {
+    PASSIVE.with(Cell::get)
+}
+
+/// Sets the mode; true when it changed.
+pub fn set_passive(on: bool) -> bool {
+    PASSIVE.with(|p| p.replace(on)) != on
+}
+
+pub fn install(rt: Rt) {
+    RT.with(|c| {
+        if let Ok(mut g) = c.try_borrow_mut() {
+            *g = Some(rt);
+        }
+    });
+}
+
+/// Drops the state (closes the database).
+pub fn uninstall() {
+    RT.with(|c| {
+        if let Ok(mut g) = c.try_borrow_mut() {
+            *g = None;
+        }
+    });
+}
+
+/// Runs `f` on the state; `None` when it is not loaded or busy (a nested call).
+pub fn with<R>(f: impl FnOnce(&mut Rt) -> R) -> Option<R> {
+    RT.with(|c| c.try_borrow_mut().ok().and_then(|mut g| g.as_mut().map(f)))
+}
+
+/// Who sent a command, as Pumpkin tells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SenderKind {
+    Console,
+    Rcon,
+    Player,
+    CommandBlock,
+    /// Signs, functions and other senders without an entity.
+    Dummy,
+}
+
+/// The sender of `/pp`: `player` is (name, UUID, operator level, world).
+/// Command blocks, signs and other senders get `None` and no rights at all:
+/// anyone who can place one would otherwise act as the console.
+pub fn who_for(kind: SenderKind, player: Option<(&str, &str, u8, &str)>) -> Option<Who> {
+    match (kind, player) {
+        (SenderKind::Console, _) => Some(Who::console()),
+        (SenderKind::Rcon, _) => Some(Who { name: "RCON".into(), ..Who::console() }),
+        (SenderKind::Player, Some((name, uuid, op_level, world))) => Some(Who::player(name, uuid, op_level, world)),
+        _ => None,
+    }
+}
+
+/// Answers another plugin's message (`pumbo_perms_core::ipc`) from this
+/// database; `engine` is `None` when the state is busy.
+pub fn ipc_reply(message: &[u8], engine: Option<&mut Engine>, now: u64) -> Result<Vec<u8>, String> {
+    let engine = engine.ok_or_else(|| "PumboPerms is busy".to_string())?;
+    Ok(pumbo_perms_core::ipc::handle(engine, message, now, env!("CARGO_PKG_VERSION")))
+}
+
+/// [`ipc_reply`] while the proxy's PumboPerms rules: the same answers from
+/// what the proxy decided. `check` reads the set the proxy sent ([`proxy_decision`]:
+/// `None` when no set arrived for the player, `Some(None)` for a node outside
+/// it), `info` and `fill` use what PumboBridge carries from the proxy
+/// (`info`: the proxy's `ipc::Info` as JSON). Without them: `proxy-rules`.
+pub fn passive_reply(
+    message: &[u8],
+    has: impl FnOnce(&str, &str) -> Option<Option<bool>>,
+    info: impl FnOnce(&str) -> Option<String>,
+) -> Vec<u8> {
+    use pumbo_perms_core::ipc::{self, Request};
+    let refused = serde_json::json!({ "ok": false, "error": "proxy-rules", "passive": true });
+    let from_proxy = |uuid: &str| -> Option<ipc::Info> {
+        let uuid = pumbo_common::id::Uuid::parse(uuid)?.to_string();
+        serde_json::from_str(&info(&uuid)?).ok()
+    };
+    let reply = match serde_json::from_slice::<Request>(message) {
+        Err(e) => serde_json::json!({ "ok": false, "error": format!("bad request: {e}") }),
+        Ok(Request::Hello) => serde_json::json!({
+            "ok": true, "plugin": "PumboPerms", "version": env!("CARGO_PKG_VERSION"),
+            "protocol": ipc::PROTOCOL, "passive": true,
+        }),
+        Ok(Request::Check { uuid, node, .. }) => {
+            let host = pumbo_perms_core::node::normalize(&node).map(|n| pumbo_perms_core::node::host_form(&n));
+            match (pumbo_common::id::Uuid::parse(&uuid), host) {
+                (Some(u), Ok(host)) => match has(&u.to_string(), &host) {
+                    Some(value) => serde_json::json!({ "ok": true, "value": value }),
+                    None => refused,
+                },
+                (None, _) => serde_json::json!({ "ok": false, "error": "bad uuid" }),
+                (_, Err(e)) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+            }
+        }
+        Ok(Request::Info { uuid, .. }) => match from_proxy(&uuid).and_then(|i| serde_json::to_value(i).ok()) {
+            Some(mut v) => {
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("ok".into(), true.into());
+                }
+                v
+            }
+            None => refused,
+        },
+        Ok(Request::Fill { uuid, text, .. }) => match from_proxy(&uuid) {
+            Some(i) => serde_json::json!({ "ok": true, "text": ipc::fill(&i, &text) }),
+            None => refused,
+        },
+    };
+    reply.to_string().into_bytes()
+}
+
+/// The proxy's decision for `node` (Pumpkin's spelling) from PumboBridge's
+/// `player-info` answer. Not `has_permission`: a registry default is no
+/// decision, and it would fire the permission check event from an ipc call.
+pub fn proxy_decision(player_info: &[u8], node: &str) -> Option<Option<bool>> {
+    let v: serde_json::Value = serde_json::from_slice(player_info).ok()?;
+    Some(v.get("nodes")?.as_object()?.get(node).and_then(serde_json::Value::as_bool))
+}
+
+/// How long a "pending" source is asked again after the start.
+const WAIT_MS: u64 = 120_000;
+/// The periodic import pass runs this often.
+pub const PASS_MS: u64 = 10_000;
+/// How long the first pass waits for PumboBridge's live export, asking at
+/// every run, before it warns and asks every [`PASS_MS`].
+pub const HOLD_MS: u64 = 10_000;
+
+/// One source's answer to `{"op":"export-permissions"}`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Answer {
+    Data(String, Snapshot),
+    Pending,
+    /// No such plugin (or it does not export).
+    Absent,
+    Bad(String),
+}
+
+/// Reads an answer to `{"op":"export-permissions"}` in one pass; also the
+/// `proxy-rules` flag, which a newer export version than this one
+/// understands still carries.
+pub fn export_answer(reply: Option<&[u8]>) -> (bool, Answer) {
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct Reply {
+        ok: bool,
+        pending: bool,
+        fingerprint: String,
+        data: Option<Snapshot>,
+    }
+    let Some(bytes) = reply else { return (false, Answer::Absent) };
+    match serde_json::from_slice::<Reply>(bytes) {
+        Err(e) => (false, Answer::Bad(format!("not a PumboPerms export: {e}"))),
+        Ok(r) if !r.ok => (false, if r.pending { Answer::Pending } else { Answer::Absent }),
+        Ok(Reply { data: None, .. }) => (false, Answer::Bad("no data".into())),
+        Ok(Reply { fingerprint, data: Some(snap), .. }) => {
+            let flag = snap.proxy_rules;
+            (flag, export::check(snap).map_or_else(Answer::Bad, |s| Answer::Data(fingerprint, s)))
+        }
+    }
+}
+
+/// PumboBridge's answer to `{"op":"perms-mode"}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct BridgeMode {
+    pub proxy_rules: bool,
+    pub fingerprint: String,
+    /// `bridge` or `local` (a local PumboPerms writes the attachments).
+    pub mode: String,
+    /// The export came from the proxy in the bridge's current session.
+    pub live: bool,
+    /// The bridge connects to a proxy.
+    pub connected: bool,
+}
+
+/// PumboBridge as the periodic pass sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Bridge {
+    Absent,
+    /// A PumboBridge without `perms-mode`: the flag and the answer of
+    /// `export-permissions`, as before.
+    Old(bool, Answer),
+    Mode(BridgeMode),
+}
+
+/// Reads the answer to `{"op":"perms-mode"}`; `None` when it is not one (an
+/// older PumboBridge answers "unknown op").
+pub fn perms_mode(reply: &[u8]) -> Option<BridgeMode> {
+    let v: serde_json::Value = serde_json::from_slice(reply).ok()?;
+    if v.get("ok")?.as_bool() != Some(true) {
+        return None;
+    }
+    serde_json::from_value(v).ok()
+}
+
+impl Bridge {
+    /// Whether the proxy's PumboPerms rules, when the answer can tell: only
+    /// an export from the bridge's current session counts, never one from
+    /// disk or from before a reconnect.
+    pub fn proxy_rules(&self) -> Option<bool> {
+        match self {
+            Bridge::Mode(m) if m.live => Some(m.proxy_rules),
+            Bridge::Old(flag, Answer::Data(..)) => Some(*flag),
+            _ => None,
+        }
+    }
+
+    /// The answer of the `proxy` source without asking for the export, or
+    /// `None` when it has to be asked: a live export whose fingerprint is not
+    /// the one imported last (`ledger_fingerprint`).
+    pub fn proxy_source(&self, ledger_fingerprint: &str) -> Option<Answer> {
+        match self {
+            Bridge::Absent => Some(Answer::Absent),
+            Bridge::Old(_, a) => Some(a.clone()),
+            Bridge::Mode(m) if !m.live => Some(if m.connected { Answer::Pending } else { Answer::Absent }),
+            Bridge::Mode(m) if m.fingerprint == ledger_fingerprint => Some(Answer::Absent),
+            Bridge::Mode(_) => None,
+        }
+    }
+}
+
+/// What the periodic import pass does next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Nothing this time.
+    Wait,
+    /// The proxy's table did not come in time: stop waiting and say so.
+    GiveUp,
+    /// Ask the sources and import what they send.
+    Ask,
+}
+
+/// The decision before asking: only the first pass, a source still pending
+/// after the start, or every pass with `import.follow`; nothing while the
+/// proxy's PumboPerms rules.
+pub fn decide_import(passive: bool, ready: bool, follow: bool, waiting_until: Option<u64>, now: u64) -> Step {
+    if passive {
+        return Step::Wait;
+    }
+    if ready && !follow {
+        return match waiting_until {
+            Some(t) if now < t => Step::Ask,
+            Some(_) => Step::GiveUp,
+            None => Step::Wait,
+        };
+    }
+    Step::Ask
+}
+
+fn ledger_path(dir: &str, source: &str) -> String {
+    format!("{dir}/imports/{source}.json")
+}
+
+/// What a source added at its last import (`imports/<source>.json`).
+pub fn load_ledger(dir: &str, source: &str) -> Ledger {
+    std::fs::read_to_string(ledger_path(dir, source))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_ledger(rt: &mut Rt, source: &str, ledger: &Ledger) {
+    let path = ledger_path(&rt.dir, source);
+    let result = if ledger.entries.is_empty() && ledger.fingerprint.is_empty() {
+        std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+    } else {
+        let _ = std::fs::create_dir_all(format!("{}/imports", rt.dir));
+        std::fs::write(&path, serde_json::to_string_pretty(ledger).unwrap_or_default())
+    };
+    if let Err(e) = result {
+        rt.warn(format!("PumboPerms: cannot save {path}: {e}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pumbo_common::lang::Lang;
+    use pumbo_perms_core::engine::Engine;
+
+    use super::*;
+
+    const U: &str = "00000000-0000-0000-0000-000000000001";
+
+    fn rt() -> Rt {
+        let cfg = Config::default();
+        let engine = Engine::in_memory(cfg.core(), Lang::load(&crate::BUNDLES, "en", None).0);
+        let mut rt = Rt::new(String::new(), cfg, engine, false);
+        rt.engine.perms.create_group("vip").unwrap();
+        rt
+    }
+
+    fn steve() -> Online {
+        Online { name: "Steve".into(), world: "world".into(), op_level: 0 }
+    }
+
+    /// The changes for `uuid` in `plans`, applied as the plugin does.
+    fn ops(rt: &mut Rt, plans: Vec<Plan>, uuid: &str) -> Vec<Op> {
+        let mine = plans.iter().filter(|p| p.uuid == uuid).flat_map(|p| p.ops.clone()).collect();
+        rt.applied(plans);
+        mine
+    }
+
+    fn join(rt: &mut Rt, uuid: &str, now: u64) -> Vec<Op> {
+        let plans = rt.join(uuid, steve(), now);
+        ops(rt, plans, uuid)
+    }
+
+    fn give(rt: &mut Rt, group: &str, node: &str, expiry: Option<u64>) {
+        if rt.engine.perms.group(group).is_none() {
+            rt.engine.perms.create_group(group).unwrap();
+        }
+        let (_, d) = rt
+            .engine
+            .perms
+            .edit_group(group, |g| {
+                g.data.set_permission(pumbo_perms_core::model::PermNode {
+                    node: node.into(),
+                    value: true,
+                    context: pumbo_perms_core::context::Contexts::global(),
+                    expiry: None,
+                })
+            })
+            .unwrap();
+        rt.engine.commit(&d, None).unwrap();
+        let parent = pumbo_perms_core::model::ParentNode {
+            group: group.into(),
+            context: pumbo_perms_core::context::Contexts::global(),
+            expiry,
+        };
+        let (_, d) = rt.engine.perms.edit_user(U, "Steve", |d| d.add_parent(parent));
+        rt.engine.commit(&d, None).unwrap();
+        rt.refresh_catalog();
+    }
+
+    fn give_vip(rt: &mut Rt) {
+        let parent = pumbo_perms_core::model::ParentNode {
+            group: "vip".into(),
+            context: pumbo_perms_core::context::Contexts::global(),
+            expiry: None,
+        };
+        rt.engine.perms.edit_user(U, "Steve", |d| d.add_parent(parent));
+        rt.refresh_catalog();
+    }
+
+    #[test]
+    fn passive_or_not_ready_plans_nothing() {
+        let mut rt = rt();
+        assert!(join(&mut rt, U, 0).is_empty(), "before the first import pass");
+        rt.ready = true;
+        set_passive(true);
+        give_vip(&mut rt);
+        assert!(rt.plan_all(0).is_empty(), "the proxy's PumboPerms rules");
+        assert!(rt.change_world(U, "nether".into(), false, 0).is_empty());
+        assert_eq!(decide_import(true, false, true, None, 0), Step::Wait);
+        set_passive(false);
+        assert!(!rt.plan_all(0).is_empty());
+    }
+
+    #[test]
+    fn takeover_unsets_whole_catalog() {
+        let mut rt = rt();
+        rt.ready = true;
+        join(&mut rt, U, 0);
+        let handed = rt.hand_over();
+        assert!(handed.contains_key(U) && rt.pushed.is_empty());
+        // The proxy's PumboPerms is gone: the next pass is a first one again.
+        rt.ready = false;
+        let (first, plans, _) = rt.import_pass(Vec::new(), None, 0);
+        assert!(first);
+        let ops = ops(&mut rt, plans, U);
+        let wanted = rt.pushed.get(U).unwrap();
+        for node in rt.catalog.nodes().iter().filter(|n| !wanted.contains_key(*n)) {
+            assert!(ops.contains(&Op::Unset(node.clone())), "{node} not unset");
+        }
+    }
+
+    #[test]
+    fn plans_only_differences() {
+        let mut rt = rt();
+        rt.ready = true;
+        give_vip(&mut rt);
+        let first = join(&mut rt, U, 0);
+        assert!(first.contains(&Op::Set("group.vip".into(), true)), "{first:?}");
+        assert!(rt.plan_all(0).is_empty(), "nothing changed");
+    }
+
+    #[test]
+    fn leave_unsets_and_forgets_pushed() {
+        let mut rt = rt();
+        rt.ready = true;
+        give(&mut rt, "admin", "minecraft:command.op", None);
+        assert!(join(&mut rt, U, 0).contains(&Op::Set("minecraft:command.op".into(), true)));
+        // The change comes while the player is leaving: its plan finds nobody to apply to.
+        let (_, d) = rt
+            .engine
+            .perms
+            .edit_user(U, "Steve", |d| d.remove_parent("admin", &pumbo_perms_core::context::Contexts::global()));
+        rt.engine.commit(&d, None).unwrap();
+        let late = rt.plan_all(0);
+        let (gone, _) = rt.leave(U, 0);
+        assert!(gone.contains(&Op::Unset("minecraft:command.op".into())), "{gone:?}");
+        rt.applied(late);
+        assert!(!rt.pushed.contains_key(U), "{:?}", rt.pushed);
+        // Back again: the whole catalog is checked, the node goes even if the unset at leave failed.
+        let back = join(&mut rt, U, 0);
+        assert!(back.contains(&Op::Unset("minecraft:command.op".into())), "{back:?}");
+    }
+
+    #[test]
+    fn unload_clears_offline_attachments() {
+        let mut rt = rt();
+        rt.ready = true;
+        give(&mut rt, "admin", "minecraft:command.op", None);
+        join(&mut rt, U, 0);
+        rt.leave(U, 0);
+        // Demoted while offline, then the plugin is unloaded and loaded again.
+        let (_, d) = rt
+            .engine
+            .perms
+            .edit_user(U, "Steve", |d| d.remove_parent("admin", &pumbo_perms_core::context::Contexts::global()));
+        rt.engine.commit(&d, None).unwrap();
+        let Rt { dir, cfg, engine, .. } = rt;
+        let mut rt = Rt::new(dir, cfg, engine, false);
+        rt.ready = true;
+        let back = join(&mut rt, U, 0);
+        assert!(back.contains(&Op::Unset("minecraft:command.op".into())), "{back:?}");
+        assert!(!back.contains(&Op::Set("minecraft:command.op".into(), true)));
+    }
+
+    #[test]
+    fn load_reconciles_online_attachments() {
+        let mut rt = rt();
+        // A node an earlier run set, gone from the data since.
+        rt.engine.store().unwrap().add_host_nodes(vec![&"essentials:fly".to_string()]).unwrap();
+        rt.refresh_catalog();
+        join(&mut rt, U, 0);
+        let (first, plans, _) = rt.import_pass(Vec::new(), None, 0);
+        assert!(first);
+        let ops = ops(&mut rt, plans, U);
+        assert!(ops.contains(&Op::Unset("essentials:fly".into())), "{ops:?}");
+    }
+
+    #[test]
+    fn cancelled_change_world_keeps_world() {
+        let mut rt = rt();
+        rt.ready = true;
+        let node = pumbo_perms_core::model::PermNode {
+            node: "minecraft:command.fly".into(),
+            value: true,
+            context: pumbo_perms_core::context::Contexts::parse(&["world=nether".into()]).unwrap(),
+            expiry: None,
+        };
+        rt.engine.perms.edit_user(U, "Steve", |d| d.set_permission(node));
+        rt.refresh_catalog();
+        join(&mut rt, U, 0);
+        assert!(rt.change_world(U, "nether".into(), true, 0).is_empty());
+        assert_eq!(rt.online[U].world, "world");
+        let plans = rt.change_world(U, "nether".into(), false, 0);
+        assert_eq!(rt.online[U].world, "nether");
+        assert!(ops(&mut rt, plans, U).contains(&Op::Set("minecraft:command.fly".into(), true)));
+        // A world change the event did not report shows at the next refresh.
+        let plans = rt.refresh(&[(U.to_string(), 0, "world".into())], 0);
+        assert!(ops(&mut rt, plans, U).contains(&Op::Unset("minecraft:command.fly".into())));
+    }
+
+    #[test]
+    fn expiry_checked_on_entry() {
+        let mut rt = rt();
+        rt.ready = true;
+        give(&mut rt, "vip", "minecraft:command.gamemode", Some(10_000));
+        assert!(join(&mut rt, U, 0).contains(&Op::Set("minecraft:command.gamemode".into(), true)));
+        assert!(rt.due_expiry(9_999).is_empty());
+        // Another player joins after the time: the expired node goes for everyone.
+        let other = "00000000-0000-0000-0000-000000000002";
+        let plans = rt.join(other, steve(), 12_000);
+        assert!(ops(&mut rt, plans, U).contains(&Op::Unset("minecraft:command.gamemode".into())));
+        assert!(rt.engine.perms.next_expiry().is_none(), "saved");
+    }
+
+    #[test]
+    fn expiry_due_plans_when_commit_fails() {
+        let backend = pumbo_common::store::FaultyBackend::default();
+        let writes = backend.fail_writes.clone();
+        let store = pumbo_perms_core::store::PermsStore::new(pumbo_common::store::Store::new(backend)).unwrap();
+        let cfg = Config::default();
+        let engine = Engine::new(Ok(store), cfg.core(), Lang::load(&crate::BUNDLES, "en", None).0);
+        let mut rt = Rt::new(String::new(), cfg, engine, false);
+        rt.ready = true;
+        give(&mut rt, "vip", "minecraft:command.gamemode", Some(10_000));
+        join(&mut rt, U, 0);
+        writes.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+        let plans = rt.due_expiry(12_000);
+        assert!(ops(&mut rt, plans, U).contains(&Op::Unset("minecraft:command.gamemode".into())));
+        assert!(rt.logs.iter().any(|(_, l)| l.contains("trying again")), "{:?}", rt.logs);
+        writes.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert!(rt.due_expiry(13_000).is_empty(), "nothing new to send");
+        assert!(rt.engine.perms.next_expiry().is_none(), "saved at the next call");
+    }
+
+    #[test]
+    fn non_player_senders_get_no_console_rights() {
+        assert_eq!(who_for(SenderKind::CommandBlock, None), None);
+        assert_eq!(who_for(SenderKind::Dummy, None), None);
+        assert_eq!(who_for(SenderKind::Player, None), None);
+        assert!(who_for(SenderKind::Console, None).is_some_and(|w| w.is_console()));
+        assert!(who_for(SenderKind::Rcon, None).is_some_and(|w| w.is_console()));
+        let p = who_for(SenderKind::Player, Some(("Steve", U, 2, "world"))).unwrap();
+        assert_eq!((p.uuid.as_deref(), p.op_level), (Some(U), 2));
+        assert!(!p.is_console());
+    }
+
+    #[test]
+    fn alias_guard_decides_from_memory() {
+        let mut rt = rt();
+        let _ = rt.join(U, Online { op_level: 2, ..steve() }, 0);
+        assert!(rt.alias_allowed(U, "minecraft:command.teleport", 0), "Pumpkin's Op(2)");
+        assert!(!rt.alias_allowed(U, "minecraft:command.banip", 0), "banip is Op(3)");
+        rt.engine.perms.edit_user(U, "Steve", |d| {
+            d.set_permission(pumbo_perms_core::model::PermNode {
+                node: "minecraft:command.teleport".into(),
+                value: false,
+                context: pumbo_perms_core::context::Contexts::global(),
+                expiry: None,
+            })
+        });
+        assert!(!rt.alias_allowed(U, "minecraft:command.teleport", 0), "the data decides first");
+        assert!(!rt.alias_allowed("00000000-0000-0000-0000-000000000009", "minecraft:command.teleport", 0));
+    }
+
+    #[test]
+    fn passive_ipc_refuses_reads() {
+        let mut rt = rt();
+        give_vip(&mut rt);
+        let check = format!(r#"{{"op":"check","uuid":"{U}","node":"group.vip"}}"#);
+        let info = format!(r#"{{"op":"info","uuid":"{U}"}}"#);
+        let fill = format!(r#"{{"op":"fill","uuid":"{U}","text":"%pumboperms_group%"}}"#);
+        let local: serde_json::Value =
+            serde_json::from_slice(&ipc_reply(check.as_bytes(), Some(&mut rt.engine), 0).unwrap()).unwrap();
+        assert_eq!(local["value"], true);
+        // Nothing from the proxy for this player (offline, or not arrived yet).
+        for msg in [&check, &info, &fill] {
+            let v: serde_json::Value =
+                serde_json::from_slice(&passive_reply(msg.as_bytes(), |_, _| None, |_| None)).unwrap();
+            assert_eq!(
+                (v["ok"].clone(), v["error"].clone(), v["passive"].clone()),
+                (false.into(), "proxy-rules".into(), true.into()),
+                "{msg}"
+            );
+        }
+        let hello: serde_json::Value =
+            serde_json::from_slice(&passive_reply(br#"{"op":"hello"}"#, |_, _| None, |_| None)).unwrap();
+        assert_eq!((hello["ok"].clone(), hello["passive"].clone()), (true.into(), true.into()));
+        assert!(ipc_reply(check.as_bytes(), None, 0).is_err());
+    }
+
+    #[test]
+    fn passive_ipc_answers_from_proxy_data() {
+        let info = pumbo_perms_core::ipc::Info {
+            name: "Steve".into(),
+            rank: "vip".into(),
+            rank_display: "VIP".into(),
+            prefix: "[VIP] ".into(),
+            suffix: String::new(),
+            groups: vec!["vip".into(), "default".into()],
+            meta: Default::default(),
+        };
+        let data = serde_json::to_string(&info).unwrap();
+        let bridge = serde_json::json!({
+            "ok": true, "data": data, "nodes": {"pumbobans:ban": true, "minecraft:command.kick": false},
+        })
+        .to_string();
+        let ask = |msg: String| -> serde_json::Value {
+            let reply = passive_reply(
+                msg.as_bytes(),
+                |uuid, node| {
+                    assert_eq!(uuid, U);
+                    proxy_decision(bridge.as_bytes(), node)
+                },
+                |uuid| (uuid == U).then(|| data.clone()),
+            );
+            serde_json::from_slice(&reply).unwrap()
+        };
+        let v = ask(format!(r#"{{"op":"check","uuid":"{U}","node":"pumbo.bans.ban"}}"#));
+        assert_eq!((v["ok"].clone(), v["value"].clone()), (true.into(), true.into()), "read in Pumpkin's spelling");
+        assert!(ask(format!(r#"{{"op":"check","uuid":"{U}","node":"essentials.fly"}}"#))["value"].is_null());
+        assert_eq!(ask(format!(r#"{{"op":"check","uuid":"{U}","node":"minecraft:command.kick"}}"#))["value"], false);
+        // Registered in Pumpkin with an operator default, but not in the set: no decision.
+        let v = ask(format!(r#"{{"op":"check","uuid":"{U}","node":"minecraft:command.gamemode"}}"#));
+        assert_eq!((v["ok"].clone(), v["value"].clone()), (true.into(), serde_json::Value::Null));
+        assert_eq!(proxy_decision(br#"{"ok":true,"data":null,"nodes":null}"#, "a:b"), None, "no set yet");
+        assert_eq!(proxy_decision(br#"{"ok":true,"data":null}"#, "a:b"), None, "an older bridge");
+        let v = ask(format!(r#"{{"op":"info","uuid":"{}"}}"#, U.replace('-', "")));
+        assert_eq!(
+            (v["ok"].clone(), v["rank_display"].clone(), v["prefix"].clone()),
+            (true.into(), "VIP".into(), "[VIP] ".into())
+        );
+        let v = ask(format!(r#"{{"op":"fill","uuid":"{U}","text":"%pumboperms_prefix%Steve"}}"#));
+        assert_eq!(v["text"], "[VIP] Steve");
+        let other = "00000000-0000-0000-0000-000000000002";
+        assert_eq!(ask(format!(r#"{{"op":"info","uuid":"{other}"}}"#))["error"], "proxy-rules");
+    }
+
+    fn mode(proxy_rules: bool, fingerprint: &str, live: bool, connected: bool) -> Bridge {
+        Bridge::Mode(BridgeMode {
+            proxy_rules,
+            fingerprint: fingerprint.into(),
+            mode: "bridge".into(),
+            live,
+            connected,
+        })
+    }
+
+    #[test]
+    fn passive_flag_survives_newer_export_version() {
+        let reply = br#"{"ok":true,"fingerprint":"f","data":{"format":"pumboperms","version":99,"proxy-rules":true}}"#;
+        let (flag, answer) = export_answer(Some(reply));
+        assert!(flag, "the flag is read even when the export is too new to import");
+        assert!(matches!(answer, Answer::Bad(ref e) if e.contains("newer")), "{answer:?}");
+        let m = perms_mode(br#"{"ok":true,"proxy-rules":true,"fingerprint":"f","mode":"bridge","live":true,"connected":true,"saved":1,"pending":false}"#).unwrap();
+        assert_eq!(Bridge::Mode(m).proxy_rules(), Some(true));
+    }
+
+    #[test]
+    fn perms_mode_falls_back_to_export_on_old_bridge() {
+        assert_eq!(perms_mode(br#"{"ok":false,"error":"unknown op perms-mode"}"#), None);
+        let reply = br#"{"ok":true,"fingerprint":"f","data":{"format":"pumboperms","version":1,"proxy-rules":true}}"#;
+        let (flag, answer) = export_answer(Some(reply));
+        let old = Bridge::Old(flag, answer);
+        assert_eq!(old.proxy_rules(), Some(true), "an older bridge decides the mode as before");
+        assert!(matches!(old.proxy_source(""), Some(Answer::Data(..))));
+        assert_eq!(export_answer(Some(br#"{"ok":false,"pending":true}"#)).1, Answer::Pending);
+        assert_eq!(export_answer(None).1, Answer::Absent);
+    }
+
+    #[test]
+    fn tick_skips_export_when_fingerprint_same() {
+        let live = mode(false, "abc", true, true);
+        assert_eq!(live.proxy_source("abc"), Some(Answer::Absent), "imported already: no export asked");
+        assert_eq!(live.proxy_source("old"), None, "a new table: ask for it");
+        assert_eq!(Bridge::Absent.proxy_source("abc"), Some(Answer::Absent));
+    }
+
+    #[test]
+    fn stale_export_is_not_imported() {
+        // From disk, the proxy not connected: neither the mode nor the data.
+        let stale = mode(true, "abc", false, false);
+        assert_eq!(stale.proxy_rules(), None);
+        assert_eq!(stale.proxy_source(""), Some(Answer::Absent));
+        // Connected, before the proxy sent this session's export: wait.
+        assert_eq!(mode(true, "abc", false, true).proxy_source(""), Some(Answer::Pending));
+        let mut rt = rt();
+        assert!(!rt.hold(&stale, 0), "a server without a proxy goes on as a single server");
+    }
+
+    #[test]
+    fn connected_bridge_waits_for_live_answer() {
+        let mut rt = rt();
+        join(&mut rt, U, 0);
+        let waiting = mode(true, "abc", false, true);
+        assert!(rt.pass_due(0) && rt.hold(&waiting, 0));
+        assert!(rt.pass_due(1_000), "asked again at the next run");
+        assert!(rt.hold(&waiting, 9_000) && !rt.ready);
+        assert!(rt.logs.is_empty());
+        assert!(rt.hold(&waiting, HOLD_MS));
+        assert!(rt.logs.iter().any(|(warn, l)| *warn && l.contains("waiting")), "{:?}", rt.logs);
+        assert!(!rt.pass_due(HOLD_MS + 1_000), "then every pass only");
+        rt.hold(&waiting, HOLD_MS + PASS_MS);
+        assert_eq!(rt.logs.len(), 1, "warned once");
+        assert!(rt.plan_all(HOLD_MS).is_empty(), "no attachments while holding");
+        let live = mode(true, "abc", true, true);
+        assert!(!rt.hold(&live, HOLD_MS + PASS_MS + 1));
+        assert_eq!(rt.holding, None);
+    }
+
+    #[test]
+    fn dropped_wildcard_is_logged_once_per_change() {
+        let mut rt = rt();
+        rt.ready = true;
+        rt.engine
+            .perms
+            .edit_group("vip", |g| {
+                for (node, value) in [("pumbo.bans.*", true), ("pumbo.bans.exempt.*", false)] {
+                    g.data.set_permission(pumbo_perms_core::model::PermNode {
+                        node: node.into(),
+                        value,
+                        context: pumbo_perms_core::context::Contexts::global(),
+                        expiry: None,
+                    });
+                }
+            })
+            .unwrap();
+        give_vip(&mut rt);
+        let ops = join(&mut rt, U, 0);
+        assert!(!ops.iter().any(|op| matches!(op, Op::Set(n, _) if n == "pumbobans:*")), "{ops:?}");
+        assert!(ops.contains(&Op::Set("pumbobans:ban".into(), true)), "the catalog keeps exact Pumbo nodes");
+        let logged =
+            |rt: &Rt| rt.logs.iter().filter(|(_, l)| l.contains("pumbobans:* hides pumbobans:exempt.*")).count();
+        assert_eq!(logged(&rt), 1, "{:?}", rt.logs);
+        rt.plan_all(0);
+        assert_eq!(logged(&rt), 1);
+        rt.leave(U, 0);
+        assert!(rt.hidden.is_empty(), "{:?}", rt.hidden);
+        let _ = rt.join("00000000-0000-0000-0000-000000000002", steve(), 0);
+        assert!(rt.hidden.is_empty(), "a player with nothing hidden keeps no entry");
+    }
+
+    #[test]
+    fn import_asks_until_ready_then_only_while_waiting() {
+        assert_eq!(decide_import(false, false, false, None, 0), Step::Ask);
+        assert_eq!(decide_import(false, true, false, None, 0), Step::Wait);
+        assert_eq!(decide_import(false, true, false, Some(10), 5), Step::Ask);
+        assert_eq!(decide_import(false, true, false, Some(10), 10), Step::GiveUp);
+        assert_eq!(decide_import(false, true, true, None, 0), Step::Ask);
+    }
+}

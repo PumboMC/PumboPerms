@@ -96,8 +96,7 @@ pub fn normalize(input: &str) -> Result<String, NodeError> {
     }
     if let Some(ns) = namespace
         && let Some(id) = ns.strip_prefix(PUMBO)
-        && !id.is_empty()
-        && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && is_plugin_id(id)
     {
         return Ok(format!("{PUMBO}.{id}.{path}"));
     }
@@ -109,12 +108,17 @@ pub fn normalize(input: &str) -> Result<String, NodeError> {
 pub fn host_form(node: &str) -> String {
     if let Some(rest) = node.strip_prefix("pumbo.")
         && let Some((id, action)) = rest.split_once('.')
-        && !id.is_empty()
-        && id != "*"
+        && is_plugin_id(id)
     {
         return format!("{PUMBO}{id}:{action}");
     }
     node.to_string()
+}
+
+/// A Pumbo plugin id as in `pumbo<id>:` and `pumbo.<id>.`: the rule of plugin
+/// names in `pumbo_common::command::is_valid_node`, so both spellings map back.
+fn is_plugin_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// Whether a node ends in a wildcard (`a.*`, `ns:*`, `*`).
@@ -207,6 +211,16 @@ mod tests {
         for n in ["pumbo.bans.ban", "pumbo.perms.user.info", "pumbo.bans.*"] {
             assert_eq!(normalize(&host_form(n)).as_deref(), Ok(n));
         }
+    }
+
+    #[test]
+    fn host_form_and_normalize_share_id_rule() {
+        for n in ["pumbo.bans.ban", "pumbo.my-plugin.x", "pumbo.my_plugin.x", "pumbo.x1.a.b", "pumbo.*", "pumbo.bans.*"]
+        {
+            assert_eq!(normalize(&host_form(n)).as_deref(), Ok(n), "{n}");
+        }
+        assert_eq!(host_form("pumbo.my_plugin.x"), "pumbo.my_plugin.x");
+        assert_eq!(normalize("pumbomy_plugin:x").as_deref(), Ok("pumbomy_plugin:x"));
     }
 
     #[test]

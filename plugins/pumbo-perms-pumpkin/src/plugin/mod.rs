@@ -8,6 +8,8 @@ mod push;
 mod settings;
 mod state;
 
+use std::cell::RefCell;
+
 use pumbo_common::clock::now_ms;
 use pumbo_common::store::Store;
 use pumbo_perms_core::command::ACTIONS;
@@ -20,6 +22,11 @@ use api::{
 };
 
 use crate::{COMMAND_NODE, PLUGIN_NAME};
+
+thread_local! {
+    /// For `ipc`, which gets no server handle.
+    static SERVER: RefCell<Option<api::Server>> = const { RefCell::new(None) };
+}
 
 pub struct PumboPerms;
 
@@ -40,13 +47,21 @@ impl Plugin for PumboPerms {
     }
 
     fn on_load(&self, context: Context) -> Result<(), String> {
+        pumbo_common::panic::install(api::error);
         let dir = context.get_data_folder();
         let _ = std::fs::create_dir_all(format!("{dir}/exports"));
-        let (cfg, mut warnings) = settings::load_config(&dir);
+        // Before any registration: an error here leaves nothing behind (R44).
+        let (cfg, mut warnings) = settings::load_config_at_start(&dir).inspect_err(|e| {
+            api::error(&format!("PumboPerms: config: {e}"));
+        })?;
         let (lang, more) = settings::load_lang(&dir, &cfg.language);
         warnings.extend(more);
         for w in &warnings {
-            api::warn(&format!("PumboPerms: config: {w}"));
+            if w.fatal {
+                api::error(&format!("PumboPerms: config: {w}"));
+            } else {
+                api::warn(&format!("PumboPerms: config: {w}"));
+            }
         }
         let store = Store::open(format!("{dir}/perms.redb")).and_then(PermsStore::new);
         let engine = Engine::new(store, cfg.core(), lang);
@@ -66,6 +81,7 @@ impl Plugin for PumboPerms {
         );
         state::install(state::Rt::new(dir, cfg, engine, check_event));
         state::flush_logs();
+        SERVER.with(|s| *s.borrow_mut() = Some(context.get_server()));
 
         // Nodes in Pumpkin's registry: operators of the configured level keep
         // them by Pumpkin's own rules too (a reload may find them registered).
@@ -101,22 +117,23 @@ impl Plugin for PumboPerms {
         )?;
         context.schedule_repeating_task(refresh_ticks, refresh_ticks, |server| events::tick(&server));
         // The first run imports other sources and takes over the attachments
-        // (not in on_load: other plugins answer only after their load).
-        context.schedule_repeating_task(1, 200, |server| import::tick(&server));
+        // (not in on_load: other plugins answer only after their load). Every
+        // second, the pass itself decides when it is due.
+        context.schedule_repeating_task(1, 20, |server| import::tick(&server));
 
-        // Players already online (a reload of the plugin); their attachments
-        // follow the first import pass.
-        for player in context.get_server().get_all_players() {
-            events::track(&player);
+        // Players already online (a reload of the plugin): the first import
+        // pass checks the whole catalog on them, so attachments an earlier
+        // run left go (R32).
+        let server = context.get_server();
+        for player in server.get_all_players() {
+            events::track(&server, &player);
         }
 
-        if !check_event {
-            context.register_event_handler::<api::PlayerCommandSendEvent, _>(
-                events::AliasGuard,
-                EventPriority::Highest,
-                true,
-            )?;
-        }
+        context.register_event_handler::<api::PlayerCommandSendEvent, _>(
+            events::AliasGuard { check_event },
+            EventPriority::Highest,
+            true,
+        )?;
         if check_event {
             context.register_event_handler::<api::PlayerPermissionCheckEvent, _>(
                 events::Check,
@@ -145,25 +162,43 @@ impl Plugin for PumboPerms {
         }
         // Closing the database lets a new instance open it (plugin reload).
         state::uninstall();
+        SERVER.with(|s| *s.borrow_mut() = None);
         Ok(())
     }
 
     fn handle_ipc_message(&self, _sender: String, message: Vec<u8>) -> Result<Vec<u8>, String> {
-        if state::passive()
-            && serde_json::from_slice::<serde_json::Value>(&message)
-                .is_ok_and(|v| v.get("op").and_then(|o| o.as_str()) == Some("hello"))
-        {
-            // PumboBridge asks who writes the permissions: not this plugin.
-            let reply = serde_json::json!({
-                "ok": true, "plugin": "PumboPerms", "version": env!("CARGO_PKG_VERSION"),
-                "protocol": pumbo_perms_core::ipc::PROTOCOL, "passive": true,
-            });
-            return Ok(reply.to_string().into_bytes());
-        }
         let now = now_ms();
-        state::with(|rt| pumbo_perms_core::ipc::handle(&mut rt.engine, &message, now, env!("CARGO_PKG_VERSION")))
-            .ok_or_else(|| "PumboPerms is busy".to_string())
+        SERVER.with(|s| {
+            let server = s.borrow();
+            // Every entry looks at expired nodes: the periodic task may be frozen.
+            if let Some(server) = server.as_ref() {
+                let result = state::with(|rt| (rt.due_expiry(now), rt.resend()));
+                state::flush_logs();
+                if let Some((plans, resend)) = result {
+                    push::apply_plans(server, None, plans, resend);
+                }
+            }
+            if state::passive() {
+                // From what the proxy decided, without the state, so `hello` from PumboBridge never finds it busy.
+                let has = |uuid: &str, node: &str| state::proxy_decision(&from_bridge(uuid)?, node);
+                return Ok(state::passive_reply(&message, has, player_info));
+            }
+            state::with(|rt| state::ipc_reply(&message, Some(&mut rt.engine), now))
+                .unwrap_or_else(|| state::ipc_reply(&message, None, now))
+        })
     }
+}
+
+/// PumboBridge's `player-info` answer for a player.
+fn from_bridge(uuid: &str) -> Option<Vec<u8>> {
+    let msg = serde_json::json!({"op": "player-info", "uuid": uuid}).to_string();
+    import::send(import::BRIDGE, msg.as_bytes())
+}
+
+/// What PumboBridge carries from the proxy for a player (`perm-set.info`).
+fn player_info(uuid: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(&from_bridge(uuid)?).ok()?;
+    Some(v.get("data")?.as_str()?.to_string())
 }
 
 crate::papi::register_plugin!(PumboPerms);

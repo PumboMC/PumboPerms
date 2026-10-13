@@ -128,11 +128,14 @@ bad-node-wildcard: "{0} is not a valid permission: * may only be the last part (
 bad-value: "{0} is not true or false."
 bad-number: "{0} is not a whole number."
 bad-context: "Invalid context: {0}. Use server=, group= or world=."
+no-worlds: "The proxy does not see worlds, so world= is not available here."
+bad-text: The text is too long or has control characters (at most 256 bytes, no line breaks).
+import-file-console: "Only the console can import a whole file: it replaces every group and player."
 editor-later: The web editor is not available yet. Use export and import (JSON) meanwhile.
 
 # parts of messages
 in-context: " in {0}"
-target-user: "{0}"
+target-user: "{0} &8({1})&r"
 target-group: group {0}
 expires-in: expires in {0}
 time-ago: "{0} ago"
@@ -148,6 +151,9 @@ perm-clear: Removed {count} permissions from {target}{context}.
 perm-check: "{node} for {target}: {value}"
 perm-check-source: "decided by {source}: {node}{context} "
 perm-check-undecided: "{node} for {target}: not set, the server's default decides."
+perm-check-no-worlds: "The proxy does not see worlds: world= entries apply nowhere on this network."
+perm-hidden: "not sent to Pumpkin: {0} hides {1}"
+perm-group-node: "{node} is a group, not a permission. Use {command} parent add {group}."
 parent-add: "{target} now inherits {group}{context}."
 parent-addtemp: "{target} now inherits {group}{context} for {duration}."
 parent-already: "{target} already inherits {group}{context}."
@@ -192,8 +198,11 @@ import-source-same: "{0} has not changed since the last import."
 import-source-preview: "Importing {0} would add {1} entries ({2} conflicts kept as they are):"
 import-source-undone: "Removed {1} entries imported from {0}."
 import-source-failed: "Cannot import {0}: {1}"
-import-source-pending: "{0} players are known only by name; their entries are added at their first join: {1}"
+import-source-pending: "{0} players are known only by name; their entries are added when they join with an online-mode (premium) account: {1}"
 import-source-joined: "{0}: {1} joined for the first time, {2} entries added."
+import-source-offline: "{0}: {1} joined with an offline-mode account and got nothing; the entries for this name wait for an online-mode (premium) account."
+import-fixed: "{0} entries of the file were fixed or left out:"
+import-worlds: "{0} entries with world= kept: the proxy does not see worlds, so they apply nowhere."
 import-missing: There is no file {0}.
 notify: "{0} changed {1}: {2}"
 log-empty: No changes yet.
