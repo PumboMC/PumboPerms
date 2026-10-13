@@ -149,6 +149,76 @@ PumboPerms works on its own. When it finds other Pumbo plugins, it works with th
 | 🌉 [PumboBridge](https://github.com/PumboMC/PumboBridge) | PumboPerms imports the proxy's ranks for this server through the bridge, then takes over writing permissions on the server. |
 | 🧩 Other Pumbo plugins | Their permissions (`pumbo.bans.ban`, `pumbo.auth.stats`, ...) can be given in groups like any other node. Pumbo plugins can also ask PumboPerms directly, about offline players too. |
 
+## Roadmap
+
+PumboPerms is in beta. The next release makes it safe and predictable on networks. Open a topic for the details.
+
+<details>
+<summary><b>Security</b></summary>
+
+Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Details come with the release. Please report problems privately, see [SECURITY.md](SECURITY.md).
+
+</details>
+
+<details>
+<summary><b>The same answer everywhere</b></summary>
+
+- Wildcards and denials set on the proxy, such as `pumbo.bans.*`, apply on the servers exactly as on the proxy. Until then, give exact nodes (`pumbo.bans.ban`) on a network.
+- `server=Lobby` and `server=lobby` mean the same server.
+- The `default` group and `world=` contexts work the same on the proxy and on the servers, and `/pp ... permission check` shows the answer the server uses.
+
+</details>
+
+<details>
+<summary><b>Network sync</b></summary>
+
+- A player's ranks reach the server as soon as they join, and again after a reconnect or a restart of the server or the proxy. Today a slow login can leave a player without the proxy's ranks until their permissions change.
+- Networks with thousands of ranked players stay in proxy mode. Today a large database makes the servers fall back to their local ranks.
+- Servers drop their copy of the proxy's ranks when the database or the permission provider changes.
+- After a rank change, the affected players get their new command list at once.
+
+</details>
+
+<details>
+<summary><b>Data and imports</b></summary>
+
+- Running `/pp import run` again keeps the groups, tracks, weights and inheritance you changed with `/pp`, and removes only what the source dropped.
+- `/pp export` keeps the old file when the database cannot be read.
+- A damaged database shows up in the log with the reason. Online players keep their last ranks, and `on-load-failure` decides for new ones (deny by default).
+- Removing a temporary entry leaves the permanent one alone.
+
+</details>
+
+<details>
+<summary><b>Commands</b></summary>
+
+- Tab completion for `/pp` subcommands, players, groups and nodes, on PumboProx and on Pumpkin.
+- Rename `/pp` and `/pumboperms` in `config.yml`.
+- Long `/pp` lists split into pages.
+- Clearer colours in the `/pp` help.
+
+</details>
+
+<details>
+<summary><b>Speed</b></summary>
+
+- A rank change recomputes only the players it affects.
+- Lower cost per permission check and per expiry check. Servers stop reading the proxy's whole database every few seconds.
+
+</details>
+
+<details>
+<summary><b>Quality</b></summary>
+
+- Tests on real Pumpkin servers in CI: the Pumpkin plugin alone, and together with the proxy and PumboBridge, on Pumpkin 0.2.0 (Minecraft 26.3) and 0.1.0-dev (Minecraft 26.2).
+
+</details>
+
+### Later
+
+- Several proxies sharing one database.
+- Ranks that follow a PumboAuth account when it switches to premium.
+
 ## Building
 
 You need Rust stable with the WebAssembly target:
