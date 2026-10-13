@@ -41,6 +41,8 @@
 
 PumboPerms is in beta. The next release makes it safe and predictable on networks. 🔜 planned, ✅ done. Open a topic for the details.
 
+Work on the next release happens on the [`dev`](https://github.com/PumboMC/PumboPerms/tree/dev) branch. Items marked ✅ are fixed there and ship with the next release.
+
 <details>
 <summary><b>Security</b></summary>
 
