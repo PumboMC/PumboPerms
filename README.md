@@ -210,7 +210,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <details>
 <summary><b>Quality</b></summary>
 
-- Tests on real Pumpkin servers in CI: the Pumpkin plugin alone, and together with the proxy and PumboBridge, on Pumpkin 0.2.0 (Minecraft 26.3) and 0.1.0-dev (Minecraft 26.2).
+- Cross tests in CI on PumboProx and on real Pumpkin servers: the proxy plugin on PumboProx, the Pumpkin plugin on its own, and both together through PumboBridge, on Pumpkin 0.2.0 (Minecraft 26.3) and 0.1.0-dev (Minecraft 26.2).
 
 </details>
 
