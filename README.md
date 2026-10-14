@@ -32,7 +32,7 @@
 
 PumboPerms is in beta. The next release makes it safe and predictable on networks. Open a topic for the details.
 
-Work on the next release happens on the [`dev`](https://github.com/PumboMC/PumboPerms/tree/dev) branch. Items marked ✅ (Dev) are fixed there and ship with the next release.
+Work on the next release happens on the [`dev`](https://github.com/PumboMC/PumboPerms/tree/dev) branch. Items marked (Dev) are fixed there and ship with the next release: ✅ confirmed in game, ☑️ not confirmed in game yet.
 
 <details open>
 <summary><b>Security</b></summary>
@@ -44,58 +44,58 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <details open>
 <summary><b>Permission rules: the same answer everywhere</b></summary>
 
-- ✅ (Dev) Wildcards and denials set on the proxy, such as `pumbo.bans.*`, apply on the servers exactly as on the proxy. Until then, give exact nodes (`pumbo.bans.ban`) on a network.
-- ✅ (Dev) `server=Lobby` and `server=lobby` mean the same server.
-- ✅ (Dev) The `default` group works the same on the proxy and on the servers.
-- ✅ (Dev) `world=` in `/pp` on the proxy is refused with a clear message, because the proxy does not see worlds, and `/pp ... permission check` shows the answer the server uses.
-- ✅ (Dev) PumboPerms on a server answers other plugins with the proxy's ranks instead of an old local copy.
-- ✅ (Dev) A cancelled world change keeps the permissions of the old world.
-- ✅ (Dev) Permissions that other plugins set for a session survive a rank update.
-- ✅ (Dev) `group.<name>` answers whether the player is in the group, and `permission set group.<name>` points you to `parent add`.
-- ✅ (Dev) Removing a temporary permission or group leaves the permanent one alone, and temporary ranks on a track expire as set.
-- ✅ (Dev) Staff who have `/pp` on the proxy have it on the servers too.
+- ☑️ (Dev) Wildcards and denials set on the proxy, such as `pumbo.bans.*`, apply on the servers exactly as on the proxy. Until then, give exact nodes (`pumbo.bans.ban`) on a network.
+- ☑️ (Dev) `server=Lobby` and `server=lobby` mean the same server.
+- ☑️ (Dev) The `default` group works the same on the proxy and on the servers.
+- ☑️ (Dev) `world=` in `/pp` on the proxy is refused with a clear message, because the proxy does not see worlds, and `/pp ... permission check` shows the answer the server uses.
+- ☑️ (Dev) PumboPerms on a server answers other plugins with the proxy's ranks instead of an old local copy.
+- ☑️ (Dev) A cancelled world change keeps the permissions of the old world.
+- ☑️ (Dev) Permissions that other plugins set for a session survive a rank update.
+- ☑️ (Dev) `group.<name>` answers whether the player is in the group, and `permission set group.<name>` points you to `parent add`.
+- ☑️ (Dev) Removing a temporary permission or group leaves the permanent one alone, and temporary ranks on a track expire as set.
+- ☑️ (Dev) Staff who have `/pp` on the proxy have it on the servers too.
 
 </details>
 
 <details open>
 <summary><b>Network sync</b></summary>
 
-- ✅ (Dev) A player's ranks reach the server as soon as they join, and again after a reconnect or a restart of the server or the proxy. Today a slow login can leave a player without the proxy's ranks until their permissions change.
-- ✅ (Dev) Networks with thousands of ranked players stay in proxy mode. Today a large database makes the servers fall back to their local ranks.
-- ✅ (Dev) Servers refresh the proxy's ranks after changes to the database or the permission provider, and do not treat an old copy as current.
-- ✅ (Dev) Updates from the proxy carry a version and a confirmation, so a server cannot keep an older set.
-- ✅ (Dev) After a rank change, the affected players get their new command list at once.
-- ✅ (Dev) A player who leaves during an update keeps no removed rights, and server permissions end with the session.
-- ✅ (Dev) A new PumboPerms file placed next to the old one stops the proxy with a clear message instead of turning permissions off.
-- ✅ (Dev) Permission checks for offline players see changes at once.
-- ✅ (Dev) While PumboPerms reloads on the proxy, `/pp` answers that it is restarting instead of going to the server.
+- ☑️ (Dev) A player's ranks reach the server as soon as they join, and again after a reconnect or a restart of the server or the proxy. Today a slow login can leave a player without the proxy's ranks until their permissions change.
+- ☑️ (Dev) Networks with thousands of ranked players stay in proxy mode. Today a large database makes the servers fall back to their local ranks.
+- ☑️ (Dev) Servers refresh the proxy's ranks after changes to the database or the permission provider, and do not treat an old copy as current.
+- ☑️ (Dev) Updates from the proxy carry a version and a confirmation, so a server cannot keep an older set.
+- ☑️ (Dev) After a rank change, the affected players get their new command list at once.
+- ☑️ (Dev) A player who leaves during an update keeps no removed rights, and server permissions end with the session.
+- ☑️ (Dev) A new PumboPerms file placed next to the old one stops the proxy with a clear message instead of turning permissions off.
+- ☑️ (Dev) Permission checks for offline players see changes at once.
+- ☑️ (Dev) While PumboPerms reloads on the proxy, `/pp` answers that it is restarting instead of going to the server.
 
 </details>
 
 <details open>
 <summary><b>Data and imports</b></summary>
 
-- ✅ (Dev) Running `/pp import run` again keeps the groups, tracks, weights and inheritance you changed with `/pp`, and removes only what the source dropped.
-- ✅ (Dev) Imports by player name match the right account.
-- ✅ (Dev) Imports reject invalid contexts and duplicate entries.
-- ✅ (Dev) Pending imports run on Pumpkin as on the proxy; there, players known only by name get their ranks with `/pp`.
-- ✅ (Dev) Import records live in the database and are written in one step.
-- ✅ (Dev) Long names with special characters no longer stop an import.
-- ✅ (Dev) `/pp export` keeps the old file when the database cannot be read.
-- ✅ (Dev) Two servers cannot open the same PumboPerms database at once.
-- ✅ (Dev) Database format versions with upgrade steps.
+- ☑️ (Dev) Running `/pp import run` again keeps the groups, tracks, weights and inheritance you changed with `/pp`, and removes only what the source dropped.
+- ☑️ (Dev) Imports by player name match the right account.
+- ☑️ (Dev) Imports reject invalid contexts and duplicate entries.
+- ☑️ (Dev) Pending imports run on Pumpkin as on the proxy; there, players known only by name get their ranks with `/pp`.
+- ☑️ (Dev) Import records live in the database and are written in one step.
+- ☑️ (Dev) Long names with special characters no longer stop an import.
+- ☑️ (Dev) `/pp export` keeps the old file when the database cannot be read.
+- ☑️ (Dev) Two servers cannot open the same PumboPerms database at once.
+- ☑️ (Dev) Database format versions with upgrade steps.
 
 </details>
 
 <details open>
 <summary><b>Failures and recovery</b></summary>
 
-- ✅ (Dev) During a provider outage, a reload or a damaged database, online players keep their last ranks and `on-load-failure` decides for new ones (deny by default). Ranks removed with `/pp` stay removed.
-- ✅ (Dev) A damaged database shows up in the log with the reason.
-- ✅ (Dev) The known causes of internal errors in PumboPerms on Pumpkin are fixed, and PumboBridge notices when the plugin stops.
-- ✅ (Dev) Expired temporary permissions end on the servers even when a database write fails.
-- ✅ (Dev) A config file with a syntax error keeps the last working settings and shows the line with the error.
-- ✅ (Dev) Commands that change nothing no longer reload the database.
+- ☑️ (Dev) During a provider outage, a reload or a damaged database, online players keep their last ranks and `on-load-failure` decides for new ones (deny by default). Ranks removed with `/pp` stay removed.
+- ☑️ (Dev) A damaged database shows up in the log with the reason.
+- ☑️ (Dev) The known causes of internal errors in PumboPerms on Pumpkin are fixed, and PumboBridge notices when the plugin stops.
+- ☑️ (Dev) Expired temporary permissions end on the servers even when a database write fails.
+- ☑️ (Dev) A config file with a syntax error keeps the last working settings and shows the line with the error.
+- ☑️ (Dev) Commands that change nothing no longer reload the database.
 
 </details>
 
@@ -128,10 +128,10 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <summary><b>Quality</b></summary>
 
 - Cross tests in CI on PumboProx and on real Pumpkin servers: the proxy plugin on PumboProx, the Pumpkin plugin on its own, and both together through PumboBridge, on Pumpkin 0.2.0 (Minecraft 26.3) and 0.1.0-dev (Minecraft 26.2).
-- ✅ (Dev) Tests for the Pumpkin plugin code.
+- ☑️ (Dev) Tests for the Pumpkin plugin code.
 - Performance tests that fail when PumboPerms gets slower.
-- ✅ (Dev) Property tests for the node, context and import parsers.
-- ✅ (Dev) Upgrade tests from older PumboPerms databases.
+- ☑️ (Dev) Property tests for the node, context and import parsers.
+- ☑️ (Dev) Upgrade tests from older PumboPerms databases.
 
 </details>
 
