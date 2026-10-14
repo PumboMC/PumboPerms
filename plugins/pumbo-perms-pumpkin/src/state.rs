@@ -14,11 +14,11 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 
 use pumbo_common::lang::Lang;
+use pumbo_common::store::DbLock;
 use pumbo_perms_core::command::{self, SourceMode, Who};
 use pumbo_perms_core::engine::Engine;
 use pumbo_perms_core::export::{self, Snapshot};
 use pumbo_perms_core::host::{self, Catalog, Op};
-use pumbo_perms_core::merge::Ledger;
 use serde::Deserialize;
 
 use crate::config::Config;
@@ -53,8 +53,10 @@ pub struct Rt {
     pub check_event: bool,
     /// Permission checks answered from memory (check-event mode).
     pub answered: u64,
-    /// Log lines collected inside [`with`], written after it.
+    /// Log lines collected inside [`with`], written after it (true: a warning).
     pub logs: Vec<(bool, String)>,
+    /// Error lines collected inside [`with`], written after it.
+    pub errors: Vec<String>,
     /// The first import pass is done and the bridge released the
     /// attachments: from now on this plugin writes them (spec §5.3).
     pub ready: bool,
@@ -67,10 +69,37 @@ pub struct Rt {
     /// Since when the first pass waits for a live export from PumboBridge,
     /// and whether that was logged.
     pub holding: Option<(u64, bool)>,
+    /// `perms.redb.lock`: `None` while another instance holds the database
+    /// (the engine is broken then). After the engine, so the database closes
+    /// before the lock goes.
+    pub lock: Option<DbLock>,
+    /// When the lock was last refreshed, or the database last tried again (ms).
+    pub lock_refreshed: u64,
+    pub retried: u64,
 }
+
+/// The lock is refreshed at most this often; [`DbLock`] counts one not
+/// refreshed for 30 s as stale.
+pub const LOCK_REFRESH_MS: u64 = 10_000;
+/// A database held by another instance is tried again this often.
+pub const LOCK_RETRY_MS: u64 = 10_000;
+/// A database that cannot be read is read again this often.
+pub const READ_RETRY_MS: u64 = 60_000;
 
 impl Rt {
     pub fn new(dir: String, cfg: Config, engine: Engine, check_event: bool) -> Self {
+        Self::with_lock(dir, cfg, engine, check_event, None, 0)
+    }
+
+    /// [`Rt::new`] with the database lock taken at `now` (`None`: refused).
+    pub fn with_lock(
+        dir: String,
+        cfg: Config,
+        engine: Engine,
+        check_event: bool,
+        lock: Option<DbLock>,
+        now: u64,
+    ) -> Self {
         let mut rt = Self {
             dir,
             cfg,
@@ -86,9 +115,80 @@ impl Rt {
             hidden: HashMap::new(),
             next_pass: 0,
             holding: None,
+            lock,
+            lock_refreshed: now,
+            retried: now,
+            errors: Vec::new(),
         };
         rt.refresh_catalog();
         rt
+    }
+
+    /// Keeps the database lock fresh, at most every [`LOCK_REFRESH_MS`]. Every
+    /// entry into the plugin calls this, so `/tick freeze` does not let the
+    /// lock go stale while players use commands. A lock another instance took
+    /// over stops all changes here.
+    pub fn refresh_lock(&mut self, now: u64) {
+        if now.saturating_sub(self.lock_refreshed) < LOCK_REFRESH_MS {
+            return;
+        }
+        let Some(lock) = &self.lock else { return };
+        self.lock_refreshed = now;
+        if let Err(e) = lock.refresh(now) {
+            self.lock = None;
+            self.engine.close(e.to_string());
+            self.error(format!("PumboPerms: {e}; changes are refused until it lets the database go"));
+        }
+    }
+
+    /// From the periodic task: the database again after a failure. Without
+    /// the lock (another instance had it) every [`LOCK_RETRY_MS`]: `open`
+    /// opens it once the lock is free. A database that could not be read,
+    /// every [`READ_RETRY_MS`]. Returns the host changes once it opened.
+    pub fn retry_database(
+        &mut self,
+        now: u64,
+        open: impl FnOnce(&Engine) -> Result<(DbLock, Engine), String>,
+    ) -> Vec<Plan> {
+        if self.engine.broken.is_none() {
+            return Vec::new();
+        }
+        let wait = if self.lock.is_none() { LOCK_RETRY_MS } else { READ_RETRY_MS };
+        if now.saturating_sub(self.retried) < wait {
+            return Vec::new();
+        }
+        self.retried = now;
+        if self.lock.is_some() && self.engine.store().is_some() {
+            if self.engine.retry_open() {
+                self.logs.push((false, "PumboPerms: the database can be read again; changes work again".into()));
+                return self.plan_all(now);
+            }
+            let why = self.engine.broken.clone().unwrap_or_default();
+            self.error(format!("PumboPerms: the database is not available, changes are refused: {why}"));
+            return Vec::new();
+        }
+        // The file did not open under this lock: open it again, lock and all.
+        self.lock = None;
+        match open(&self.engine) {
+            Ok((lock, engine)) => {
+                self.lock = Some(lock);
+                self.lock_refreshed = now;
+                self.engine = engine;
+                if self.engine.broken.is_none() {
+                    self.logs.push((false, "PumboPerms: the database is open now".into()));
+                }
+                self.refresh_catalog();
+                self.plan_all(now)
+            }
+            Err(e) => {
+                self.warn(format!("PumboPerms: {e}"));
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn error(&mut self, msg: String) {
+        self.errors.push(msg);
     }
 
     pub fn lang(&self) -> &Lang {
@@ -165,9 +265,16 @@ impl Rt {
     }
 
     /// A player joined (or was online at load): the host changes to apply.
+    /// Pumpkin does not say whether Mojang checked the account, so the name
+    /// counts as offline (an import never binds it here).
     pub fn join(&mut self, uuid: &str, online: Online, now: u64) -> Vec<Plan> {
-        if let Err(e) = self.engine.seen(uuid, &online.name) {
-            self.warn(format!("PumboPerms: cannot save the name of {}: {e}", online.name));
+        match self.engine.seen(uuid, &online.name, false) {
+            Ok(Some(moved)) => self.warn(moved),
+            Ok(None) => {}
+            Err(e) => self.warn(format!("PumboPerms: cannot save the name of {}: {e}", online.name)),
+        }
+        for out in command::on_join(&mut self.engine, uuid, &online.name, false, now) {
+            self.logs.push((true, out.reply.plain()));
         }
         self.online.insert(uuid.to_string(), online);
         let mut plans = self.due_expiry(now);
@@ -232,6 +339,7 @@ impl Rt {
     /// (`/tick freeze`) does not keep a node alive. A failed save is only
     /// logged: answers skip expired nodes anyway, and the next call saves.
     pub fn due_expiry(&mut self, now: u64) -> Vec<Plan> {
+        self.refresh_lock(now);
         let (due, saved) = self.engine.expire(now);
         if let Err(e) = saved {
             self.warn(format!("PumboPerms: cannot save the removal of expired permissions, trying again: {e}"));
@@ -270,6 +378,11 @@ impl Rt {
         fallback: Option<(String, Snapshot)>,
         now: u64,
     ) -> (bool, Vec<Plan>, bool) {
+        if self.lock.is_none() && self.engine.broken.is_some() {
+            // Another instance holds the database: no import and no first pass
+            // (it would release PumboBridge's attachments for an empty engine).
+            return (false, Vec::new(), self.resend());
+        }
         let follow = self.cfg.import.follow;
         let pending = answers.iter().any(|(_, a)| matches!(a, Answer::Pending));
         let mut changed = false;
@@ -286,22 +399,21 @@ impl Rt {
             runs.push(("attachments".into(), f, s));
         }
         for (source, fingerprint, snap) in runs {
-            let ledger = load_ledger(&self.dir, &source);
+            let ledger = match self.engine.ledger(&source) {
+                Ok(l) => l,
+                Err(why) => {
+                    // An empty ledger would import everything again.
+                    self.error(format!("PumboPerms: {source} is not imported automatically: {why}"));
+                    continue;
+                }
+            };
             // Once per source unless `follow` (a ledger means it was imported).
             if ledger.at != 0 && !follow {
                 continue;
             }
-            let (out, new) = command::import_source(
-                &mut self.engine,
-                &who,
-                &source,
-                Ok((fingerprint, snap)),
-                &ledger,
-                SourceMode::Run,
-                now,
-            );
-            if let Some(l) = new {
-                save_ledger(self, &source, &l);
+            let out =
+                command::import_source(&mut self.engine, &who, &source, Ok((fingerprint, snap)), SourceMode::Run, now);
+            if out.changed {
                 changed = true;
                 self.logs.push((false, out.reply.plain()));
             }
@@ -615,31 +727,6 @@ pub fn decide_import(passive: bool, ready: bool, follow: bool, waiting_until: Op
     Step::Ask
 }
 
-fn ledger_path(dir: &str, source: &str) -> String {
-    format!("{dir}/imports/{source}.json")
-}
-
-/// What a source added at its last import (`imports/<source>.json`).
-pub fn load_ledger(dir: &str, source: &str) -> Ledger {
-    std::fs::read_to_string(ledger_path(dir, source))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_ledger(rt: &mut Rt, source: &str, ledger: &Ledger) {
-    let path = ledger_path(&rt.dir, source);
-    let result = if ledger.entries.is_empty() && ledger.fingerprint.is_empty() {
-        std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
-    } else {
-        let _ = std::fs::create_dir_all(format!("{}/imports", rt.dir));
-        std::fs::write(&path, serde_json::to_string_pretty(ledger).unwrap_or_default())
-    };
-    if let Err(e) = result {
-        rt.warn(format!("PumboPerms: cannot save {path}: {e}"));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use pumbo_common::lang::Lang;
@@ -762,7 +849,7 @@ mod tests {
         let (_, d) = rt
             .engine
             .perms
-            .edit_user(U, "Steve", |d| d.remove_parent("admin", &pumbo_perms_core::context::Contexts::global()));
+            .edit_user(U, "Steve", |d| d.remove_parent("admin", &pumbo_perms_core::context::Contexts::global(), false));
         rt.engine.commit(&d, None).unwrap();
         let late = rt.plan_all(0);
         let (gone, _) = rt.leave(U, 0);
@@ -785,7 +872,7 @@ mod tests {
         let (_, d) = rt
             .engine
             .perms
-            .edit_user(U, "Steve", |d| d.remove_parent("admin", &pumbo_perms_core::context::Contexts::global()));
+            .edit_user(U, "Steve", |d| d.remove_parent("admin", &pumbo_perms_core::context::Contexts::global(), false));
         rt.engine.commit(&d, None).unwrap();
         let Rt { dir, cfg, engine, .. } = rt;
         let mut rt = Rt::new(dir, cfg, engine, false);
@@ -863,6 +950,114 @@ mod tests {
         writes.store(0, std::sync::atomic::Ordering::SeqCst);
         assert!(rt.due_expiry(13_000).is_empty(), "nothing new to send");
         assert!(rt.engine.perms.next_expiry().is_none(), "saved at the next call");
+    }
+
+    #[test]
+    fn entry_refreshes_lock_while_ticks_frozen() {
+        let path = std::env::temp_dir().join(format!("pumbo-perms-pumpkin-lock-{}.redb", std::process::id()));
+        let lock = DbLock::acquire(&path, 0).unwrap();
+        let cfg = Config::default();
+        let engine = Engine::in_memory(cfg.core(), Lang::load(&crate::BUNDLES, "en", None).0);
+        let mut rt = Rt::with_lock(String::new(), cfg, engine, false, Some(lock), 0);
+        // No periodic task runs; a player's command 25 s later is an entry.
+        assert!(rt.due_expiry(25_000).is_empty());
+        assert!(DbLock::acquire(&path, 54_999).is_err(), "a second copy is refused while players use the plugin");
+        // Another instance took the stale lock over: this one stops writing.
+        let other = DbLock::acquire(&path, 90_000).unwrap();
+        rt.due_expiry(100_000);
+        assert!(rt.lock.is_none() && rt.engine.broken.is_some() && !rt.engine.writable());
+        assert!(rt.errors.iter().any(|l| l.contains("taken over")), "{:?}", rt.errors);
+        // Nothing reaches the file the other instance has open, a join neither.
+        assert!(rt.engine.store().is_none());
+        rt.join(U, steve(), 100_001);
+        assert!(rt.engine.store().is_none());
+        drop(other);
+    }
+
+    #[test]
+    fn database_held_elsewhere_waits_then_plans_for_online_players() {
+        let path = std::env::temp_dir().join(format!("pumbo-perms-pumpkin-late-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(format!("{}.lock", path.display()));
+        // Steve in `group`, as the database on disk says.
+        let opened = |group: &str, now: u64| -> Result<(DbLock, Engine), String> {
+            let lock = DbLock::acquire(&path, now).map_err(|e| e.to_string())?;
+            let cfg = Config::default();
+            let mut e = Engine::in_memory(cfg.core(), Lang::load(&crate::BUNDLES, "en", None).0);
+            let mut d = e.perms.create_group(group).unwrap();
+            let parent = pumbo_perms_core::model::ParentNode {
+                group: group.into(),
+                context: pumbo_perms_core::context::Contexts::global(),
+                expiry: None,
+            };
+            d.merge(e.perms.edit_user(U, "Steve", |d| d.add_parent(parent)).1);
+            e.commit(&d, None).unwrap();
+            Ok((lock, e))
+        };
+        // A killed server left its lock; the restart comes 1 s later.
+        std::mem::forget(DbLock::acquire(&path, 0).unwrap());
+        let cfg = Config::default();
+        let lang = Lang::load(&crate::BUNDLES, "en", None).0;
+        let engine = Engine::new(Err(pumbo_common::store::StoreError::new("held")), cfg.core(), lang);
+        let mut rt = Rt::with_lock(String::new(), cfg, engine, false, None, 1_000);
+        assert!(join(&mut rt, U, 1_000).is_empty());
+        let (first, plans, _) = rt.import_pass(Vec::new(), None, 1_000);
+        assert!(!first && plans.is_empty() && !rt.ready, "no first pass on an empty engine");
+        assert!(rt.retry_database(11_000, |_| opened("vip", 11_000)).is_empty());
+        assert!(!rt.import_pass(Vec::new(), None, 11_000).0 && !rt.ready && rt.lock.is_none());
+        // The lock went stale: the database opens and the first pass sets it all.
+        assert!(rt.retry_database(31_000, |_| opened("vip", 31_000)).is_empty(), "not ready yet");
+        assert!(rt.lock.is_some() && rt.engine.broken.is_none());
+        let (first, plans, _) = rt.import_pass(Vec::new(), None, 31_000);
+        assert!(first && ops(&mut rt, plans, U).contains(&Op::Set("group.vip".into(), true)));
+        // Another instance takes it over and changes Steve; when it lets go, the
+        // database opens here again and the players get what it holds now.
+        let other = DbLock::acquire(&path, 61_000).unwrap();
+        rt.refresh_lock(61_000 + 1);
+        assert!(rt.lock.is_none() && rt.engine.store().is_none());
+        drop(other);
+        let now = 61_000 + LOCK_RETRY_MS + 1;
+        let plans = rt.retry_database(now, |_| opened("mvp", now));
+        assert!(ops(&mut rt, plans, U).contains(&Op::Set("group.mvp".into(), true)));
+    }
+
+    #[test]
+    fn failed_open_under_lock_is_tried_again() {
+        let path = std::env::temp_dir().join(format!("pumbo-perms-pumpkin-reopen-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(format!("{}.lock", path.display()));
+        let cfg = Config::default();
+        let lang = Lang::load(&crate::BUNDLES, "en", None).0;
+        let engine = Engine::new(Err(pumbo_common::store::StoreError::new("cannot open")), cfg.core(), lang);
+        let lock = DbLock::acquire(&path, 0).unwrap();
+        let mut rt = Rt::with_lock(String::new(), cfg, engine, false, Some(lock), 0);
+        let reopen = |now: u64| -> Result<(DbLock, Engine), String> {
+            let lock = DbLock::acquire(&path, now).map_err(|e| e.to_string())?;
+            Ok((lock, Engine::in_memory(Config::default().core(), Lang::load(&crate::BUNDLES, "en", None).0)))
+        };
+        rt.retry_database(READ_RETRY_MS, |_| reopen(READ_RETRY_MS));
+        assert!(rt.engine.writable() && rt.lock.is_some(), "{:?}", rt.engine.broken);
+    }
+
+    #[test]
+    fn pumpkin_import_reply_is_truthful() {
+        let mut rt = rt();
+        let snap = pumbo_perms_core::export::parse(
+            r#"{"format":"pumboperms","version":1,"groups":[{"name":"mod"}],
+                "by-name":[{"name":"Mod1","data":{"parents":[{"group":"mod"}]}}]}"#,
+        )
+        .unwrap();
+        rt.import_pass(vec![("proxy".into(), Answer::Data("f1".into(), snap))], None, 0);
+        let said = rt.logs.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(
+            said.contains("known only by name and get nothing here; give them their ranks with /pp: Mod1"),
+            "{said}"
+        );
+        assert!(!said.contains("premium"), "{said}");
+        // Mod1 joins: nothing, and the log says why.
+        rt.logs.clear();
+        let plans = rt.join(U, Online { name: "Mod1".into(), ..steve() }, 1);
+        rt.applied(plans);
+        assert!(rt.engine.perms.user(U).is_none_or(|u| u.data.parents.is_empty()));
+        assert!(rt.logs.iter().any(|(warn, l)| *warn && l.contains("Mod1 joined and got nothing")), "{:?}", rt.logs);
     }
 
     #[test]

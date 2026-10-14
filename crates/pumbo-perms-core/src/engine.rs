@@ -1,14 +1,15 @@
 //! The running plugin without its platform: the database, its store, the
 //! config and the messages, and the operations the platform calls.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pumbo_common::lang::Lang;
 use pumbo_common::store::StoreError;
 
 use crate::config::CoreCfg;
 use crate::context::Query;
-use crate::perms::{Decision, Dirty, Perms};
+use crate::merge::Ledger;
+use crate::perms::{Decision, Dirty, Perms, Saved};
 use crate::store::{LogEntry, PermsStore};
 
 /// The operator fallback covers only these nodes: every other Pumbo plugin
@@ -25,6 +26,14 @@ pub struct Engine {
     /// Server groups of each server the platform knows (PumboProx
     /// `server-group`); empty on a single server, where `context` says it.
     pub server_groups: BTreeMap<String, Vec<String>>,
+    /// The data before the change in progress ([`Engine::begin`]): a change
+    /// that cannot be saved is undone from it, without reading the disk.
+    before: Option<Saved>,
+    /// The import ledgers as stored (a damaged one as its error), read once:
+    /// every join looks at them.
+    ledgers: Result<BTreeMap<String, Result<Ledger, String>>, String>,
+    /// Sources whose damaged ledger a join already reported.
+    pub(crate) reported: BTreeSet<String>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -37,8 +46,17 @@ impl Engine {
     /// Loads the database. Without a usable store the engine still answers
     /// (nobody has anything, the platform defaults decide) but refuses changes.
     pub fn new(store: Result<PermsStore, StoreError>, cfg: CoreCfg, lang: Lang) -> Self {
-        let mut engine =
-            Self { perms: Perms::new(), store: None, cfg, lang, broken: None, server_groups: BTreeMap::new() };
+        let mut engine = Self {
+            perms: Perms::new(),
+            store: None,
+            cfg,
+            lang,
+            broken: None,
+            server_groups: BTreeMap::new(),
+            before: None,
+            ledgers: Err("no database".into()),
+            reported: BTreeSet::new(),
+        };
         match store {
             Ok(store) => match store.load() {
                 Ok((perms, dirty)) => {
@@ -50,11 +68,35 @@ impl Engine {
                     }
                     engine.store = Some(store);
                 }
-                Err(e) => engine.broken = Some(e.to_string()),
+                Err(e) => {
+                    // Kept for `retry_open`; changes are refused meanwhile.
+                    engine.broken = Some(e.to_string());
+                    engine.store = Some(store);
+                }
             },
             Err(e) => engine.broken = Some(e.to_string()),
         }
+        engine.load_ledgers();
         engine
+    }
+
+    /// Reads the import ledgers from the database into memory.
+    fn load_ledgers(&mut self) {
+        self.reported.clear();
+        self.ledgers = match &self.store {
+            Some(store) => store
+                .ledgers()
+                .map(|all| {
+                    all.into_iter()
+                        .map(|(s, l)| {
+                            let l = l.map_err(|e| format!("the import ledger of {s} is damaged: {e}"));
+                            (s, l)
+                        })
+                        .collect()
+                })
+                .map_err(|e| e.to_string()),
+            None => Err(self.broken.clone().unwrap_or_else(|| "no database".into())),
+        };
     }
 
     /// An engine on a fresh in-memory store (tests).
@@ -111,27 +153,149 @@ impl Engine {
         (level > 0 && op_level >= level && node.starts_with(OWN_NODES)).then_some(true)
     }
 
-    /// Saves a change with its log entry. On failure the database is read back
-    /// from the store, so memory never shows what is not on disk.
-    pub fn commit(&mut self, dirty: &Dirty, log: Option<&LogEntry>) -> Result<(), String> {
-        if let Some(why) = self.broken.clone() {
-            self.reload_data();
-            return Err(why);
+    /// Remembers the data before a change, for [`Engine::rollback`].
+    pub fn begin(&mut self) {
+        self.before = Some(self.perms.saved());
+    }
+
+    /// Undoes the change since [`Engine::begin`] in memory (nothing when no
+    /// change began).
+    pub fn rollback(&mut self) {
+        if let Some(saved) = self.before.take() {
+            self.perms.restore(saved);
         }
-        let Some(store) = &self.store else {
-            return Err("no database".into());
+    }
+
+    /// Forgets the data kept by [`Engine::begin`].
+    pub fn end(&mut self) {
+        self.before = None;
+    }
+
+    /// Saves a change with its log entry. On failure the change is undone in
+    /// memory ([`Engine::begin`]), so memory never shows what is not on disk.
+    pub fn commit(&mut self, dirty: &Dirty, log: Option<&LogEntry>) -> Result<(), String> {
+        let max = self.cfg.log.max_entries;
+        self.save(|store, perms| store.commit(perms, dirty, log, max))
+    }
+
+    /// [`Engine::commit`] of an import, with the ledger of its source in the
+    /// same transaction.
+    pub fn commit_import(
+        &mut self,
+        dirty: &Dirty,
+        log: Option<&LogEntry>,
+        source: &str,
+        ledger: &Ledger,
+    ) -> Result<(), String> {
+        let max = self.cfg.log.max_entries;
+        self.save(|store, perms| store.commit_import(perms, dirty, log, max, (source, ledger)))?;
+        if let Ok(all) = &mut self.ledgers {
+            if *ledger == Ledger::default() {
+                all.remove(source);
+            } else {
+                all.insert(source.to_string(), Ok(ledger.clone()));
+            }
+            self.reported.remove(source);
+        }
+        Ok(())
+    }
+
+    fn save(&mut self, write: impl FnOnce(&PermsStore, &Perms) -> Result<(), StoreError>) -> Result<(), String> {
+        let result = match (&self.broken, &self.store) {
+            (Some(why), _) => Err(why.clone()),
+            (None, None) => Err("no database".into()),
+            (None, Some(store)) => write(store, &self.perms).map_err(|e| e.to_string()),
         };
-        match store.commit(&self.perms, dirty, log, self.cfg.log.max_entries) {
-            Ok(()) => Ok(()),
+        if result.is_err() {
+            self.rollback();
+        }
+        self.end();
+        result
+    }
+
+    /// What `source` added at its last import; an error for a ledger that
+    /// cannot be read (the import of that source waits for an admin).
+    pub fn ledger(&self, source: &str) -> Result<Ledger, String> {
+        match &self.ledgers {
+            Ok(all) => all.get(source).cloned().unwrap_or_else(|| Ok(Ledger::default())),
+            Err(why) => Err(why.clone()),
+        }
+    }
+
+    /// Every source with a ledger (a damaged one as its error).
+    pub fn ledgers(&self) -> Vec<(&str, Result<&Ledger, &str>)> {
+        match &self.ledgers {
+            Ok(all) => all.iter().map(|(s, l)| (s.as_str(), l.as_ref().map_err(String::as_str))).collect(),
+            Err(_) if self.store.is_none() => Vec::new(),
+            Err(why) => vec![("", Err(why.as_str()))],
+        }
+    }
+
+    /// Moves the import ledgers of a schema 1 database from `dir` (the
+    /// platform's `imports/` folder) into the database. Returns the line to
+    /// log, if any. A failure leaves the database refusing changes: the
+    /// ledgers would otherwise look empty and every import would add all
+    /// again.
+    pub fn migrate_ledgers(&mut self, dir: &std::path::Path) -> Option<String> {
+        let migrated = self.store.as_ref()?.migrate_ledgers(dir);
+        match migrated {
+            Ok(None) => None,
+            Ok(Some(moved)) => {
+                self.load_ledgers();
+                Some(format!(
+                    "PumboPerms: database schema 1 -> {}: {} import ledgers moved into the database{}",
+                    crate::store::SCHEMA,
+                    moved.len(),
+                    if moved.is_empty() { String::new() } else { format!(" ({})", moved.join(", ")) }
+                ))
+            }
             Err(e) => {
-                self.reload_data();
-                Err(e.to_string())
+                let why = format!("cannot move the import ledgers into the database: {e}");
+                self.broken = Some(why.clone());
+                self.ledgers = Err(why.clone());
+                Some(format!("PumboPerms: {why}"))
             }
         }
     }
 
-    /// Reads the database again (after a failed write, or to throw away
-    /// changes made in memory).
+    /// While the database is broken, tries to read it again: on success
+    /// changes work again. Returns whether it recovered. The platform calls
+    /// this now and then (not at every tick: a load reads everything).
+    pub fn retry_open(&mut self) -> bool {
+        let (Some(_), Some(store)) = (&self.broken, &self.store) else { return false };
+        // Ledgers still in files: the next start moves them first.
+        if store.schema().is_ok_and(|v| v < crate::store::SCHEMA) {
+            return false;
+        }
+        match store.load() {
+            Ok((perms, dirty)) => {
+                if !dirty.is_empty()
+                    && let Err(e) = store.commit(&perms, &dirty, None, 0)
+                {
+                    self.broken = Some(e.to_string());
+                    return false;
+                }
+                self.perms = perms;
+                self.broken = None;
+                self.load_ledgers();
+                true
+            }
+            Err(e) => {
+                self.broken = Some(e.to_string());
+                false
+            }
+        }
+    }
+
+    /// Lets go of the database file (another instance owns it now): nothing
+    /// is written to it any more and changes are refused.
+    pub fn close(&mut self, why: String) {
+        self.store = None;
+        self.ledgers = Err(why.clone());
+        self.broken = Some(why);
+    }
+
+    /// Reads the database again.
     pub fn reload_data(&mut self) {
         if let Some(store) = &self.store {
             match store.load() {
@@ -141,16 +305,23 @@ impl Engine {
         }
     }
 
-    /// Records a joining player's name.
-    pub fn seen(&mut self, uuid: &str, name: &str) -> Result<(), String> {
-        if self.perms.seen(uuid, name)
+    /// Records a joining player's name (`online`: an account the host checked
+    /// with Mojang). Returns the line to log when the name leaves a UUID that
+    /// still has groups, permissions or meta.
+    pub fn seen(&mut self, uuid: &str, name: &str, online: bool) -> Result<Option<String>, String> {
+        let (changed, left) = self.perms.seen(uuid, name, online);
+        if changed
+            && self.broken.is_none()
             && let Some(store) = &self.store
-            && let Some(known) = self.perms.find_user(uuid)
+            && let Some(known) = self.perms.find_user(name)
         {
-            let known = crate::perms::KnownName { name: name.to_string(), ..known };
             store.save_name(&known).map_err(|e| e.to_string())?;
         }
-        Ok(())
+        Ok(left.map(|old| {
+            format!(
+                "PumboPerms: the name {name} moved from {old} to {uuid}; the groups, permissions and meta of {old} stay with {old}"
+            )
+        }))
     }
 
     /// Drops expired nodes and saves that. Returns whether something was due
@@ -161,8 +332,13 @@ impl Engine {
         if self.perms.next_expiry().is_none_or(|t| t > now) {
             return (false, Ok(()));
         }
+        self.begin();
         let dirty = self.perms.expire(now);
-        (true, if dirty.is_empty() { Ok(()) } else { self.commit(&dirty, None) })
+        if dirty.is_empty() {
+            self.end();
+            return (true, Ok(()));
+        }
+        (true, self.commit(&dirty, None))
     }
 
     /// Whether changes can be saved.
@@ -226,6 +402,53 @@ mod tests {
         assert_eq!(e.decide(U, "pumbo.bans.ban", "", 4, 0), None);
         assert_eq!(e.decide(U, "minecraft:command.op", "", 4, 0), None);
         assert_eq!(e.decide(U, "pumbo.perms.reload", "", 3, 0), Some(true), "operators can still repair it with /pp");
+    }
+
+    #[test]
+    fn broken_clears_after_reads_recover() {
+        let backend = pumbo_common::store::FaultyBackend::default();
+        let reads = backend.fail_reads.clone();
+        let store = PermsStore::new(pumbo_common::store::Store::new(backend)).unwrap();
+        reads.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+        let mut e = Engine::new(Ok(store), CoreCfg::default(), Lang::load(&[COMMON], "en", None).0);
+        assert!(e.broken.is_some() && !e.retry_open(), "{:?}", e.broken);
+        reads.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert!(e.retry_open());
+        assert!(e.broken.is_none() && e.writable());
+        assert!(!e.retry_open(), "nothing to recover");
+    }
+
+    #[test]
+    fn seen_writes_nothing_while_broken() {
+        let mut e = engine();
+        e.broken = Some("taken over".into());
+        e.seen(U, "Steve", true).unwrap();
+        e.broken = None;
+        e.reload_data();
+        assert!(e.perms.find_user("Steve").is_none());
+    }
+
+    #[test]
+    fn ledger_files_migrate_to_table() {
+        use pumbo_common::store::{Store, WriteExt};
+        // `{data}/imports/` on the proxy, `<data folder>/imports/` on Pumpkin.
+        for layout in ["proxy-data", "pumpkin-plugins-data-pumboperms"] {
+            let dir = std::env::temp_dir().join(format!("pumbo-perms-ledgers-{layout}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("imports")).unwrap();
+            let ledger = Ledger { fingerprint: "f1".into(), at: 5, ..Ledger::default() };
+            std::fs::write(dir.join("imports/file.json"), serde_json::to_string_pretty(&ledger).unwrap()).unwrap();
+            let store = Store::open(dir.join("perms.redb")).unwrap();
+            store.write(|tx| tx.put_u64(crate::store::META, "schema", 1)).unwrap();
+            let mut e = Engine::new(PermsStore::new(store), CoreCfg::default(), Lang::load(&[COMMON], "en", None).0);
+            let line = e.migrate_ledgers(&dir.join("imports")).unwrap();
+            assert!(line.contains("schema 1 -> 2") && line.contains("file"), "{line}");
+            assert_eq!(e.ledger("file").unwrap(), ledger);
+            assert!(dir.join("imports/file.json.migrated").exists());
+            assert_eq!(e.migrate_ledgers(&dir.join("imports")), None);
+            drop(e);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

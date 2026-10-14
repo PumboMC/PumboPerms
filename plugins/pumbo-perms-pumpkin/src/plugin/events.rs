@@ -117,7 +117,7 @@ impl EventHandler<PlayerPermissionCheckEvent> for Check {
             rt.answered += 1;
             let (name, world, op) =
                 rt.online.get(&uuid).map(|o| (o.name.clone(), o.world.clone(), o.op_level)).unwrap_or_default();
-            if node == crate::COMMAND_NODE {
+            if node == pumbo_perms_core::host::command_node() {
                 return Some(command::allowed_any(&mut rt.engine, &Who::player(&name, &uuid, op, &world), now));
             }
             let canonical = pumbo_perms_core::node::normalize(&node).ok()?;

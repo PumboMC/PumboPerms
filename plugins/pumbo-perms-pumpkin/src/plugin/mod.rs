@@ -11,8 +11,10 @@ mod state;
 use std::cell::RefCell;
 
 use pumbo_common::clock::now_ms;
-use pumbo_common::store::Store;
+use pumbo_common::lang::Lang;
+use pumbo_common::store::{DbLock, Store, StoreError};
 use pumbo_perms_core::command::ACTIONS;
+use pumbo_perms_core::config::CoreCfg;
 use pumbo_perms_core::engine::Engine;
 use pumbo_perms_core::store::PermsStore;
 
@@ -21,7 +23,7 @@ use api::{
     SchedulerExt, StringType,
 };
 
-use crate::{COMMAND_NODE, PLUGIN_NAME};
+use crate::PLUGIN_NAME;
 
 thread_local! {
     /// For `ipc`, which gets no server handle.
@@ -29,6 +31,22 @@ thread_local! {
 }
 
 pub struct PumboPerms;
+
+/// Takes `perms.redb.lock`, then opens the database and moves the import
+/// ledgers of an older one into it. A second copy of the plugin on the same
+/// folder gets an error instead of a second writer on the file.
+pub fn open_database(dir: &str, cfg: CoreCfg, lang: Lang, now: u64) -> Result<(DbLock, Engine), String> {
+    let path = format!("{dir}/perms.redb");
+    let lock = DbLock::acquire(&path, now).map_err(|e| e.to_string())?;
+    let opening = now_ms();
+    let store = Store::open(&path).and_then(PermsStore::new);
+    let mut engine = Engine::new(store, cfg, lang);
+    api::info(&format!("PumboPerms: database opened in {} ms", now_ms().saturating_sub(opening)));
+    if let Some(line) = engine.migrate_ledgers(std::path::Path::new(&format!("{dir}/imports"))) {
+        api::info(&line);
+    }
+    Ok((lock, engine))
+}
 
 impl Plugin for PumboPerms {
     fn new() -> Self {
@@ -63,8 +81,12 @@ impl Plugin for PumboPerms {
                 api::warn(&format!("PumboPerms: config: {w}"));
             }
         }
-        let store = Store::open(format!("{dir}/perms.redb")).and_then(PermsStore::new);
-        let engine = Engine::new(store, cfg.core(), lang);
+        let now = now_ms();
+        let (lock, engine) = match open_database(&dir, cfg.core(), lang.clone(), now) {
+            Ok((lock, engine)) => (Some(lock), engine),
+            // Started without the database; the periodic task tries again.
+            Err(why) => (None, Engine::new(Err(StoreError::new(why)), cfg.core(), lang)),
+        };
         if let Some(why) = &engine.broken {
             api::error(&format!("PumboPerms: the database is not available, changes are refused: {why}"));
         }
@@ -79,7 +101,7 @@ impl Plugin for PumboPerms {
             engine.perms.users().filter(|u| !u.data.is_empty()).count(),
             engine.perms.tracks().count()
         );
-        state::install(state::Rt::new(dir, cfg, engine, check_event));
+        state::install(state::Rt::with_lock(dir, cfg, engine, check_event, lock, now));
         state::flush_logs();
         SERVER.with(|s| *s.borrow_mut() = Some(context.get_server()));
 
@@ -91,7 +113,8 @@ impl Plugin for PumboPerms {
             .iter()
             .map(|a| (format!("{PLUGIN_NAME}:{a}"), format!("PumboPerms: /pp {}", a.replace('.', " "))))
             .collect();
-        nodes.push((COMMAND_NODE.to_string(), "PumboPerms: see /pp (any PumboPerms permission)".into()));
+        let command_node = pumbo_perms_core::host::command_node();
+        nodes.push((command_node.clone(), "PumboPerms: see /pp (any PumboPerms permission)".into()));
         for (node, description) in nodes {
             let _ = context.register_permission(&Permission { node, description, default, children: vec![] });
         }
@@ -106,7 +129,7 @@ impl Plugin for PumboPerms {
                     .execute(commands::Pp { with_args: true }),
             )
             .execute(commands::Pp { with_args: false });
-        context.register_command(command, COMMAND_NODE);
+        context.register_command(command, &command_node);
 
         context.register_event_handler::<api::PlayerJoinEvent, _>(events::Join, EventPriority::Lowest, false)?;
         context.register_event_handler::<api::PlayerLeaveEvent, _>(events::Leave, EventPriority::Lowest, false)?;

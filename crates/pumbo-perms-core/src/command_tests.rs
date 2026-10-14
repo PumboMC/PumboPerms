@@ -7,7 +7,6 @@ use crate::command::{self, Action, Env, SourceMode, Who, import_pending, import_
 use crate::config::CoreCfg;
 use crate::engine::Engine;
 use crate::export;
-use crate::merge::Ledger;
 use crate::perms::KnownName;
 use crate::ui::{Click, Text};
 
@@ -19,14 +18,14 @@ const PLATFORM: Bundle = Bundle { name: "test", files: &[("en", "prefix: \"&#f28
 fn engine() -> Engine {
     let lang = Lang::load(&[COMMON, LANG, PLATFORM], "en", None).0;
     let mut e = Engine::in_memory(CoreCfg::default(), lang);
-    e.seen(STEVE, "Steve").unwrap();
-    e.seen(ALEX, "Alex").unwrap();
+    e.seen(STEVE, "Steve", true).unwrap();
+    e.seen(ALEX, "Alex", true).unwrap();
     e
 }
 
 fn online(name: &str) -> Option<KnownName> {
     match name.to_lowercase().as_str() {
-        "steve" => Some(KnownName { uuid: STEVE.into(), name: "Steve".into() }),
+        "steve" => Some(KnownName { uuid: STEVE.into(), name: "Steve".into(), online: true }),
         _ => None,
     }
 }
@@ -312,7 +311,7 @@ fn completion() {
         if line.ends_with(' ') {
             args.push(String::new());
         }
-        command::complete(e, &con, &args, &[KnownName { uuid: STEVE.into(), name: "Steve".into() }], 0)
+        command::complete(e, &con, &args, &[KnownName { uuid: STEVE.into(), name: "Steve".into(), online: true }], 0)
     };
     assert!(c(&mut e, "us").contains(&"user".to_string()));
     assert_eq!(c(&mut e, "user S"), vec!["Steve"]);
@@ -443,8 +442,8 @@ fn stored_values_render_as_plain_text() {
 fn nbsp_name_completes_as_one_word() {
     let mut e = engine();
     let u2 = "00000000-0000-0000-0000-0000000000c2";
-    e.seen(u2, "Owner\u{a0}clear").unwrap();
-    let online = [KnownName { uuid: u2.into(), name: "Owner\u{a0}clear".into() }];
+    e.seen(u2, "Owner\u{a0}clear", false).unwrap();
+    let online = [KnownName { uuid: u2.into(), name: "Owner\u{a0}clear".into(), online: false }];
     let got = command::complete(&mut e, &Who::console(), &["user".into(), String::new()], &online, 0);
     assert_eq!(got, vec![u2.to_string()]);
     assert_eq!(split_args(&format!("user {} ", got[0])).len(), 2);
@@ -455,8 +454,8 @@ fn nbsp_name_completes_as_one_word() {
 fn click_from_members_view_runs_only_info() {
     let mut e = engine();
     let (owner, attacker) = ("00000000-0000-0000-0000-0000000000c1", "00000000-0000-0000-0000-0000000000c2");
-    e.seen(owner, "Owner").unwrap();
-    e.seen(attacker, "Owner\u{a0}clear").unwrap();
+    e.seen(owner, "Owner", false).unwrap();
+    e.seen(attacker, "Owner\u{a0}clear", false).unwrap();
     console(&mut e, "creategroup admin");
     console(&mut e, "creategroup vip");
     console(&mut e, "user Owner parent add admin");
@@ -492,18 +491,136 @@ fn pending_import_binds_only_online() {
             "by-name":[{"name":"Mod1","data":{"parents":[{"group":"mod"}]}}]}"#,
     )
     .unwrap();
-    let (_, ledger) =
-        import_source(&mut e, &Who::console(), "file", Ok(("f".into(), snap)), &Ledger::default(), SourceMode::Run, 1);
-    let mut ledger = ledger.unwrap();
+    import_source(&mut e, &Who::console(), "file", Ok(("f".into(), snap)), SourceMode::Run, 1);
     let (offline, online) = ("00000000-0000-0000-0000-0000000000d1", "00000000-0000-0000-0000-0000000000d2");
-    let out = import_pending(&mut e, "file", &mut ledger, offline, "Mod1", false, 2).unwrap();
+    let out = import_pending(&mut e, "file", offline, "Mod1", false, 2).unwrap();
     assert!(!out.changed && out.reply.plain().contains("offline-mode"), "{}", out.reply.plain());
     assert!(e.perms.user(offline).is_none_or(|u| u.data.is_empty()));
-    assert_eq!(ledger.pending.len(), 1, "still waiting");
-    let out = import_pending(&mut e, "file", &mut ledger, online, "Mod1", true, 3).unwrap();
+    assert_eq!(e.ledger("file").unwrap().pending.len(), 1, "still waiting");
+    let out = import_pending(&mut e, "file", online, "Mod1", true, 3).unwrap();
     assert!(out.changed);
     assert!(e.perms.user(online).unwrap().data.parents.iter().any(|p| p.group == "mod"));
-    assert!(ledger.pending.is_empty());
+    assert!(e.ledger("file").unwrap().pending.is_empty());
+}
+
+/// A source with `Mod1` in `mod` by nickname only.
+fn mod1_source() -> export::Snapshot {
+    export::parse(
+        r#"{"format":"pumboperms","version":1,"groups":[{"name":"mod"}],
+            "by-name":[{"name":"Mod1","data":{"parents":[{"group":"mod"}]}}]}"#,
+    )
+    .unwrap()
+}
+
+fn in_mod(e: &Engine, uuid: &str) -> bool {
+    e.perms.user(uuid).is_some_and(|u| u.data.parents.iter().any(|p| p.group == "mod"))
+}
+
+#[test]
+fn reimport_keeps_first_resolved_uuid() {
+    let mut e = engine();
+    let (first, second) = ("00000000-0000-0000-0000-0000000000d1", "00000000-0000-0000-0000-0000000000d2");
+    e.seen(first, "Mod1", true).unwrap();
+    let out = import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
+    assert!(out.reply.plain().contains(&format!("Mod1 -> {first}")), "{}", out.reply.plain());
+    assert!(in_mod(&e, first));
+    // The name goes to another account; the source is imported again.
+    e.seen(second, "Mod1", true).unwrap();
+    let mut changed = mod1_source();
+    changed.groups[0].weight = 5;
+    let out = import_source(&mut e, &Who::console(), "file", Ok(("f2".into(), changed)), SourceMode::Run, 2);
+    assert!(out.reply.plain().contains(&format!("Mod1 -> {first}")), "{}", out.reply.plain());
+    assert!(in_mod(&e, first) && !in_mod(&e, second));
+    let (log, _) = e.store().unwrap().log_page(1, 1).unwrap();
+    assert!(log[0].action.contains(&format!("Mod1 -> {first}")), "{:?}", log[0]);
+}
+
+#[test]
+fn offline_name_does_not_resolve_import() {
+    let mut e = engine();
+    let offline = "00000000-0000-0000-0000-0000000000d1";
+    e.seen(offline, "Mod1", false).unwrap();
+    let out = import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
+    assert!(out.reply.plain().contains("known only by name"), "{}", out.reply.plain());
+    assert!(!in_mod(&e, offline));
+    assert_eq!(e.ledger("file").unwrap().pending.len(), 1);
+}
+
+#[test]
+fn pending_on_join_same_on_both_adapters() {
+    let player = "00000000-0000-0000-0000-0000000000d1";
+    for names_checked in [true, false] {
+        let mut e = engine();
+        e.cfg.names_checked = names_checked;
+        import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
+        // Pumpkin always reports the account as offline; the proxy as Mojang says.
+        let out = command::on_join(&mut e, player, "Mod1", false, 2);
+        assert!(out.len() == 1 && !out[0].changed && !in_mod(&e, player), "{out:?}");
+        assert!(out[0].reply.plain().contains("got nothing"), "{:?}", out[0].reply.plain());
+        assert_eq!(e.ledger("file").unwrap().pending.len(), 1);
+    }
+    let mut e = engine();
+    import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
+    let out = command::on_join(&mut e, player, "Mod1", true, 2);
+    assert!(out.len() == 1 && out[0].changed && in_mod(&e, player), "{out:?}");
+    assert!(command::on_join(&mut e, player, "Mod1", true, 3).is_empty(), "nothing waits any more");
+}
+
+#[test]
+fn pumpkin_import_reply_names_players_who_get_nothing() {
+    let mut e = engine();
+    e.cfg.names_checked = false;
+    let out = import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
+    let reply = out.reply.plain();
+    assert!(reply.contains("get nothing here; give them their ranks with /pp: Mod1"), "{reply}");
+    assert!(!reply.contains("premium"), "{reply}");
+}
+
+/// `ranks`: member, vip, mvp; `vip` temporary for Steve when `until` is set.
+fn ranks(e: &mut Engine, first: &str, until: Option<&str>) {
+    for g in [first, "vip", "mvp"] {
+        console(e, &format!("creategroup {g}"));
+    }
+    console(e, "createtrack ranks");
+    for g in [first, "vip", "mvp"] {
+        console(e, &format!("track ranks append {g}"));
+    }
+    if let Some(d) = until {
+        console(e, &format!("user Steve parent addtemp vip {d}"));
+    }
+}
+
+#[test]
+fn promote_keeps_expiry() {
+    let mut e = engine();
+    ranks(&mut e, "member", Some("30d"));
+    let end = e.perms.user(STEVE).unwrap().data.parents[0].expiry.unwrap();
+    let out = console(&mut e, "promote Steve ranks");
+    assert!(out.contains("vip → mvp") && out.contains("expires in 30d"), "{out}");
+    let parents = &e.perms.user(STEVE).unwrap().data.parents;
+    assert_eq!(parents.len(), 1, "{parents:?}");
+    assert_eq!((parents[0].group.as_str(), parents[0].expiry), ("mvp", Some(end)));
+}
+
+#[test]
+fn promote_skips_expired_rung() {
+    let mut e = engine();
+    ranks(&mut e, "member", Some("1h"));
+    // An hour later the temporary vip is over: Steve starts from the bottom.
+    let later = 1_000 + 3_600_000;
+    let out = run_as(&mut e, &Who::console(), "promote Steve ranks", later);
+    assert!(out.contains("is now member"), "{out}");
+    let parents = &e.perms.user(STEVE).unwrap().data.parents;
+    assert!(parents.iter().any(|p| p.group == "member" && p.expiry.is_none()), "{parents:?}");
+}
+
+#[test]
+fn promote_from_default_once() {
+    let mut e = engine();
+    ranks(&mut e, "default", None);
+    let out = console(&mut e, "promote Steve ranks");
+    assert!(out.contains("default → vip"), "{out}");
+    assert!(e.perms.user(STEVE).unwrap().data.parents.iter().any(|p| p.group == "vip"));
 }
 
 #[test]
@@ -568,8 +685,8 @@ fn dropped_wildcard_shows_in_permission_check() {
     assert!(!out.contains("not sent"), "only wildcards over the node: {out}");
 }
 
-/// Known bugs: each test shows the correct behaviour and is ignored until fixed.
-mod known_bugs {
+/// Re-imports, storage errors and subcommands that take only temporary entries.
+mod storage_and_import {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -588,7 +705,7 @@ mod known_bugs {
         let faults = Faults { reads: backend.fail_reads.clone(), writes: backend.fail_writes.clone() };
         let lang = Lang::load(&[COMMON, LANG, PLATFORM], "en", None).0;
         let mut e = Engine::new(PermsStore::new(Store::new(backend)), CoreCfg::default(), lang);
-        e.seen(STEVE, "Steve").unwrap();
+        e.seen(STEVE, "Steve", true).unwrap();
         (e, faults)
     }
 
@@ -604,17 +721,15 @@ mod known_bugs {
         .unwrap()
     }
 
-    fn import(e: &mut Engine, fingerprint: &str, snap: export::Snapshot, ledger: &Ledger) -> Ledger {
-        let (out, l) =
-            import_source(e, &Who::console(), "file", Ok((fingerprint.into(), snap)), ledger, SourceMode::Run, 1_000);
-        l.unwrap_or_else(|| panic!("import did not run: {}", out.reply.plain()))
+    fn import(e: &mut Engine, fingerprint: &str, snap: export::Snapshot) {
+        let out = import_source(e, &Who::console(), "file", Ok((fingerprint.into(), snap)), SourceMode::Run, 1_000);
+        assert!(out.changed, "import did not run: {}", out.reply.plain());
     }
 
     #[test]
-    #[ignore = "known bug, fixed in a following change"]
     fn reimport_keeps_tracks_inheritance_and_weight() {
         let mut e = engine();
-        let ledger = import(&mut e, "f1", ranks_source(""), &Ledger::default());
+        import(&mut e, "f1", ranks_source(""));
         console(&mut e, "createtrack ranks");
         for g in ["helper", "builder", "mod"] {
             console(&mut e, &format!("track ranks append {g}"));
@@ -623,7 +738,7 @@ mod known_bugs {
         console(&mut e, "group trial parent add builder");
         console(&mut e, "group builder setweight 20");
         assert_eq!(e.perms.track("ranks").unwrap().groups.len(), 3);
-        import(&mut e, "f2", ranks_source(r#",{"node":"a.new","value":true}"#), &ledger);
+        import(&mut e, "f2", ranks_source(r#",{"node":"a.new","value":true}"#));
         let track = e.perms.track("ranks").unwrap().groups.clone();
         let trial_inherits = e.perms.group("trial").unwrap().data.parents.iter().any(|p| p.group == "builder");
         let weight = e.perms.group("builder").unwrap().weight;
@@ -631,20 +746,18 @@ mod known_bugs {
     }
 
     #[test]
-    #[ignore = "known bug, fixed in a following change"]
     fn reimport_keeps_admin_temporary_parent() {
         let mut e = engine();
-        let ledger = import(&mut e, "f1", ranks_source(""), &Ledger::default());
+        import(&mut e, "f1", ranks_source(""));
         console(&mut e, "user Steve parent addtemp helper 1d");
         assert_eq!(e.perms.user(STEVE).unwrap().data.parents.len(), 2);
-        import(&mut e, "f2", ranks_source(r#",{"node":"a.new","value":true}"#), &ledger);
+        import(&mut e, "f2", ranks_source(r#",{"node":"a.new","value":true}"#));
         let parents = &e.perms.user(STEVE).unwrap().data.parents;
         assert!(parents.iter().any(|p| p.group == "helper" && p.expiry.is_some()), "{parents:?}");
         assert!(parents.iter().any(|p| p.group == "helper" && p.expiry.is_none()), "{parents:?}");
     }
 
     #[test]
-    #[ignore = "known bug, fixed in a following change"]
     fn import_log_cut_on_char_boundary() {
         for n in [600, 601] {
             let mut e = engine();
@@ -655,14 +768,13 @@ mod known_bugs {
                 "ż".repeat(n)
             ))
             .unwrap();
-            import(&mut e, "f1", snap, &Ledger::default());
+            import(&mut e, "f1", snap);
             let (log, _) = e.store().unwrap().log_page(1, 1).unwrap();
             assert!(log[0].action.len() <= 1000, "{n}: {} bytes", log[0].action.len());
         }
     }
 
     #[test]
-    #[ignore = "known bug, fixed in a following change"]
     fn noop_command_on_read_error_does_not_break_engine() {
         let (mut e, faults) = faulty_engine();
         faults.reads.store(u32::MAX, Ordering::SeqCst);
@@ -673,7 +785,6 @@ mod known_bugs {
     }
 
     #[test]
-    #[ignore = "known bug, fixed in a following change"]
     fn failed_commit_and_reload_restore_memory() {
         let (mut e, faults) = faulty_engine();
         console(&mut e, "creategroup vip");
@@ -684,7 +795,6 @@ mod known_bugs {
     }
 
     #[test]
-    #[ignore = "known bug, fixed in a following change"]
     fn parent_removetemp_keeps_permanent_parent() {
         let mut e = engine();
         console(&mut e, "creategroup vip");
@@ -697,7 +807,6 @@ mod known_bugs {
     }
 
     #[test]
-    #[ignore = "known bug, fixed in a following change"]
     fn meta_removetempprefix_keeps_permanent_prefix() {
         let mut e = engine();
         console(&mut e, "creategroup vip");
@@ -710,12 +819,68 @@ mod known_bugs {
     }
 
     #[test]
-    #[ignore = "known bug, fixed in a following change"]
     fn meta_unknown_affix_subcommand_is_refused() {
         let mut e = engine();
         console(&mut e, "creategroup vip");
         let out = console(&mut e, "group vip meta addfooprefix 10 x");
         assert!(out.contains("Unknown subcommand"), "{out}");
         assert!(e.perms.group("vip").unwrap().data.meta.is_empty());
+    }
+
+    #[test]
+    fn reimport_keeps_parent_removed_from_player_bound_at_join() {
+        let jeb = "00000000-0000-0000-0000-0000000000e1";
+        let source = |weight: i32| {
+            let mut snap = export::parse(
+                r#"{"format":"pumboperms","version":1,"groups":[{"name":"mod"}],
+                    "by-name":[{"name":"jeb_","data":{"parents":[{"group":"mod"}]}}]}"#,
+            )
+            .unwrap();
+            snap.groups[0].weight = weight;
+            snap
+        };
+        let mut e = engine();
+        import(&mut e, "f1", source(0));
+        e.seen(jeb, "Jeb_", true).unwrap();
+        assert!(command::on_join(&mut e, jeb, "Jeb_", true, 2).iter().any(|o| o.changed));
+        console(&mut e, "user Jeb_ parent remove mod");
+        assert!(!in_mod(&e, jeb));
+        let out = import_source(&mut e, &Who::console(), "file", Ok(("f2".into(), source(5))), SourceMode::Run, 3);
+        assert!(!in_mod(&e, jeb), "{}", out.reply.plain());
+        assert!(!out.reply.plain().contains("taken back"), "{}", out.reply.plain());
+    }
+
+    #[test]
+    fn reimport_adds_no_parent_in_deleted_group() {
+        let source = |members: &[(&str, &str)]| {
+            let users: Vec<String> = members
+                .iter()
+                .map(|(uuid, name)| {
+                    format!(r#"{{"uuid":"{uuid}","name":"{name}","data":{{"parents":[{{"group":"mod"}}]}}}}"#)
+                })
+                .collect();
+            export::parse(&format!(
+                r#"{{"format":"pumboperms","version":1,"groups":[{{"name":"mod"}},{{"name":"vip"}}],"users":[{}]}}"#,
+                users.join(",")
+            ))
+            .unwrap()
+        };
+        let mut e = engine();
+        import(&mut e, "f1", source(&[(STEVE, "Steve")]));
+        console(&mut e, "deletegroup mod");
+        assert!(e.perms.group("mod").is_none());
+        import(&mut e, "f2", source(&[(STEVE, "Steve"), (ALEX, "Alex")]));
+        assert!(e.perms.group("mod").is_none() && !in_mod(&e, ALEX) && !in_mod(&e, STEVE));
+    }
+
+    #[test]
+    fn damaged_ledger_reported_once_at_joins() {
+        let store = Store::in_memory();
+        store.write(|tx| tx.put(crate::store::IMPORTS, "file", b"{broken")).unwrap();
+        let lang = Lang::load(&[COMMON, LANG, PLATFORM], "en", None).0;
+        let mut e = Engine::new(PermsStore::new(store), CoreCfg::default(), lang);
+        let first = command::on_join(&mut e, STEVE, "Steve", true, 1);
+        assert!(first.len() == 1 && first[0].reply.plain().contains("damaged"), "{first:?}");
+        assert!(command::on_join(&mut e, ALEX, "Alex", true, 2).is_empty());
     }
 }

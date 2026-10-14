@@ -3,7 +3,7 @@
 
 use pumbo_common::config::{self, Check, Settings, Warning};
 use pumbo_common::lang::{Bundle, COMMON, Lang};
-use pumbo_perms_core::config::{CoreCfg, DefaultsCfg, LogCfg};
+use pumbo_perms_core::config::{CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
 use pumbo_perms_core::engine::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -28,22 +28,6 @@ pub struct Config {
     pub language: String,
     pub log: LogCfg,
     pub import: ImportCfg,
-}
-
-/// Taking over the proxy's `permissions.yml`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct ImportCfg {
-    /// Import `permissions.yml` at the first start.
-    pub enabled: bool,
-    /// Import it again whenever it changes (otherwise once).
-    pub follow: bool,
-}
-
-impl Default for ImportCfg {
-    fn default() -> Self {
-        Self { enabled: true, follow: false }
-    }
 }
 
 impl Default for Config {

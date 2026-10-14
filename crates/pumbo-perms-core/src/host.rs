@@ -108,9 +108,9 @@ fn namespace_wildcards<'a>(nodes: impl IntoIterator<Item = &'a str>) -> BTreeSet
     nodes.into_iter().filter_map(|n| n.split_once(':').map(|(ns, _)| format!("{ns}:*"))).collect()
 }
 
-/// `pumboperms:command`: whether `/pp` shows.
-fn command_node() -> String {
-    node::host_form(&pumbo_common::command::permission(crate::command::PLUGIN, "command"))
+/// `pumboperms:command`: whether `/pp` shows, as Pumpkin spells it.
+pub fn command_node() -> String {
+    node::host_form(crate::command::COMMAND_NODE)
 }
 
 /// What one player should have on the host: node (host form) -> value, from
@@ -264,7 +264,7 @@ pub fn decisions(e: &mut Engine, uuid: &str, server: &str, now: u64) -> Vec<(Str
     }
     let who = crate::command::Who { server: server.to_string(), ..crate::command::Who::player("", uuid, 0, "") };
     let visible = crate::command::allowed_any(e, &who, now);
-    out.push((pumbo_common::command::permission(crate::command::PLUGIN, "command"), visible));
+    out.push((crate::command::COMMAND_NODE.to_string(), visible));
     out.push((command_node(), visible));
     out.sort();
     out

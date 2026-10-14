@@ -7,7 +7,7 @@ PumboPerms on the PumboProx proxy is the permission and rank system of a whole n
 - Everything of [PumboPerms for Pumpkin](../pumbo-perms-pumpkin/README.md#features): groups, weights, wildcards, temporary nodes, prefixes, suffixes, meta, tracks, log, JSON export and import.
 - **One place for the network**: a change made with `/pp` on the proxy applies at once to proxy commands and to the servers behind it, without a restart.
 - **Contexts per server**: `server=lobby` limits a permission, group or prefix to one server, `group=<name>` to a server group of `pumboprox.yml` (`server-group`). Server and group names ignore letter case.
-- **Takes over `permissions.yml`** at the first start: groups, inheritance and players (also players written by nickname, who get their entries when they join with an online-mode account). An import only adds; conflicts go to `/pp log`; `/pp import undo file` takes it back.
+- **Takes over `permissions.yml`** at the first start: groups, inheritance and players (also players written by nickname, who get their entries when they join with an online-mode account). An import only adds; conflicts go to `/pp log`; importing the file again keeps the tracks, inheritance, weights and ranks you set since; `/pp import undo file` takes it back.
 - **Keeps the ranks while it is down**: when PumboPerms restarts, is reloaded, unloaded or cannot read its database, players online keep the permissions it gave them, and new logins wait (`on-load-failure: deny`) instead of falling back to `permissions.yml`, which still holds the ranks from before the takeover.
 
 ## How it works on PumboProx
@@ -66,10 +66,12 @@ At start the proxy sends PumboPerms its `permissions.yml` (groups with `permissi
 
 - an import only adds: a group or player entry that is already in PumboPerms stays; a different value is a conflict, kept as it was and listed in `/pp log`;
 - `server: { lobby: ... }` becomes `server=lobby`, `group: { minigames: ... }` becomes `group=minigames`, `-node` becomes `node = false`;
-- players written by nickname get their entries when they join with an online-mode (premium) account (`/pp log` notes it). Anyone can use a nickname on an offline-mode account, so such an account gets nothing; the entries keep waiting, the log names the player and the admin gives the rank by hand;
-- what the file added is remembered in `plugins/data/pumbo-perms/imports/file.json`, so `/pp import undo file` takes back exactly that.
+- players written by nickname go to the account that has the name and joined with an online-mode (premium) account, or get their entries when such an account joins (`/pp log` notes it with `nick -> UUID`). Anyone can use a nickname on an offline-mode account, so such an account gets nothing, also when it joined before the import; the entries keep waiting, the log and the import reply name the player and the admin gives the rank by hand. The first account a nickname went to keeps it at every later import, even when someone else has the name by then;
+- what the file added is remembered in the database (the ledger of `file`), so `/pp import undo file` takes back exactly that.
 
-The next start with the same file does nothing. When the file changed, the log says so; `/pp import preview file` shows what it would add and `/pp import run file` imports it (with `import.follow: true` this happens on its own).
+The next start with the same file does nothing. When the file changed, the log says so; `/pp import preview file` shows what it would add and take back, and `/pp import run file` imports it (with `import.follow: true` this happens on its own). A new import takes back only what the file no longer has and adds what is new: tracks, inheritance, weights and temporary ranks set with `/pp` stay, and an imported entry you removed with `/pp` does not come back.
+
+Coming from 0.1.2-beta, run `/pp export` first: the first start moves `imports/file.json` into `perms.redb` (the file is renamed to `file.json.migrated`), and 0.1.2-beta refuses the database after that. `/pp export` never overwrites a file and refuses to run while the database cannot be read; a broken database is read again once a minute.
 
 ## PumboPerms on the servers
 

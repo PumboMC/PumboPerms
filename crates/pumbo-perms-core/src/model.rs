@@ -149,10 +149,20 @@ impl Data {
         }
     }
 
-    /// Removes a parent in exactly these contexts (permanent and temporary).
-    pub fn remove_parent(&mut self, group: &str, context: &Contexts) -> bool {
+    /// Removes a parent in exactly these contexts: permanent and temporary,
+    /// or with `only_temporary` the temporary one.
+    pub fn remove_parent(&mut self, group: &str, context: &Contexts, only_temporary: bool) -> bool {
         let before = self.parents.len();
-        self.parents.retain(|p| !(p.group == group && &p.context == context));
+        self.parents
+            .retain(|p| !(p.group == group && &p.context == context && (!only_temporary || p.expiry.is_some())));
+        before != self.parents.len()
+    }
+
+    /// Removes exactly this parent (group, contexts and end time), not one an
+    /// admin added beside it.
+    pub fn remove_parent_exact(&mut self, parent: &ParentNode) -> bool {
+        let before = self.parents.len();
+        self.parents.retain(|p| p != parent);
         before != self.parents.len()
     }
 
@@ -220,11 +230,22 @@ impl Data {
     }
 
     /// Removes prefixes or suffixes with this priority (and this text, if given)
-    /// in these contexts. Returns how many.
-    pub fn remove_affix(&mut self, kind: MetaKind, priority: i32, value: Option<&str>, context: &Contexts) -> usize {
+    /// in these contexts, with `only_temporary` only temporary ones. Returns how many.
+    pub fn remove_affix(
+        &mut self,
+        kind: MetaKind,
+        priority: i32,
+        value: Option<&str>,
+        context: &Contexts,
+        only_temporary: bool,
+    ) -> usize {
         let before = self.meta.len();
         self.meta.retain(|m| {
-            !(m.kind == kind && m.priority == priority && &m.context == context && value.is_none_or(|v| m.value == v))
+            !(m.kind == kind
+                && m.priority == priority
+                && &m.context == context
+                && value.is_none_or(|v| m.value == v)
+                && (!only_temporary || m.expiry.is_some()))
         });
         before - self.meta.len()
     }
@@ -356,8 +377,8 @@ mod tests {
         assert_eq!(d.parents.len(), 2);
         d.set_parent("admin", &Contexts::global());
         assert_eq!(d.parents.iter().map(|p| p.group.as_str()).collect::<Vec<_>>(), vec!["admin"]);
-        assert!(d.remove_parent("admin", &Contexts::global()));
-        assert!(!d.remove_parent("admin", &Contexts::global()));
+        assert!(d.remove_parent("admin", &Contexts::global(), false));
+        assert!(!d.remove_parent("admin", &Contexts::global(), false));
 
         d.set_meta("color", "red", &Contexts::global(), None);
         d.set_meta("color", "blue", &Contexts::global(), None);
@@ -369,8 +390,8 @@ mod tests {
         assert_eq!(d.meta.len(), 2);
         assert!(d.add_affix(MetaKind::Prefix, 5, "[C]", &Contexts::global(), None, true));
         assert_eq!(d.meta.len(), 1);
-        assert_eq!(d.remove_affix(MetaKind::Prefix, 5, Some("[X]"), &Contexts::global()), 0);
-        assert_eq!(d.remove_affix(MetaKind::Prefix, 5, None, &Contexts::global()), 1);
+        assert_eq!(d.remove_affix(MetaKind::Prefix, 5, Some("[X]"), &Contexts::global(), false), 0);
+        assert_eq!(d.remove_affix(MetaKind::Prefix, 5, None, &Contexts::global(), false), 1);
     }
 
     #[test]
