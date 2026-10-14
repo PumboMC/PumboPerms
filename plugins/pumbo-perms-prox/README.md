@@ -12,7 +12,7 @@ PumboPerms on the PumboProx proxy is the permission and rank system of a whole n
 
 ## How it works on PumboProx
 
-PumboPerms is the proxy's permission provider (`pumbo:permissions`). When a player joins, the proxy asks PumboPerms once for all of the player's decisions: in the global context and in the context of every server. The proxy keeps that copy and answers every permission check from it, so checks never wait for the plugin. After every change (`/pp`, an import, a temporary node ending) PumboPerms sends the new decisions of the online players (`permissions.replace`); the proxy resends the command list and PumboBridge sets the new permissions on the player's server.
+PumboPerms is the proxy's permission provider (`pumbo:permissions`). When a player joins, the proxy asks PumboPerms once for all of the player's decisions: in the global context and in the context of every server. The proxy keeps that copy and answers every permission check from it, so checks never wait for the plugin. After every change (`/pp`, an import, a temporary node ending) PumboPerms sends the new decisions of the online players the change can reach (`permissions.replace`), 25 players at a time with a pause in between; the proxy resends the command list and PumboBridge sets the new permissions on the player's server.
 
 On a Pumpkin server the decisions arrive as permission attachments (PumboBridge, `perm-set`): Pumpkin's command permissions (`minecraft:command.gamemode`...), every namespaced permission in the player's data, `group.<name>` for every group the player inherits, and Pumbo permissions in Pumpkin's spelling (`pumbo.bans.ban` is also sent as `pumbobans:ban`, `pumbo.*` as `pumbobans:*` and the other Pumbo plugins). Pumpkin reads wildcards from the broadest one and an exact permission as a wildcard for everything below it, so a wildcard with a narrower one of another value below it is not sent (the exact permissions of the data below it are), and a catalog permission without its own decision below a permission set to true gets false. A permission set exactly also wins over a narrower wildcard: with `essentials:fly` true and `essentials:fly.*` false, Pumpkin gives true to a permission below it that the data does not name, and `permission check` shows "not sent to Pumpkin: essentials:fly hides essentials:fly.*". Update PumboBridge together with PumboPerms: an older PumboBridge does not list the Pumbo permissions. A PumboPerms on that server steps back while the proxy's PumboPerms rules (see "PumboPerms on the servers").
 
@@ -94,6 +94,16 @@ Plugins on such a server keep asking the local PumboPerms (`check`, `info`, `fil
 | `log.notify` | `true` | tell players with `pumbo.perms.log.notify` about changes |
 | `import.enabled` | `true` | import `permissions.yml` at the first start |
 | `import.follow` | `false` | import `permissions.yml` again whenever it changes |
+
+## Limits
+
+Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS is often two or three times slower, and the plugin runs as WebAssembly on the proxy, which adds to that. The proxy stops a plugin call after 200 ms of continuous work (`budget-ms`).
+
+- A change in a group every player inherits, with 300 players online on 10 servers, 20 groups of 50 permissions and 3000 more players in the database: about 30 ms for all 300 new sets. A change that reaches one player recomputes that player alone.
+- `permissions.yml` with 3000 players: about 30-45 ms for the first import with 100 players online and 15-20 ms to import it again after a change. Reading the file, the import and each group of 25 new sets are separate pieces of work for the budget. The import itself (one database transaction, about 15-30 ms of that) has been measured natively only, not yet as WebAssembly on the proxy.
+- A first join with 400 000 nicknames in the database: under 1 ms.
+- Memory: with the numbers above the test process grew by about 60 MB; the proxy's default `memory-mb: 256` leaves room. On the test network the proxy held about 60 MB (footprint) through a minute of joins and changes.
+- Load on the test network: 4 players sending 100 commands a second each on a server and 20 `/pp` changes a second, with 3000 players in `permissions.yml`: nobody was disconnected and no plugin call ran over the budget.
 
 ## Building
 

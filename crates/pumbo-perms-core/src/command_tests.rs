@@ -884,3 +884,89 @@ mod storage_and_import {
         assert!(command::on_join(&mut e, ALEX, "Alex", true, 2).is_empty());
     }
 }
+
+/// What a user gets at a place, comparable.
+fn decided(p: &mut crate::perms::Perms, uuid: &str, q: &crate::context::Query, now: u64) -> String {
+    let eff = p.effective(uuid, q, now);
+    let mut nodes: Vec<(&str, bool)> = eff.nodes().collect();
+    nodes.sort();
+    format!("{nodes:?} {:?} {} {:?} {:?} {:?}", eff.groups, eff.primary, eff.prefix, eff.suffix, eff.meta)
+}
+
+/// Decisions are kept per user and dropped only for the users a change can
+/// reach: after every kind of change the kept answer equals a fresh one.
+#[test]
+fn cache_follows_group_change() {
+    use crate::context::Query;
+    let mut e = engine();
+    const NEW: &str = "00000000-0000-0000-0000-00000000000c";
+    const SCOPED: &str = "00000000-0000-0000-0000-00000000000d";
+    e.seen(NEW, "Newbie", true).unwrap();
+    e.seen(SCOPED, "Scoped", true).unwrap();
+    let places = [Query::default(), Query::new("lobby", "hubs", "world"), Query::new("survival", "", "nether")];
+    let users = [STEVE, ALEX, NEW, SCOPED];
+    let steps = [
+        "creategroup vip",
+        "creategroup mod",
+        "group vip permission set a.b",
+        "user Steve parent add vip",
+        "user Alex parent add mod",
+        "user Scoped parent add vip server=lobby",
+        "group mod parent add vip",
+        "group vip permission set a.* false server=lobby",
+        "group default permission set d.x",
+        "user Newbie parent add later",
+        "creategroup later",
+        "group later permission set l.x",
+        "group mod parent add later",
+        "group vip meta setprefix 10 [V]",
+        "group mod meta addprefix 20 [M]",
+        "group vip meta set color gold",
+        "group mod setweight 5",
+        "group vip setweight 10",
+        "user Steve permission set fly true world=nether",
+        "group vip permission settemp t.x true 1m",
+        "user Alex parent addtemp vip 1m",
+        "createtrack ranks",
+        "track ranks append vip",
+        "track ranks append mod",
+        "user Newbie promote ranks",
+        "group vip rename vip2",
+        "group mod parent remove later",
+        "group default permission unset d.x",
+        "group later permission set group.vip2 false",
+        "deletegroup later",
+        "user Steve parent remove vip2",
+        "group vip2 permission clear",
+        "deletegroup mod",
+        "user Alex clear",
+        "creategroup base",
+        "group default parent add base",
+        "group base permission set b.x",
+        "group base permission settemp b.t true 1m",
+    ];
+    for (i, step) in steps.iter().enumerate() {
+        let now = 1_000 + i as u64;
+        for u in users {
+            for q in &places {
+                e.perms.effective(u, q, now);
+            }
+        }
+        let reply = console(&mut e, step);
+        // A copy starts without kept decisions.
+        let mut fresh = e.perms.clone();
+        for u in users {
+            for q in &places {
+                assert_eq!(
+                    decided(&mut e.perms, u, q, now),
+                    decided(&mut fresh, u, q, now),
+                    "after `{step}` ({reply}): {u} at {q:?}"
+                );
+            }
+        }
+    }
+    // A temporary node ends without a change: the kept answer ends with it.
+    assert_eq!(e.perms.check(ALEX, "t.x", &places[0], 70_000), None);
+    assert_eq!(e.perms.check(SCOPED, "b.t", &places[0], 2_000), Some(true));
+    assert_eq!(e.perms.check(SCOPED, "b.t", &places[0], 70_000), None);
+}

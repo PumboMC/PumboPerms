@@ -96,10 +96,11 @@ fn run(sender: &CommandSender, server: &Server, raw: &str) {
         let mut reply = out.reply;
         let mut changed = out.changed;
         let mut log = out.log;
+        let mut reloaded = false;
         match out.action {
             Some(Action::Reload) => {
                 reply = settings::reload(rt);
-                changed = true;
+                reloaded = true;
             }
             Some(Action::Export(name)) => reply = export(rt, &name, now).unwrap_or_else(|e| e),
             Some(Action::Import(name)) => {
@@ -115,9 +116,11 @@ fn run(sender: &CommandSender, server: &Server, raw: &str) {
             }
             None => {}
         }
-        if changed {
+        if reloaded {
             rt.refresh_catalog();
             plans = rt.plan_all(now);
+        } else if changed {
+            plans = rt.after_change(now);
         }
         let mut notify = Vec::new();
         if let Some(entry) = &log

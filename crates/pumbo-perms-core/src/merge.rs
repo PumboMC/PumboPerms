@@ -45,6 +45,20 @@ impl Entry {
             _ => self == other,
         }
     }
+
+    /// The entry without the player's name as text: equal keys are [`Entry::same`].
+    pub fn key(&self) -> String {
+        let bare = match self {
+            Self::UserNode { uuid, node, .. } => {
+                Self::UserNode { uuid: uuid.clone(), name: String::new(), node: node.clone() }
+            }
+            Self::UserParent { uuid, parent, .. } => {
+                Self::UserParent { uuid: uuid.clone(), name: String::new(), parent: parent.clone() }
+            }
+            other => other.clone(),
+        };
+        serde_json::to_string(&bare).unwrap_or_default()
+    }
 }
 
 /// What a source added last time (saved by the platform per source).
@@ -154,7 +168,8 @@ pub fn plan(perms: &Perms, snap: &Snapshot) -> Plan {
 /// already holds, so an imported entry an admin removed does not come back,
 /// and then parents in groups that neither exist nor come with the plan.
 pub fn skip_recorded(plan: &mut Plan, perms: &Perms, recorded: &[Entry]) {
-    plan.entries.retain(|x| !recorded.iter().any(|r| r.same(x)));
+    let recorded: std::collections::HashSet<String> = recorded.iter().map(Entry::key).collect();
+    plan.entries.retain(|x| !recorded.contains(&x.key()));
     let created: Vec<String> = plan
         .entries
         .iter()

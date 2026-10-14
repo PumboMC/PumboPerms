@@ -89,7 +89,13 @@ pub fn load_lang(dir: &str, code: &str) -> (Lang, Vec<Warning>) {
 /// `engine.server_groups`.
 pub fn provider_set(e: &mut Engine, uuid: &str, now: u64) -> Vec<(Option<String>, String, bool)> {
     let global = pumbo_perms_core::host::decisions(e, uuid, "", now);
-    let servers: Vec<String> = e.server_groups.keys().cloned().collect();
+    let servers: Vec<String> = {
+        let named = e.perms.places(uuid);
+        let here = |server: &str, groups: &[String]| {
+            named.contains(&("server", server)) || groups.iter().any(|g| named.contains(&("group", g.as_str())))
+        };
+        e.server_groups.iter().filter(|(s, g)| here(s, g)).map(|(s, _)| s.clone()).collect()
+    };
     let mut out: Vec<(Option<String>, String, bool)> = Vec::new();
     for server in servers {
         let here = pumbo_perms_core::host::decisions(e, uuid, &server, now);

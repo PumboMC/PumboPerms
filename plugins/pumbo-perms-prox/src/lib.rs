@@ -63,7 +63,7 @@
 pub mod setup;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pumbo_common::clock::now_ms;
 use pumbo_common::id::Uuid;
@@ -92,6 +92,8 @@ use pumbo_sdk::{
 pub const SOURCE: &str = "file";
 /// Expired nodes and changed server lists are looked for this often.
 const TICK_MS: u64 = 1000;
+/// Players recomputed between two pauses of [`PumboPerms::push_all`].
+const PORTION: usize = 25;
 /// A broken database is logged and read again after this long.
 const BROKEN_LOG_MS: u64 = 60_000;
 /// `/pp` subcommands also under `/pumboperms` and `/pumbo perms` (`reload`,
@@ -166,7 +168,10 @@ fn reply(to: Option<PlayerId>, t: &Rich) {
 
 /// Server groups of every server of the proxy.
 fn server_groups() -> BTreeMap<String, Vec<String>> {
-    servers::all().into_iter().map(|s| (s.name.to_lowercase(), s.groups)).collect()
+    servers::all()
+        .into_iter()
+        .map(|s| (s.name.to_lowercase(), s.groups.iter().map(|g| g.to_lowercase()).collect()))
+        .collect()
 }
 
 /// [`setup::provider_set`] as permission entries for the proxy.
@@ -308,28 +313,51 @@ impl PumboPerms {
         .ok_or_else(|| "PumboPerms is not loaded".to_string())
     }
 
-    /// Sends the proxy the new set of every loaded player whose set or info
-    /// changed (a new set also makes the proxy ask for the info again).
-    fn push_all(&self) {
+    /// Sends the proxy the new set of every loaded player a change since the
+    /// last call can affect (everyone after the server list changed) whose
+    /// set or info differs (a new set also makes the proxy ask for the info
+    /// again). The work goes in portions with a pause between them, so a
+    /// change that touches every player stays inside the plugin time budget.
+    async fn push_all(&self) {
         let groups = server_groups();
         let at: HashMap<PlayerId, String> =
             players::all().into_iter().map(|p| (p.id, p.context.server.unwrap_or_default())).collect();
-        let now = now_ms();
-        let changes = self
+        let todo = self
             .with(|s| {
+                let moved = s.engine.server_groups != groups;
                 s.engine.server_groups = groups;
                 let State { engine, loaded, .. } = s;
-                let mut out = Vec::new();
-                for (id, (uuid, last, last_info)) in loaded.iter() {
-                    let set = entries(engine, uuid, now);
-                    let info = info_json(engine, uuid, at.get(id).map_or("", String::as_str), now);
-                    if *last != set || *last_info != info {
-                        out.push((*id, set, info));
-                    }
-                }
-                out
+                let affected: HashSet<&str> =
+                    engine.take_affected(loaded.values().map(|l| l.0.as_str())).into_iter().collect();
+                let ids = loaded.iter().filter(|(_, l)| moved || affected.contains(l.0.as_str())).map(|(id, _)| *id);
+                ids.collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        for portion in todo.chunks(PORTION) {
+            // Also after the change itself: an import of a large file is a long piece of work.
+            scheduler::sleep(0).await;
+            let now = now_ms();
+            let changes = self
+                .with(|s| {
+                    let State { engine, loaded, .. } = s;
+                    let mut out = Vec::new();
+                    for id in portion {
+                        let Some((uuid, last, last_info)) = loaded.get(id) else { continue };
+                        let set = entries(engine, uuid, now);
+                        let info = info_json(engine, uuid, at.get(id).map_or("", String::as_str), now);
+                        if *last != set || *last_info != info {
+                            out.push((*id, set, info));
+                        }
+                    }
+                    out
+                })
+                .unwrap_or_default();
+            self.send_sets(changes);
+        }
+    }
+
+    /// Hands new sets to the proxy and remembers what it took.
+    fn send_sets(&self, changes: Vec<(PlayerId, Vec<PermissionEntry>, String)>) {
         for (id, set, info) in changes {
             if pumbo_sdk::debug_enabled() {
                 log::debug(&format!("PumboPerms: player {id}: {} entries", set.len()));
@@ -367,7 +395,7 @@ impl PumboPerms {
     }
 
     /// Runs `/pp <args>` for a player (`Some`) or the console.
-    fn run(&self, player: Option<PlayerId>, args: Vec<String>) {
+    async fn run(&self, player: Option<PlayerId>, args: Vec<String>) {
         let who = match player {
             None => Who::console(),
             Some(id) => {
@@ -440,7 +468,7 @@ impl PumboPerms {
         }
         reply(player, &text);
         if changed {
-            self.push_all();
+            self.push_all().await;
         }
         if let Some((message, line)) = notice {
             log::info(&line);
@@ -454,8 +482,9 @@ impl PumboPerms {
 
     /// `permissions.yml` from the proxy: imported at the first start (with
     /// `import.follow` again whenever it changes); the same file again does
-    /// nothing.
-    fn take_file(&self, f: PermissionsFile) {
+    /// nothing. Reading a large file and importing it are two pieces of work
+    /// with a pause between them.
+    async fn take_file(&self, f: PermissionsFile) {
         let snap = match export::parse(&f.data) {
             Ok(s) => s,
             Err(e) => {
@@ -463,6 +492,7 @@ impl PumboPerms {
                 return;
             }
         };
+        scheduler::sleep(0).await;
         let now = now_ms();
         let line = self
             .with(|s| {
@@ -503,7 +533,7 @@ impl PumboPerms {
                 log::info(&format!("permissions.yml: {l}"));
             }
             if changed {
-                self.push_all();
+                self.push_all().await;
             }
         }
     }
@@ -532,7 +562,7 @@ impl pumbo_sdk::Plugin for PumboPerms {
         // `/pp <args>`, or a subcommand of `/pumboperms` and `/pumbo perms`.
         let mut words = if e.name == "pp" { Vec::new() } else { vec![e.name] };
         words.extend(e.args);
-        self.run(e.player, split_args(&words.join(" ")));
+        self.run(e.player, split_args(&words.join(" "))).await;
     }
 
     /// `%pumboperms_prefix%`, `_suffix`, `_rank`, `_group`, `_groups` and
@@ -612,7 +642,7 @@ impl pumbo_sdk::Plugin for PumboPerms {
             })
             .unwrap_or(false);
         if push {
-            self.push_all();
+            self.push_all().await;
         }
     }
 
@@ -640,7 +670,7 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 cbor(&CheckOfflineAnswer { value })
             }
             METHOD_FILE => {
-                self.take_file(uncbor(&c.payload)?);
+                self.take_file(uncbor(&c.payload)?).await;
                 cbor(&true)
             }
             METHOD_EXPORT => {
