@@ -55,7 +55,7 @@ impl EventHandler<PlayerLeaveEvent> for Leave {
         state::flush_logs();
         if let Some(((ops, plans), resend)) = result {
             // No command list for a player who is leaving.
-            push::apply(&e.player, &ops, false);
+            push::apply(&e.player, &ops);
             push::apply_plans(&server, None, plans, resend);
         }
         e

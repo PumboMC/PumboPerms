@@ -1377,6 +1377,7 @@ pub fn import(e: &mut Engine, who: &Who, file: &str, json: &str, backup: &str, n
         e.perms = before;
         return Outcome::reply(ui::error(&e.lang, "import-failed", &Args::new().arg(value(err))));
     }
+    e.changed_everything();
     let a =
         Args::new().arg(value(counts.0)).arg(value(counts.1)).arg(value(counts.2)).arg(value(file)).arg(value(backup));
     let mut reply = ui::success(&e.lang, "imported", &a);
@@ -1471,9 +1472,9 @@ pub fn import_source(
         }
     };
     // What the source no longer has goes; what it still has stays as it is.
-    let all = merge::candidates(&snap);
+    let all: HashSet<String> = merge::candidates(&snap).iter().map(merge::Entry::key).collect();
     let (kept, gone): (Vec<merge::Entry>, Vec<merge::Entry>) =
-        ledger.entries.iter().cloned().partition(|x| all.iter().any(|a| a.same(x)));
+        ledger.entries.iter().cloned().partition(|x| all.contains(&x.key()));
     let before = e.perms.clone();
     let (mut dirty, removed) = merge::undo(&mut e.perms, &Ledger { entries: gone.clone(), ..Ledger::default() });
     let mut plan = merge::plan(&e.perms, &snap);
@@ -2124,7 +2125,7 @@ pub fn complete(e: &mut Engine, who: &Who, args: &[String], online: &[KnownName]
                 ("user" | "u" | "group" | "g", "permission" | "perm" | "p")
                     if n == 5 && fourth != "clear" && fourth != "info" =>
                 {
-                    options.extend(e.perms.all_nodes())
+                    options.extend(e.perms.all_nodes().iter().cloned())
                 }
                 ("user" | "u" | "group" | "g", "permission" | "perm" | "p") if n == 6 && fourth.starts_with("set") => {
                     options.extend(["true", "false"].map(String::from))

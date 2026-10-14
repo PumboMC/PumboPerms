@@ -18,7 +18,7 @@ PumboPerms is a permission and rank system for the [Pumpkin](https://github.com/
 
 ## How it works on Pumpkin
 
-Pumpkin keeps a list of permission values per player ("attachments") and checks it before its own defaults. PumboPerms decides every permission it knows about for each online player and writes the result into that list: Pumpkin's built-in command permissions, every permission that appears in a group or user, and its own permissions. The list is updated when a player joins, after every change, when the player changes worlds (if world contexts are used), when something temporary ends (checked every second) and when an operator level changes. After a change that affects commands, the player gets the command list again, so Tab completion shows exactly what they may use. When a player leaves, PumboPerms takes everything it set off them (Pumpkin would keep it until the server stops), and when they join again it checks the whole list, so a rank taken away meanwhile is gone.
+Pumpkin keeps a list of permission values per player ("attachments") and checks it before its own defaults. PumboPerms decides every permission it knows about for each online player and writes the result into that list: Pumpkin's built-in command permissions, every permission that appears in a group or user, and its own permissions. The list is updated when a player joins, after every change, when the player changes worlds (if world contexts are used), when something temporary ends (checked every second) and when an operator level changes. After a change that affects commands, the player gets the command list again, so Tab completion shows exactly what they may use; a player gets it at most once a second, and changes in that second go out together. When a player leaves, PumboPerms takes everything it set off them (Pumpkin would keep it until the server stops), and when they join again it checks the whole list, so a rank taken away meanwhile is gone.
 
 `/tick freeze` also stops the check of temporary permissions every second. An expired one still goes at the next moment PumboPerms runs: a player joins, leaves, changes worlds or sends any command, or another plugin asks PumboPerms.
 
@@ -39,6 +39,14 @@ What this cannot do: a permission that nobody named anywhere (not built into Pum
 `provider.check-event: true` makes PumboPerms also answer Pumpkin's permission check event. **Do not use it on Pumpkin 0.2.0 or 0.1.0-dev**: there the server hangs when a plugin is hot-reloaded while players are online, and under a few hundred commands per second (every permission check then waits for the plugin, and Pumpkin runs out of threads). It is there for Pumpkin versions that fix this.
 
 Pumpkin 0.2.0 and 0.1.0-dev run `/tp`, `/xp`, `/banip` and `/pardonip` without any permission check (fixed upstream after 0.2.0, Pumpkin #3801), also after `/execute ... run`. PumboPerms checks these four, typed directly or after any `run` of `/execute`, against the permission of their command (`minecraft:command.teleport`, `.experience`, `.banip`, `.pardonip`) and answers a player without it like an unknown command, as vanilla does. Tab completion still shows the four aliases to everyone, because Pumpkin builds that list; only running them is refused.
+
+## Limits
+
+Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS is often two or three times slower, and the plugin runs as WebAssembly on Pumpkin. While PumboPerms works, Pumpkin waits for it, so these times hold up the server.
+
+- A change in a group every player inherits, with 100 players online and 8000 permissions named in the data: about 10 ms to work out what changes on the players. A change that reaches one player: about 4 ms, most of it for the list of permissions.
+- A player gets the command list again at most once a second.
+- Memory: with the numbers above the test process grew by about 13 MB. `max_memory_mb = 64` in `[plugins.overrides.pumboperms]` leaves room.
 
 ## Compatibility
 

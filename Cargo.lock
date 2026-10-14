@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "pumbo-common"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#28b22081cf61799ab44bfb4806f081f3fb9a6f75"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c3e5a8caee581f011bd0a17187325fdbe8b65f6c"
 dependencies = [
  "md-5",
  "rand_core 0.6.4",
@@ -578,7 +578,7 @@ dependencies = [
 [[package]]
 name = "pumbo-contracts"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#28b22081cf61799ab44bfb4806f081f3fb9a6f75"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c3e5a8caee581f011bd0a17187325fdbe8b65f6c"
 dependencies = [
  "serde",
 ]
@@ -621,7 +621,7 @@ dependencies = [
 [[package]]
 name = "pumbo-sdk"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#28b22081cf61799ab44bfb4806f081f3fb9a6f75"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c3e5a8caee581f011bd0a17187325fdbe8b65f6c"
 dependencies = [
  "ciborium",
  "futures",

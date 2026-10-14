@@ -34,6 +34,9 @@ pub struct Engine {
     ledgers: Result<BTreeMap<String, Result<Ledger, String>>, String>,
     /// Sources whose damaged ledger a join already reported.
     pub(crate) reported: BTreeSet<String>,
+    /// What changed since [`Engine::take_affected`] last looked; `None`:
+    /// everything (the data was read again).
+    changes: Option<Dirty>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -56,6 +59,7 @@ impl Engine {
             before: None,
             ledgers: Err("no database".into()),
             reported: BTreeSet::new(),
+            changes: None,
         };
         match store {
             Ok(store) => match store.load() {
@@ -174,6 +178,7 @@ impl Engine {
     /// Saves a change with its log entry. On failure the change is undone in
     /// memory ([`Engine::begin`]), so memory never shows what is not on disk.
     pub fn commit(&mut self, dirty: &Dirty, log: Option<&LogEntry>) -> Result<(), String> {
+        self.changed(dirty);
         let max = self.cfg.log.max_entries;
         self.save(|store, perms| store.commit(perms, dirty, log, max))
     }
@@ -187,6 +192,7 @@ impl Engine {
         source: &str,
         ledger: &Ledger,
     ) -> Result<(), String> {
+        self.changed(dirty);
         let max = self.cfg.log.max_entries;
         self.save(|store, perms| store.commit_import(perms, dirty, log, max, (source, ledger)))?;
         if let Ok(all) = &mut self.ledgers {
@@ -198,6 +204,31 @@ impl Engine {
             self.reported.remove(source);
         }
         Ok(())
+    }
+
+    /// Records a change for [`Engine::take_affected`], also one that is not
+    /// saved: undoing it in memory is a change too.
+    fn changed(&mut self, dirty: &Dirty) {
+        if let Some(all) = &mut self.changes {
+            all.merge(dirty.clone());
+        }
+    }
+
+    /// Everything may have changed (the data was replaced or read again).
+    pub fn changed_everything(&mut self) {
+        self.changes = None;
+    }
+
+    /// Of `uuids`, the users whose decisions may differ since the last call;
+    /// starts counting again.
+    pub fn take_affected<'a>(&mut self, uuids: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+        let Some(dirty) = self.changes.replace(Dirty::default()) else { return uuids.into_iter().collect() };
+        let groups: Vec<&str> = dirty.groups.iter().chain(&dirty.deleted_groups).map(String::as_str).collect();
+        let everyone = self.perms.reaches_everyone(&groups);
+        uuids
+            .into_iter()
+            .filter(|u| everyone || dirty.users.contains(*u) || (!groups.is_empty() && self.perms.reaches(u, &groups)))
+            .collect()
     }
 
     fn save(&mut self, write: impl FnOnce(&PermsStore, &Perms) -> Result<(), StoreError>) -> Result<(), String> {
@@ -278,6 +309,7 @@ impl Engine {
                 self.perms = perms;
                 self.broken = None;
                 self.load_ledgers();
+                self.changed_everything();
                 true
             }
             Err(e) => {
@@ -299,7 +331,10 @@ impl Engine {
     pub fn reload_data(&mut self) {
         if let Some(store) = &self.store {
             match store.load() {
-                Ok((perms, _)) => self.perms = perms,
+                Ok((perms, _)) => {
+                    self.perms = perms;
+                    self.changed_everything();
+                }
                 Err(e) => self.broken = Some(e.to_string()),
             }
         }
@@ -309,13 +344,14 @@ impl Engine {
     /// with Mojang). Returns the line to log when the name leaves a UUID that
     /// still has groups, permissions or meta.
     pub fn seen(&mut self, uuid: &str, name: &str, online: bool) -> Result<Option<String>, String> {
+        let old = self.perms.name_key_of(uuid).map(str::to_string);
         let (changed, left) = self.perms.seen(uuid, name, online);
         if changed
             && self.broken.is_none()
             && let Some(store) = &self.store
             && let Some(known) = self.perms.find_user(name)
         {
-            store.save_name(&known).map_err(|e| e.to_string())?;
+            store.save_name(&known, old.as_deref()).map_err(|e| e.to_string())?;
         }
         Ok(left.map(|old| {
             format!(
@@ -449,6 +485,51 @@ mod tests {
             drop(e);
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// A join with 400 000 known names: a hash lookup and a point write.
+    #[test]
+    #[ignore = "release benchmark"]
+    fn seen_is_constant_time() {
+        use pumbo_common::store::{Store, WriteExt};
+        // On redb, as the plugins run: the in-memory store copies itself at every write.
+        let dir = std::env::temp_dir().join(format!("pumbo-perms-seen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(dir.join("perms.redb")).unwrap();
+        store
+            .write(|tx| {
+                for i in 0..400_000u32 {
+                    let uuid = format!("00000000-0000-4000-8000-{i:012}");
+                    tx.put_json(
+                        crate::store::NAMES,
+                        &format!("player{i}"),
+                        &serde_json::json!({"uuid": uuid, "name": format!("Player{i}")}),
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let mut e = Engine::new(PermsStore::new(store), CoreCfg::default(), Lang::load(&[COMMON], "en", None).0);
+        assert_eq!(e.perms.known_names().count(), 400_000);
+        let mut worst = std::time::Duration::ZERO;
+        for i in 0..200u32 {
+            // New players, and known ones under a new name.
+            let (uuid, name) = match i % 2 {
+                0 => (format!("00000000-0000-4000-9000-{i:012}"), format!("Newcomer{i}")),
+                _ => (format!("00000000-0000-4000-8000-{i:012}"), format!("Renamed{i}")),
+            };
+            let start = std::time::Instant::now();
+            e.seen(&uuid, &name, true).unwrap();
+            worst = worst.max(start.elapsed());
+        }
+        e.reload_data();
+        assert!(e.perms.find_user("Player1").is_none() && e.perms.find_user("renamed1").is_some());
+        assert_eq!(e.perms.known_names().count(), 400_100);
+        println!("Engine::seen with 400 000 names: at most {worst:?}");
+        drop(e);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(worst < std::time::Duration::from_millis(1), "{worst:?}");
     }
 
     #[test]

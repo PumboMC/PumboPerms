@@ -11,7 +11,7 @@
 //! itself.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pumbo_common::lang::Lang;
 use pumbo_common::store::DbLock;
@@ -76,7 +76,17 @@ pub struct Rt {
     /// When the lock was last refreshed, or the database last tried again (ms).
     pub lock_refreshed: u64,
     pub retried: u64,
+    /// The nodes ever set on the host as the database lists them, read once.
+    stored: Option<BTreeSet<String>>,
+    /// When each online player last got its command list again (ms), and
+    /// who waits for the next one ([`RESEND_MS`]).
+    resent: HashMap<String, u64>,
+    resend_waiting: BTreeSet<String>,
 }
+
+/// A player gets its command list again at most this often (20 ticks);
+/// changes in between go out together.
+pub const RESEND_MS: u64 = 1000;
 
 /// The lock is refreshed at most this often; [`DbLock`] counts one not
 /// refreshed for 30 s as stale.
@@ -119,6 +129,9 @@ impl Rt {
             lock_refreshed: now,
             retried: now,
             errors: Vec::new(),
+            stored: None,
+            resent: HashMap::new(),
+            resend_waiting: BTreeSet::new(),
         };
         rt.refresh_catalog();
         rt
@@ -174,6 +187,7 @@ impl Rt {
                 self.lock = Some(lock);
                 self.lock_refreshed = now;
                 self.engine = engine;
+                self.stored = None;
                 if self.engine.broken.is_none() {
                     self.logs.push((false, "PumboPerms: the database is open now".into()));
                 }
@@ -210,23 +224,88 @@ impl Rt {
 
     /// Rebuilds the list of nodes set on the host and remembers new ones in the
     /// database (so that they can be unset after a restart of the plugin).
-    pub fn refresh_catalog(&mut self) {
-        let mut known: Vec<String> =
-            pumbo_perms_core::command::own_nodes().iter().map(|n| pumbo_perms_core::node::host_form(n)).collect();
-        if let Some(store) = self.engine.store() {
+    /// Returns whether the list changed.
+    pub fn refresh_catalog(&mut self) -> bool {
+        let Some(store) = self.engine.store() else {
+            return self.catalog.refresh(&self.engine.perms, own_host_nodes());
+        };
+        if self.stored.is_none() {
             match store.host_nodes() {
-                Ok(nodes) => known.extend(nodes),
+                Ok(nodes) => self.stored = Some(nodes),
                 Err(e) => self.logs.push((true, format!("PumboPerms: cannot read the node list: {e}"))),
             }
         }
-        self.catalog.refresh(&self.engine.perms, known);
-        if let Some(store) = self.engine.store() {
-            let stored = store.host_nodes().unwrap_or_default();
-            let new: Vec<&String> = self.catalog.nodes().iter().filter(|n| !stored.contains(*n)).collect();
-            if let Err(e) = store.add_host_nodes(new) {
-                self.logs.push((true, format!("PumboPerms: cannot save the node list: {e}")));
+        // Unread list: empty for this refresh only, read again next time.
+        let mut once = BTreeSet::new();
+        let stored = self.stored.as_mut().unwrap_or(&mut once);
+        let changed =
+            self.catalog.refresh(&self.engine.perms, own_host_nodes().into_iter().chain(stored.iter().cloned()));
+        let new: Vec<String> = self.catalog.nodes().iter().filter(|n| !stored.contains(*n)).cloned().collect();
+        match store.add_host_nodes(&new) {
+            Ok(()) => stored.extend(new),
+            Err(e) => self.logs.push((true, format!("PumboPerms: cannot save the node list: {e}"))),
+        }
+        changed
+    }
+
+    /// After the first pass took them off the online players: forgets the
+    /// nodes nobody has in the data any more.
+    fn forget_old_nodes(&mut self) {
+        let mut fresh = Catalog::pumpkin();
+        fresh.refresh(&self.engine.perms, own_host_nodes());
+        let (Some(store), Some(stored)) = (self.engine.store(), self.stored.as_mut()) else { return };
+        let old: Vec<String> = stored.iter().filter(|n| !fresh.nodes().contains(*n)).cloned().collect();
+        match store.remove_host_nodes(&old) {
+            Ok(()) => {
+                for n in &old {
+                    stored.remove(n);
+                }
+                self.catalog = fresh;
+            }
+            Err(e) => self.logs.push((true, format!("PumboPerms: cannot save the node list: {e}"))),
+        }
+    }
+
+    /// After a change of the data: the node list again and the host changes
+    /// for the online players the change can reach (all of them when the
+    /// list changed).
+    pub fn after_change(&mut self, now: u64) -> Vec<Plan> {
+        let everyone = self.refresh_catalog();
+        let online: Vec<String> = self.online.keys().cloned().collect();
+        let affected: Vec<&str> = self.engine.take_affected(online.iter().map(String::as_str));
+        let uuids: Vec<String> =
+            online.iter().filter(|u| everyone || affected.contains(&u.as_str())).cloned().collect();
+        uuids.into_iter().filter_map(|u| self.plan_player(&u, now)).collect()
+    }
+
+    /// Of the players whose command lists a change touched, those to send
+    /// one now; the rest wait for [`Rt::due_resends`].
+    pub fn resends(&mut self, touched: Vec<String>, now: u64) -> Vec<String> {
+        let mut out = Vec::new();
+        for uuid in touched {
+            if self.resent.get(&uuid).is_some_and(|t| now.saturating_sub(*t) < RESEND_MS) {
+                self.resend_waiting.insert(uuid);
+            } else {
+                self.resent.insert(uuid.clone(), now);
+                out.push(uuid);
             }
         }
+        out
+    }
+
+    /// The waiting players whose next command list is due.
+    pub fn due_resends(&mut self, now: u64) -> Vec<String> {
+        let due: Vec<String> = self
+            .resend_waiting
+            .iter()
+            .filter(|u| self.resent.get(*u).is_none_or(|t| now.saturating_sub(*t) >= RESEND_MS))
+            .cloned()
+            .collect();
+        for uuid in &due {
+            self.resend_waiting.remove(uuid);
+            self.resent.insert(uuid.clone(), now);
+        }
+        due
     }
 
     /// The host changes for one online player; `None` when there are none.
@@ -290,6 +369,8 @@ impl Rt {
     pub fn leave(&mut self, uuid: &str, now: u64) -> (Vec<Op>, Vec<Plan>) {
         self.online.remove(uuid);
         self.hidden.remove(uuid);
+        self.resent.remove(uuid);
+        self.resend_waiting.remove(uuid);
         let mut ops: Vec<Op> =
             self.pushed.remove(uuid).into_iter().flat_map(|p| p.into_keys().map(Op::Unset)).collect();
         ops.sort();
@@ -347,8 +428,7 @@ impl Rt {
         if !due {
             return Vec::new();
         }
-        self.refresh_catalog();
-        self.plan_all(now)
+        self.after_change(now)
     }
 
     /// Whether an online player may run an alias Pumpkin leaves unchecked
@@ -425,10 +505,18 @@ impl Rt {
         }
         let first = !self.ready;
         self.ready = true;
-        if changed || first {
+        let plans = if first {
             self.refresh_catalog();
-        }
-        let plans = if changed || first { self.plan_all(now) } else { Vec::new() };
+            let plans = self.plan_all(now);
+            if !passive() {
+                self.forget_old_nodes();
+            }
+            plans
+        } else if changed {
+            self.after_change(now)
+        } else {
+            Vec::new()
+        };
         (first, plans, self.resend())
     }
 
@@ -468,6 +556,11 @@ impl Rt {
         }
         true
     }
+}
+
+/// `pumboperms:*` nodes of every `/pp` action, in host form.
+fn own_host_nodes() -> Vec<String> {
+    pumbo_perms_core::command::own_nodes().iter().map(|n| pumbo_perms_core::node::host_form(n)).collect()
 }
 
 thread_local! {
@@ -884,15 +977,18 @@ mod tests {
 
     #[test]
     fn load_reconciles_online_attachments() {
-        let mut rt = rt();
+        let earlier = rt();
         // A node an earlier run set, gone from the data since.
-        rt.engine.store().unwrap().add_host_nodes(vec![&"essentials:fly".to_string()]).unwrap();
-        rt.refresh_catalog();
+        earlier.engine.store().unwrap().add_host_nodes(vec![&"essentials:fly".to_string()]).unwrap();
+        let mut rt = Rt::new(String::new(), earlier.cfg.clone(), earlier.engine, false);
         join(&mut rt, U, 0);
         let (first, plans, _) = rt.import_pass(Vec::new(), None, 0);
         assert!(first);
         let ops = ops(&mut rt, plans, U);
         assert!(ops.contains(&Op::Unset("essentials:fly".into())), "{ops:?}");
+        // Taken off everyone online: forgotten, so the list does not only grow.
+        assert!(!rt.catalog.nodes().contains("essentials:fly"));
+        assert!(!rt.engine.store().unwrap().host_nodes().unwrap().contains("essentials:fly"));
     }
 
     #[test]
@@ -1265,6 +1361,151 @@ mod tests {
         assert!(rt.hidden.is_empty(), "{:?}", rt.hidden);
         let _ = rt.join("00000000-0000-0000-0000-000000000002", steve(), 0);
         assert!(rt.hidden.is_empty(), "a player with nothing hidden keeps no entry");
+    }
+
+    /// 100 players online and 8000 nodes in the catalog (20 groups of 50,
+    /// 700 players offline with 10 nodes of their own each).
+    fn at_scale() -> (Rt, Vec<String>) {
+        use pumbo_perms_core::context::Contexts;
+        use pumbo_perms_core::model::{ParentNode, PermNode};
+        let mut rt = rt();
+        rt.ready = true;
+        let perm = |node: String, value: bool| PermNode { node, value, context: Contexts::global(), expiry: None };
+        let parent = |g: usize| ParentNode { group: format!("g{}", g % 20), context: Contexts::global(), expiry: None };
+        for g in 0..20 {
+            rt.engine.perms.create_group(&format!("g{g}")).unwrap();
+            rt.engine
+                .perms
+                .edit_group(&format!("g{g}"), |gr| {
+                    gr.data.add_parent(ParentNode {
+                        group: "default".into(),
+                        context: Contexts::global(),
+                        expiry: None,
+                    });
+                    for n in 0..50 {
+                        let node = match n % 3 {
+                            0 => format!("minecraft:command.c{g}n{n}"),
+                            1 => format!("pumbo.p{g}.a{n}"),
+                            _ => format!("plugin{g}:node{n}"),
+                        };
+                        gr.data.set_permission(perm(node, n % 7 != 0));
+                    }
+                })
+                .unwrap();
+        }
+        for k in 0..700 {
+            rt.engine.perms.edit_user(&format!("00000000-0000-4000-8000-{k:012}"), "", |d| {
+                d.add_parent(parent(k));
+                for n in 0..10 {
+                    d.set_permission(perm(format!("own{k}:node{n}"), true));
+                }
+            });
+        }
+        rt.refresh_catalog();
+        assert!(rt.catalog.len() > 8000, "{}", rt.catalog.len());
+        let online: Vec<String> = (0..100).map(|k| format!("00000000-0000-4000-9000-{k:012}")).collect();
+        for (k, uuid) in online.iter().enumerate() {
+            rt.engine.perms.edit_user(uuid, &format!("P{k}"), |d| d.add_parent(parent(k)));
+            let plans = rt.join(uuid, Online { name: format!("P{k}"), world: "world".into(), op_level: 0 }, 0);
+            rt.applied(plans);
+        }
+        (rt, online)
+    }
+
+    /// An edit with 100 players online and 8000 catalog nodes: the plans come
+    /// from each player's own nodes, not from the whole catalog.
+    #[test]
+    #[ignore = "release benchmark"]
+    fn plan_after_edit_scale() {
+        let rss = || {
+            let out =
+                std::process::Command::new("ps").args(["-o", "rss=", "-p", &std::process::id().to_string()]).output();
+            out.ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok()).unwrap_or(0)
+        };
+        let before = rss();
+        let (mut rt, online) = at_scale();
+        let mut worst = std::time::Duration::ZERO;
+        for round in 0..10u64 {
+            let node = pumbo_perms_core::model::PermNode {
+                node: "minecraft:command.c0n1".into(),
+                value: round % 2 == 0,
+                context: pumbo_perms_core::context::Contexts::global(),
+                expiry: None,
+            };
+            let (_, d) = rt.engine.perms.edit_group("default", |g| g.data.set_permission(node)).unwrap();
+            rt.engine.commit(&d, None).unwrap();
+            let start = std::time::Instant::now();
+            let plans = rt.after_change(round);
+            let took = start.elapsed();
+            worst = worst.max(took);
+            assert_eq!(plans.len(), online.len(), "a change in default reaches everyone");
+            rt.applied(plans);
+            println!("plan after an edit in default, 100 players, {} catalog nodes: {took:?}", rt.catalog.len());
+        }
+        // One player's change plans one player.
+        let (_, d) = rt.engine.perms.edit_user(&online[3], "P3", |d| {
+            d.set_permission(pumbo_perms_core::model::PermNode {
+                node: "plugin1:node2".into(),
+                value: false,
+                context: pumbo_perms_core::context::Contexts::global(),
+                expiry: None,
+            })
+        });
+        rt.engine.commit(&d, None).unwrap();
+        let start = std::time::Instant::now();
+        let plans = rt.after_change(20);
+        println!("plan after an edit of one player: {:?}", start.elapsed());
+        assert_eq!(plans.iter().map(|p| p.uuid.as_str()).collect::<Vec<_>>(), [online[3].as_str()]);
+        // Native, so 8-byte pointers: the plugin in WASM needs less. Run alone.
+        println!("memory: the process grew by {} MB", rss().saturating_sub(before) / 1024);
+        assert!(worst < std::time::Duration::from_millis(20), "{worst:?}");
+    }
+
+    #[test]
+    fn edit_plans_only_players_it_reaches() {
+        let mut rt = rt();
+        rt.ready = true;
+        give(&mut rt, "vip", "minecraft:command.fly", None);
+        const OTHER: &str = "00000000-0000-0000-0000-000000000002";
+        let plans = rt.join(OTHER, steve(), 0);
+        rt.applied(plans);
+        join(&mut rt, U, 0);
+        rt.engine.take_affected([U, OTHER]);
+        let (_, d) = rt
+            .engine
+            .perms
+            .edit_group("vip", |g| {
+                g.data.set_permission(pumbo_perms_core::model::PermNode {
+                    node: "minecraft:command.fly".into(),
+                    value: false,
+                    context: pumbo_perms_core::context::Contexts::global(),
+                    expiry: None,
+                })
+            })
+            .unwrap();
+        rt.engine.commit(&d, None).unwrap();
+        let plans = rt.after_change(0);
+        assert_eq!(plans.iter().map(|p| p.uuid.as_str()).collect::<Vec<_>>(), [U], "only vip members");
+        assert_eq!(ops(&mut rt, plans, U), [Op::Set("minecraft:command.fly".into(), false)]);
+    }
+
+    #[test]
+    fn command_lists_resent_at_most_once_a_second() {
+        let mut rt = rt();
+        const OTHER: &str = "00000000-0000-0000-0000-000000000002";
+        assert_eq!(rt.resends(vec![U.into(), OTHER.into()], 1_000), [U, OTHER]);
+        // Three more changes within the second: one list, when the second is over.
+        for at in [1_100, 1_400, 1_900] {
+            assert!(rt.resends(vec![U.into()], at).is_empty());
+            assert!(rt.due_resends(at).is_empty());
+        }
+        assert_eq!(rt.due_resends(2_000), [U]);
+        assert!(rt.due_resends(2_500).is_empty());
+        assert_eq!(rt.resends(vec![OTHER.into()], 2_500), [OTHER]);
+        // Leaving drops a waiting one.
+        assert!(rt.resends(vec![OTHER.into()], 2_600).is_empty());
+        rt.leave(OTHER, 2_600);
+        assert!(rt.due_resends(9_000).is_empty());
     }
 
     #[test]

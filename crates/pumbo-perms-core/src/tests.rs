@@ -466,6 +466,7 @@ fn cache_follows_changes() {
 }
 
 #[test]
+#[ignore = "release benchmark"]
 fn many_users_and_groups_stay_fast() {
     let mut p = Perms::new();
     for i in 0..50 {
@@ -476,16 +477,40 @@ fn many_users_and_groups_stay_fast() {
             p.add_group_parent(&name, parent(&format!("g{}", i - 1))).unwrap();
         }
     }
+    p.edit_group("g0", |g| g.data.set_permission(perm("node.*", true))).unwrap();
     user_in(&mut p, U, &["g49"]);
+    // 2000 users in the chain, each decided once (no cache) and then checked.
+    for u in 0..2000 {
+        user_in(&mut p, &format!("00000000-0000-4000-8000-{u:012}"), &[&format!("g{}", u % 50)]);
+    }
+    let nodes: Vec<String> = (0..20_000).map(|k| format!("node.{}.{}.x", k % 50, k % 40)).collect();
     let start = std::time::Instant::now();
     let mut yes = 0;
-    for k in 0..20_000 {
-        let n = format!("node.{}.{}", k % 50, k % 40);
-        if p.check(U, &n, &here(), 0) == Some(true) {
+    for n in &nodes {
+        if p.check(U, n, &here(), 0) == Some(true) {
             yes += 1;
         }
     }
+    let checks = start.elapsed();
     assert!(yes > 0);
-    // generous bound: a check is a hash lookup once the user is cached
-    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    let start = std::time::Instant::now();
+    for u in 0..2000 {
+        p.check(&format!("00000000-0000-4000-8000-{u:012}"), "node.1.1", &here(), 0);
+    }
+    let first = start.elapsed();
+    // The once-a-second look for expired nodes and the world flag are kept until a change.
+    let start = std::time::Instant::now();
+    let (expiry, worlds) = (p.next_expiry(), p.uses_context("world"));
+    let scan = start.elapsed();
+    let start = std::time::Instant::now();
+    for _ in 0..1000 {
+        assert_eq!((p.next_expiry(), p.uses_context("world")), (expiry, worlds));
+    }
+    let kept = start.elapsed();
+    println!("20 000 checks of a cached user: {checks:?}; 2000 users decided for the first time: {first:?}");
+    println!("next expiry and the world flag over 2050 holders: {scan:?} after a change, {kept:?} for 1000 more");
+    assert!(kept < std::time::Duration::from_millis(1), "{kept:?}");
+    // A check misses the exact node and walks the wildcards above it.
+    assert!(checks < std::time::Duration::from_millis(20), "{checks:?}");
+    assert!(first < std::time::Duration::from_secs(1), "{first:?}");
 }

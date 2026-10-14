@@ -14,7 +14,8 @@
 //! work, and a wildcard with a narrower one of another value under it is not
 //! sent at all ([`hidden`]).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ops::Bound;
 
 use pumbo_common::pumpkin::{COMMAND_NODES, PUMBO_NODES};
 use pumbo_contracts::permissions::drop_shadowed;
@@ -38,6 +39,8 @@ pub struct Catalog {
     nodes: BTreeSet<String>,
     /// `nodes` without wildcards.
     exact: BTreeSet<String>,
+    /// `nodes` in the spelling of the data -> host form, normalized once per refresh.
+    canonical: BTreeMap<String, String>,
 }
 
 impl Catalog {
@@ -45,7 +48,8 @@ impl Catalog {
     pub fn new<S: AsRef<str>>(builtin: impl IntoIterator<Item = S>) -> Self {
         let builtin: BTreeSet<String> = builtin.into_iter().map(|s| s.as_ref().to_string()).collect();
         let exact = exact_of(&builtin);
-        Self { nodes: builtin.clone(), builtin, exact }
+        let canonical = canonical_of(&builtin);
+        Self { nodes: builtin.clone(), builtin, exact, canonical }
     }
 
     /// The nodes Pumpkin and the Pumbo plugins check.
@@ -57,13 +61,13 @@ impl Catalog {
     /// before, the plugin's own nodes), every node in the data, every group as
     /// `group.<name>`, and `<namespace>:*` for every namespace in the list and
     /// of the Pumbo plugins when the data has a wildcard the host cannot read
-    /// (`*`, `pumbo.*`).
-    pub fn refresh<S: AsRef<str>>(&mut self, perms: &Perms, known: impl IntoIterator<Item = S>) {
+    /// (`*`, `pumbo.*`). Returns whether the list changed.
+    pub fn refresh<S: AsRef<str>>(&mut self, perms: &Perms, known: impl IntoIterator<Item = S>) -> bool {
         let mut nodes = self.builtin.clone();
         nodes.extend(known.into_iter().map(|s| s.as_ref().to_string()));
         let mut global_wildcard = false;
         for n in perms.all_nodes() {
-            let host = node::host_form(&n);
+            let host = node::host_form(n);
             if is_global_wildcard(&host) {
                 global_wildcard = true;
                 continue;
@@ -77,8 +81,13 @@ impl Catalog {
             let namespaces = namespace_wildcards(nodes.iter().map(String::as_str).chain(PUMBO_NODES.iter().copied()));
             nodes.extend(namespaces);
         }
+        if nodes == self.nodes {
+            return false;
+        }
         self.exact = exact_of(&nodes);
+        self.canonical = canonical_of(&nodes);
         self.nodes = nodes;
+        true
     }
 
     pub fn nodes(&self) -> &BTreeSet<String> {
@@ -92,6 +101,10 @@ impl Catalog {
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
+}
+
+fn canonical_of(nodes: &BTreeSet<String>) -> BTreeMap<String, String> {
+    nodes.iter().filter_map(|h| node::normalize(h).ok().map(|c| (c, h.clone()))).collect()
 }
 
 fn exact_of(nodes: &BTreeSet<String>) -> BTreeSet<String> {
@@ -138,13 +151,34 @@ pub fn wanted_and_hidden(
 ) -> (HashMap<String, bool>, Vec<(String, String)>) {
     let q = e.query(world);
     let mut set = BTreeMap::new();
-    for host in catalog.nodes() {
-        let Ok(canonical) = node::normalize(host) else { continue };
-        if let Some(v) = e.perms.check(uuid, &canonical, &q, now) {
-            set.insert(host.clone(), v);
+    let effective = e.perms.effective(uuid, &q, now);
+    // Only a node of the player's own data, or one under its wildcards, can be decided.
+    for (n, _) in effective.nodes() {
+        let from: Vec<(&String, &String)> = match n.strip_suffix('*') {
+            Some("") => catalog.canonical.iter().collect(),
+            Some(base) => {
+                let below = catalog.canonical.range::<str, _>((Bound::Included(base), Bound::Unbounded));
+                below.take_while(|(c, _)| c.starts_with(base)).collect()
+            }
+            None => catalog.canonical.get_key_value(n).into_iter().collect(),
+        };
+        for (canonical, host) in from {
+            if let Some(v) = effective.check(canonical) {
+                set.insert(host.clone(), v);
+            }
         }
     }
-    let hidden = shadowed(&mut set, &catalog.exact);
+    // Pumpkin reads an exact `ns:a` set to true as a wildcard: the catalog nodes under one.
+    let mut under_true = BTreeSet::new();
+    for (parent, _) in set.iter().filter(|(n, v)| **v && !node::is_wildcard(n) && n.matches(':').count() == 1) {
+        let Ok(parent) = node::normalize(parent) else { continue };
+        let below = catalog.canonical.range::<str, _>((Bound::Excluded(parent.as_str()), Bound::Unbounded));
+        let below = below.take_while(|(c, _)| c.starts_with(parent.as_str()));
+        let below =
+            below.filter(|(c, h)| c.get(parent.len()..).is_some_and(|r| r.starts_with('.')) && !node::is_wildcard(h));
+        under_true.extend(below.map(|(_, h)| h.clone()));
+    }
+    let hidden = shadowed(&mut set, &under_true);
     let who = crate::command::Who::player("", uuid, op_level, world);
     set.insert(command_node(), crate::command::allowed_any(e, &who, now));
     (set.into_iter().collect(), hidden)
@@ -188,7 +222,12 @@ fn shadowed(set: &mut BTreeMap<String, bool>, catalog: &BTreeSet<String>) -> Vec
 /// wildcard is not sent; under either, a node outside the catalogs gets
 /// Pumpkin's answer, not PumboPerms'.
 pub fn hidden(e: &mut Engine, uuid: &str, q: &Query, now: u64) -> Vec<(String, String)> {
-    let hosts: Vec<String> = e.perms.effective(uuid, q, now).nodes().map(|(n, _)| node::host_form(n)).collect();
+    let effective = e.perms.effective(uuid, q, now);
+    // Only a wildcard hides anything.
+    if !effective.nodes().any(|(n, _)| node::is_wildcard(n)) {
+        return Vec::new();
+    }
+    let hosts: Vec<String> = effective.nodes().map(|(n, _)| node::host_form(n)).collect();
     let mut nodes: BTreeSet<String> = hosts.iter().filter(|h| h.contains(':')).cloned().collect();
     if hosts.iter().any(|h| is_global_wildcard(h)) {
         let all = COMMAND_NODES.iter().chain(PUMBO_NODES).copied().chain(hosts.iter().map(String::as_str));
@@ -219,14 +258,32 @@ pub fn decisions(e: &mut Engine, uuid: &str, server: &str, now: u64) -> Vec<(Str
     let q = e.place(server, "");
     let mut out: Vec<(String, bool)> = Vec::new();
     let mut global = false;
-    for (n, v) in e.perms.effective(uuid, &q, now).nodes() {
+    // The bridge catalog lacks most data nodes, so set the false Pumpkin's own catalog would get:
+    // nodes of the data without a decision under an exact `ns:a` set to true (a wildcard above
+    // such a parent would decide the child too).
+    let mut children: BTreeSet<String> = BTreeSet::new();
+    let (effective, data) = e.perms.effective_and_nodes(uuid, &q, now);
+    for (n, v) in effective.nodes() {
         let host = node::host_form(n);
         global |= is_global_wildcard(&host);
-        if host != n {
-            out.push((host, v));
+        if v && !node::is_wildcard(n) && host.matches(':').count() == 1 {
+            let below = data.range::<str, _>((Bound::Excluded(n), Bound::Unbounded));
+            for child in
+                below.take_while(|c| c.starts_with(n)).filter(|c| c.get(n.len()..).is_some_and(|r| r.starts_with('.')))
+            {
+                let child = node::host_form(child);
+                let undecided = node::normalize(&child).is_ok_and(|c| effective.check(&c).is_none());
+                if undecided && !node::is_wildcard(&child) && child.matches(':').count() == 1 {
+                    children.insert(child);
+                }
+            }
         }
-        out.push((n.to_string(), v));
+        if host != n {
+            out.push((n.to_string(), v));
+        }
+        out.push((host, v));
     }
+    out.extend(children.into_iter().map(|c| (c, false)));
     let mut extra: BTreeSet<String> = BTreeSet::new();
     if global {
         // What Pumpkin's catalog names for a global wildcard: data nodes, groups, `<ns>:*`.
@@ -237,37 +294,40 @@ pub fn decisions(e: &mut Engine, uuid: &str, server: &str, now: u64) -> Vec<(Str
         extra.extend(e.perms.groups().map(|g| node::group_node(&g.name)));
     }
     for (w, narrower) in hidden(e, uuid, &q, now) {
-        let under = e.perms.all_nodes().into_iter().map(|n| node::host_form(&n));
+        let under = e.perms.all_nodes().iter().map(|n| node::host_form(n));
         extra.extend(under.filter(|h| {
             !node::is_wildcard(h) && h.contains(':') && (node::covers(&w, h) || node::covers(&narrower, h))
         }));
     }
-    for host in extra {
-        if !out.iter().any(|(n, _)| *n == host)
-            && let Ok(canonical) = node::normalize(&host)
-            && let Some(v) = e.perms.check(uuid, &canonical, &q, now)
-        {
-            out.push((host, v));
+    if !extra.is_empty() {
+        let mut named: HashSet<String> = out.iter().map(|(n, _)| n.clone()).collect();
+        for host in extra {
+            if !named.contains(&host)
+                && let Ok(canonical) = node::normalize(&host)
+                && let Some(v) = e.perms.check(uuid, &canonical, &q, now)
+            {
+                named.insert(host.clone());
+                out.push((host, v));
+            }
         }
     }
-    // The bridge catalog lacks most data nodes, so set the false Pumpkin's own catalog would get.
-    let check = |e: &mut Engine, n: &str| node::normalize(n).ok().and_then(|c| e.perms.check(uuid, &c, &q, now));
-    for host in e.perms.all_nodes().iter().map(|n| node::host_form(n)) {
-        if node::is_wildcard(&host) || host.matches(':').count() != 1 || out.iter().any(|(n, _)| *n == host) {
-            continue;
-        }
-        let mut parents = host.match_indices('.').filter_map(|(i, _)| host.get(..i)).filter(|p| p.contains(':'));
-        let under_true = parents.any(|p| check(e, p) == Some(true));
-        if under_true && check(e, &host).is_none() {
-            out.push((host, false));
-        }
-    }
-    let who = crate::command::Who { server: server.to_string(), ..crate::command::Who::player("", uuid, 0, "") };
-    let visible = crate::command::allowed_any(e, &who, now);
+    // As `command::allowed_any` for a player without an operator level.
+    let effective = e.perms.effective(uuid, &q, now);
+    let own = |n: &str| n == "*" || n == "pumbo.*" || n.starts_with(crate::engine::OWN_NODES);
+    let visible =
+        effective.nodes().any(|(n, _)| own(n)) && action_nodes().iter().any(|a| effective.check(a) == Some(true));
     out.push((crate::command::COMMAND_NODE.to_string(), visible));
     out.push((command_node(), visible));
     out.sort();
     out
+}
+
+/// `pumbo.perms.<action>` of every `/pp` action.
+fn action_nodes() -> &'static [String] {
+    static NODES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        crate::command::ACTIONS.iter().map(|a| pumbo_common::command::permission(crate::command::PLUGIN, a)).collect()
+    });
+    &NODES
 }
 
 /// The host changes that turn `pushed` into `wanted`. `pushed = None` means

@@ -170,6 +170,7 @@ pub fn tick(server: &Server) {
     state::flush_logs();
     let Some((plans, resend, due)) = due else { return };
     push::apply_plans(server, None, plans, resend);
+    push::resend_due(server);
     if !due {
         return;
     }

@@ -132,15 +132,17 @@ impl PermsStore {
         })
     }
 
-    /// Records a nickname (cheap, may be lost on a crash: it comes back at the next join).
-    pub fn save_name(&self, name: &KnownName) -> Result<()> {
+    /// Records a nickname (cheap, may be lost on a crash: it comes back at the
+    /// next join); `old`: the key of the name the UUID had before, removed.
+    pub fn save_name(&self, name: &KnownName, old: Option<&str>) -> Result<()> {
+        let key = pumbo_common::id::name_key(&name.name);
         self.store.write_with(Durability::Eventual, |tx| {
-            tx.retain(NAMES, &mut |_, v| {
-                serde_json::from_slice::<StoredName>(v).map_or(true, |n| n.uuid != name.uuid)
-            })?;
+            if let Some(old) = old.filter(|o| *o != key) {
+                tx.remove(NAMES, old)?;
+            }
             tx.put_json(
                 NAMES,
-                &pumbo_common::id::name_key(&name.name),
+                &key,
                 &StoredName { uuid: name.uuid.clone(), name: name.name.clone(), online: name.online },
             )
         })
@@ -275,6 +277,20 @@ impl PermsStore {
         Ok(all.into_iter().map(|(k, _)| k).collect())
     }
 
+    /// Forgets nodes nobody has any more (after they were taken off the players).
+    pub fn remove_host_nodes<'a>(&self, nodes: impl IntoIterator<Item = &'a String>) -> Result<()> {
+        let nodes: Vec<&String> = nodes.into_iter().collect();
+        if nodes.is_empty() {
+            return Ok(());
+        }
+        self.store.write_with(Durability::Eventual, |tx| {
+            for n in &nodes {
+                tx.remove(HOST_NODES, n)?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn add_host_nodes<'a>(&self, nodes: impl IntoIterator<Item = &'a String>) -> Result<()> {
         let nodes: Vec<&String> = nodes.into_iter().collect();
         if nodes.is_empty() {
@@ -397,7 +413,7 @@ mod tests {
         d.merge(p.create_track("ranks").unwrap());
         s.commit(&p, &d, Some(&entry(1)), 100).unwrap();
         p.seen(U, "Steve", true);
-        s.save_name(&p.find_user("steve").unwrap()).unwrap();
+        s.save_name(&p.find_user("steve").unwrap(), None).unwrap();
 
         let (mut q, dirty) = s.load().unwrap();
         assert!(dirty.is_empty());
@@ -445,6 +461,8 @@ mod tests {
         s.add_host_nodes(&["minecraft:command.op".to_string(), "a".to_string()]).unwrap();
         s.add_host_nodes(&["a".to_string()]).unwrap();
         assert_eq!(s.host_nodes().unwrap().len(), 2);
+        s.remove_host_nodes(&["a".to_string()]).unwrap();
+        assert_eq!(s.host_nodes().unwrap(), BTreeSet::from(["minecraft:command.op".to_string()]));
 
         let mut p = Perms::new();
         p.create_group("old").unwrap();
