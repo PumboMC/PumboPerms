@@ -7,8 +7,12 @@
 //! it is (a different value is a conflict, the existing one wins), weight and
 //! prefixes only where the group has none. What one source added is kept in
 //! its [`Ledger`] (the "imported from <source>" marker), so the next import
-//! of that source replaces exactly those entries, and `undo` takes them back;
-//! entries made in PumboPerms are never touched.
+//! of that source takes back only the entries the source no longer has and
+//! adds only new ones, and `undo` takes them all back; entries made in
+//! PumboPerms are never touched. An imported entry an admin removed stays
+//! in the ledger and does not come back with the next import.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +33,20 @@ pub enum Entry {
     UserParent { uuid: String, name: String, parent: ParentNode },
 }
 
+impl Entry {
+    /// The same entry, whatever spelling of the player's name it carries (a
+    /// join and the source may spell it differently).
+    pub fn same(&self, other: &Entry) -> bool {
+        match (self, other) {
+            (Self::UserNode { uuid: a, node: x, .. }, Self::UserNode { uuid: b, node: y, .. }) => a == b && x == y,
+            (Self::UserParent { uuid: a, parent: x, .. }, Self::UserParent { uuid: b, parent: y, .. }) => {
+                a == b && x == y
+            }
+            _ => self == other,
+        }
+    }
+}
+
 /// What a source added last time (saved by the platform per source).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ledger {
@@ -40,6 +58,10 @@ pub struct Ledger {
     /// when they join with an online-mode account ([`crate::command::import_pending`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<crate::model::User>,
+    /// Nicknames of the source bound to a UUID (name key -> UUID): the first
+    /// binding stays, a later owner of the name gets nothing.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resolved: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -53,65 +75,100 @@ fn same_node(a: &PermNode, b: &PermNode) -> bool {
     a.node == b.node && a.context == b.context && a.expiry.is_some() == b.expiry.is_some()
 }
 
+/// Every entry the source has, whatever the database holds.
+pub fn candidates(snap: &Snapshot) -> Vec<Entry> {
+    let mut out = Vec::new();
+    for g in &snap.groups {
+        let group = || g.name.clone();
+        out.push(Entry::Group { group: group() });
+        out.extend(g.data.permissions.iter().map(|n| Entry::GroupNode { group: group(), node: n.clone() }));
+        out.extend(g.data.parents.iter().map(|p| Entry::GroupParent { group: group(), parent: p.clone() }));
+        if g.weight != 0 {
+            out.push(Entry::GroupWeight { group: group(), weight: g.weight });
+        }
+        out.extend(g.data.meta.iter().map(|m| Entry::GroupMeta { group: group(), meta: m.clone() }));
+    }
+    for u in &snap.users {
+        let (uuid, name) = (|| u.uuid.clone(), || u.name.clone());
+        out.extend(u.data.permissions.iter().map(|n| Entry::UserNode { uuid: uuid(), name: name(), node: n.clone() }));
+        out.extend(u.data.parents.iter().map(|p| Entry::UserParent { uuid: uuid(), name: name(), parent: p.clone() }));
+    }
+    out
+}
+
 /// What importing `snap` adds to `perms`.
 pub fn plan(perms: &Perms, snap: &Snapshot) -> Plan {
     let mut p = Plan::default();
     let known = |g: &str| perms.group(g).is_some() || snap.groups.iter().any(|s| s.name == g);
-    for g in &snap.groups {
-        let existing = perms.group(&g.name);
-        if existing.is_none() {
-            p.entries.push(Entry::Group { group: g.name.clone() });
-        }
-        let have = existing.map(|x| &x.data);
-        for n in &g.data.permissions {
-            match have.and_then(|d| d.permissions.iter().find(|x| same_node(x, n))) {
-                Some(x) if x.value == n.value => {}
-                Some(x) => p.conflicts.push(format!(
-                    "group {}: {} is {} here and {} in the source (kept)",
-                    g.name, n.node, x.value, n.value
-                )),
-                None => p.entries.push(Entry::GroupNode { group: g.name.clone(), node: n.clone() }),
+    let conflict = |kind: &str, who: &str, have: &PermNode, new: &PermNode| {
+        format!("{kind} {who}: {} is {} here and {} in the source (kept)", new.node, have.value, new.value)
+    };
+    for entry in candidates(snap) {
+        let add = match &entry {
+            Entry::Group { group } => perms.group(group).is_none(),
+            Entry::GroupNode { group, node } => {
+                match perms.group(group).and_then(|g| g.data.permissions.iter().find(|x| same_node(x, node))) {
+                    Some(x) if x.value == node.value => false,
+                    Some(x) => {
+                        p.conflicts.push(conflict("group", group, x, node));
+                        false
+                    }
+                    None => true,
+                }
             }
-        }
-        for par in &g.data.parents {
-            let there =
-                have.is_some_and(|d| d.parents.iter().any(|x| x.group == par.group && x.context == par.context));
-            if !there && known(&par.group) {
-                p.entries.push(Entry::GroupParent { group: g.name.clone(), parent: par.clone() });
+            Entry::GroupParent { group, parent } => {
+                let there = perms.group(group).is_some_and(|g| {
+                    g.data.parents.iter().any(|x| x.group == parent.group && x.context == parent.context)
+                });
+                !there && known(&parent.group)
             }
-        }
-        if g.weight != 0 && existing.is_none_or(|x| x.weight == 0) {
-            p.entries.push(Entry::GroupWeight { group: g.name.clone(), weight: g.weight });
-        }
-        for m in &g.data.meta {
-            let there = have
-                .is_some_and(|d| d.meta.iter().any(|x| x.kind == m.kind && x.key == m.key && x.context == m.context));
-            if !there {
-                p.entries.push(Entry::GroupMeta { group: g.name.clone(), meta: m.clone() });
+            Entry::GroupWeight { group, .. } => perms.group(group).is_none_or(|x| x.weight == 0),
+            Entry::GroupMeta { group, meta } => !perms.group(group).is_some_and(|g| {
+                g.data.meta.iter().any(|x| x.kind == meta.kind && x.key == meta.key && x.context == meta.context)
+            }),
+            Entry::UserNode { uuid, name, node } => {
+                match perms.user(uuid).and_then(|u| u.data.permissions.iter().find(|x| same_node(x, node))) {
+                    Some(x) if x.value == node.value => false,
+                    Some(x) => {
+                        p.conflicts.push(conflict("user", name, x, node));
+                        false
+                    }
+                    None => true,
+                }
             }
-        }
-    }
-    for u in &snap.users {
-        let have = perms.user(&u.uuid).map(|x| &x.data);
-        for n in &u.data.permissions {
-            match have.and_then(|d| d.permissions.iter().find(|x| same_node(x, n))) {
-                Some(x) if x.value == n.value => {}
-                Some(x) => p.conflicts.push(format!(
-                    "user {}: {} is {} here and {} in the source (kept)",
-                    u.name, n.node, x.value, n.value
-                )),
-                None => p.entries.push(Entry::UserNode { uuid: u.uuid.clone(), name: u.name.clone(), node: n.clone() }),
+            Entry::UserParent { uuid, parent, .. } => {
+                let there = perms.user(uuid).is_some_and(|u| {
+                    u.data.parents.iter().any(|x| x.group == parent.group && x.context == parent.context)
+                });
+                !there && known(&parent.group)
             }
-        }
-        for par in &u.data.parents {
-            let there =
-                have.is_some_and(|d| d.parents.iter().any(|x| x.group == par.group && x.context == par.context));
-            if !there && known(&par.group) {
-                p.entries.push(Entry::UserParent { uuid: u.uuid.clone(), name: u.name.clone(), parent: par.clone() });
-            }
+        };
+        if add {
+            p.entries.push(entry);
         }
     }
     p
+}
+
+/// Leaves out of `plan` what `recorded` (the last ledger of the source)
+/// already holds, so an imported entry an admin removed does not come back,
+/// and then parents in groups that neither exist nor come with the plan.
+pub fn skip_recorded(plan: &mut Plan, perms: &Perms, recorded: &[Entry]) {
+    plan.entries.retain(|x| !recorded.iter().any(|r| r.same(x)));
+    let created: Vec<String> = plan
+        .entries
+        .iter()
+        .filter_map(|x| match x {
+            Entry::Group { group } => Some(group.clone()),
+            _ => None,
+        })
+        .collect();
+    plan.entries.retain(|x| match x {
+        Entry::GroupParent { parent, .. } | Entry::UserParent { parent, .. } => {
+            perms.group(&parent.group).is_some() || created.contains(&parent.group)
+        }
+        _ => true,
+    });
 }
 
 /// Adds the planned entries; returns what changed and the entries really
@@ -159,11 +216,19 @@ pub fn apply(perms: &mut Perms, plan: &Plan) -> (Dirty, Vec<Entry>) {
 pub fn undo(perms: &mut Perms, ledger: &Ledger) -> (Dirty, usize) {
     let mut dirty = Dirty::default();
     let mut n = 0;
-    for e in ledger.entries.iter().rev() {
+    // Groups last: an imported group may still be the parent of another one.
+    let (groups, rest): (Vec<&Entry>, Vec<&Entry>) =
+        ledger.entries.iter().rev().partition(|e| matches!(e, Entry::Group { .. }));
+    for e in rest.into_iter().chain(groups) {
         let removed = match e {
             Entry::Group { group } => {
-                let empty = perms.group(group).is_some_and(|g| g.data.is_empty()) && perms.members(group).is_empty();
-                empty && perms.delete_group(group).map(|d| dirty.merge(d)).is_ok()
+                // Only a group nothing refers to and nobody changed since.
+                let untouched =
+                    perms.group(group).is_some_and(|g| g.data.is_empty() && g.weight == 0 && g.display_name.is_empty());
+                let unused = perms.members(group).is_empty()
+                    && perms.child_groups(group).is_empty()
+                    && perms.tracks_of(group).is_empty();
+                untouched && unused && perms.delete_group(group).map(|d| dirty.merge(d)).is_ok()
             }
             Entry::GroupNode { group, node } => perms
                 .edit_group(group, |g| {
@@ -176,7 +241,7 @@ pub fn undo(perms: &mut Perms, ledger: &Ledger) -> (Dirty, usize) {
                 })
                 .unwrap_or(false),
             Entry::GroupParent { group, parent } => perms
-                .edit_group(group, |g| g.data.remove_parent(&parent.group, &parent.context))
+                .edit_group(group, |g| g.data.remove_parent_exact(parent))
                 .map(|(r, d)| {
                     dirty.merge(d);
                     r
@@ -222,7 +287,7 @@ pub fn undo(perms: &mut Perms, ledger: &Ledger) -> (Dirty, usize) {
                 if perms.user(uuid).is_none() {
                     false
                 } else {
-                    let (r, d) = perms.edit_user(uuid, name, |data| data.remove_parent(&parent.group, &parent.context));
+                    let (r, d) = perms.edit_user(uuid, name, |data| data.remove_parent_exact(parent));
                     dirty.merge(d);
                     r
                 }
@@ -324,41 +389,41 @@ mod tests {
         assert_ne!(fingerprint("a"), fingerprint("b"));
     }
 
+    fn engine() -> crate::engine::Engine {
+        use pumbo_common::lang::{COMMON, Lang};
+        crate::engine::Engine::in_memory(
+            crate::config::CoreCfg::default(),
+            Lang::load(&[COMMON, crate::LANG], "en", None).0,
+        )
+    }
+
     #[test]
     fn import_command_runs_once_per_fingerprint_and_undoes() {
         use crate::command::{SourceMode, Who, import_source};
-        use pumbo_common::lang::{COMMON, Lang};
-        let mut e = crate::engine::Engine::in_memory(
-            crate::config::CoreCfg::default(),
-            Lang::load(&[COMMON, crate::LANG], "en", None).0,
-        );
+        let mut e = engine();
         let who = Who::console();
-        let (out, ledger) =
-            import_source(&mut e, &who, "proxy", Ok(("f1".into(), snap())), &Ledger::default(), SourceMode::Run, 1);
+        let out = import_source(&mut e, &who, "proxy", Ok(("f1".into(), snap())), SourceMode::Run, 1);
         assert!(out.reply.plain().contains("Imported proxy"), "{}", out.reply.plain());
-        let ledger = ledger.unwrap();
-        assert_eq!(ledger.fingerprint, "f1");
-        let (out, again) = import_source(&mut e, &who, "proxy", Ok(("f1".into(), snap())), &ledger, SourceMode::Run, 2);
-        assert!(again.is_none() && out.reply.plain().contains("has not changed"));
-        let (out, _) = import_source(&mut e, &who, "proxy", Ok(("f2".into(), snap())), &ledger, SourceMode::Preview, 3);
-        assert!(out.reply.plain().contains("would add"), "{}", out.reply.plain());
-        let (out, cleared) = import_source(&mut e, &who, "proxy", Err("unused".into()), &ledger, SourceMode::Undo, 4);
+        assert_eq!(e.ledger("proxy").unwrap().fingerprint, "f1");
+        let out = import_source(&mut e, &who, "proxy", Ok(("f1".into(), snap())), SourceMode::Run, 2);
+        assert!(!out.changed && out.reply.plain().contains("has not changed"));
+        let mut more = snap();
+        more.groups[1].data.permissions.push(node("minecraft:command.list", true));
+        let out = import_source(&mut e, &who, "proxy", Ok(("f2".into(), more)), SourceMode::Preview, 3);
+        assert!(out.reply.plain().contains("would add 1 entries"), "{}", out.reply.plain());
+        let out = import_source(&mut e, &who, "proxy", Err("unused".into()), SourceMode::Undo, 4);
         assert!(out.reply.plain().contains("Removed"), "{}", out.reply.plain());
-        assert_eq!(cleared, Some(Ledger::default()));
+        assert_eq!(e.ledger("proxy").unwrap(), Ledger::default());
         assert!(e.perms.group("builder").is_none(), "the imported group was empty again");
     }
 
     #[test]
     fn players_by_name_wait_for_an_online_join() {
         use crate::command::{SourceMode, Who, import_pending, import_source};
-        use pumbo_common::lang::{COMMON, Lang};
-        let mut e = crate::engine::Engine::in_memory(
-            crate::config::CoreCfg::default(),
-            Lang::load(&[COMMON, crate::LANG], "en", None).0,
-        );
+        let mut e = engine();
         let known = "00000000-0000-0000-0000-000000000002";
         let jeb = "00000000-0000-0000-0000-000000000003";
-        e.seen(known, "Known").unwrap();
+        e.seen(known, "Known", true).unwrap();
         let in_builder = Data {
             parents: vec![ParentNode { group: "builder".into(), context: Contexts::global(), expiry: None }],
             ..Data::default()
@@ -369,22 +434,74 @@ mod tests {
             User { uuid: String::new(), name: "known".into(), data: in_builder },
         ];
         let who = Who::console();
-        let (out, ledger) =
-            import_source(&mut e, &who, "file", Ok(("f1".into(), s)), &Ledger::default(), SourceMode::Run, 1);
-        assert!(out.reply.plain().contains("premium) account: Jeb_"), "{}", out.reply.plain());
-        let mut ledger = ledger.unwrap();
-        assert_eq!(ledger.pending.len(), 1);
+        let out = import_source(&mut e, &who, "file", Ok(("f1".into(), s)), SourceMode::Run, 1);
+        let reply = out.reply.plain();
+        assert!(reply.contains("premium) account: Jeb_"), "{reply}");
+        assert!(reply.contains(&format!("known -> {known}")), "{reply}");
+        assert_eq!(e.ledger("file").unwrap().pending.len(), 1);
         assert_eq!(e.perms.user(known).unwrap().data.parents[0].group, "builder", "a known name is a UUID now");
-        assert!(import_pending(&mut e, "file", &mut ledger, known, "Known", true, 2).is_none());
-        let out = import_pending(&mut e, "file", &mut ledger, jeb, "JEB_", true, 3).unwrap();
+        assert!(import_pending(&mut e, "file", known, "Known", true, 2).is_none());
+        let out = import_pending(&mut e, "file", jeb, "JEB_", true, 3).unwrap();
         assert!(out.changed && out.reply.plain().contains("joined"), "{}", out.reply.plain());
+        assert!(out.reply.plain().contains(&format!("JEB_ -> {jeb}")), "{}", out.reply.plain());
         assert_eq!(e.perms.user(jeb).unwrap().data.parents[0].group, "builder");
+        let ledger = e.ledger("file").unwrap();
         assert!(
             ledger.pending.is_empty()
                 && ledger.entries.iter().any(|x| matches!(x, Entry::UserParent { uuid, .. } if uuid == jeb))
         );
-        let (_, cleared) = import_source(&mut e, &who, "file", Err(String::new()), &ledger, SourceMode::Undo, 4);
-        assert_eq!(cleared, Some(Ledger::default()));
+        import_source(&mut e, &who, "file", Err(String::new()), SourceMode::Undo, 4);
+        assert_eq!(e.ledger("file").unwrap(), Ledger::default());
         assert!(e.perms.user(jeb).is_none_or(|u| u.data.parents.is_empty()), "undo takes it back");
+    }
+
+    #[test]
+    fn undo_keeps_group_with_references() {
+        let mut perms = Perms::new();
+        let planned = plan(&perms, &snap());
+        let (_, added) = apply(&mut perms, &planned);
+        let ledger = Ledger { entries: added, ..Ledger::default() };
+        // builder is on a track and another group inherits it.
+        perms.create_track("ranks").unwrap();
+        perms.track_insert("ranks", "builder", None).unwrap();
+        perms.create_group("trial").unwrap();
+        perms
+            .edit_group("trial", |g| {
+                g.data.add_parent(ParentNode { group: "builder".into(), context: Contexts::global(), expiry: None })
+            })
+            .unwrap();
+        undo(&mut perms, &ledger);
+        assert!(perms.group("builder").is_some(), "a group with references stays");
+        assert_eq!(perms.track("ranks").unwrap().groups, vec!["builder".to_string()]);
+        assert!(perms.group("trial").unwrap().data.parents.iter().any(|p| p.group == "builder"));
+        // A display name given here keeps it as well.
+        let mut perms = Perms::new();
+        let planned = plan(&perms, &snap());
+        let (_, added) = apply(&mut perms, &planned);
+        perms.edit_group("builder", |g| g.display_name = "Builder".into()).unwrap();
+        undo(&mut perms, &Ledger { entries: added, ..Ledger::default() });
+        assert!(perms.group("builder").is_some());
+    }
+
+    #[test]
+    fn rerun_does_not_restore_removed_entry() {
+        use crate::command::{SourceMode, Who, import_source};
+        let mut e = engine();
+        let who = Who::console();
+        import_source(&mut e, &who, "file", Ok(("f1".into(), snap())), SourceMode::Run, 1);
+        // An admin takes Alice out of builder; the source changes elsewhere.
+        let alice = "10920508-d5d8-3eed-93d2-92f193afe7d7";
+        let (_, d) = e.perms.edit_user(alice, "Alice", |u| u.remove_parent("builder", &Contexts::global(), false));
+        e.commit(&d, None).unwrap();
+        let mut more = snap();
+        more.groups[1].data.permissions.push(node("minecraft:command.list", true));
+        let out = import_source(&mut e, &who, "file", Ok(("f2".into(), more)), SourceMode::Run, 2);
+        assert!(out.reply.plain().contains("1 entries added"), "{}", out.reply.plain());
+        assert!(e.perms.user(alice).is_none_or(|u| u.data.parents.is_empty()), "the removed entry stays removed");
+        // An entry the source no longer has goes.
+        let out = import_source(&mut e, &who, "file", Ok(("f3".into(), snap())), SourceMode::Run, 3);
+        assert!(out.reply.plain().contains("1 entries the source no longer has"), "{}", out.reply.plain());
+        let default = &e.perms.group("default").unwrap().data.permissions;
+        assert!(!default.iter().any(|n| n.node == "minecraft:command.list"), "{default:?}");
     }
 }

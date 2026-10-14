@@ -67,9 +67,6 @@ pub const BUNDLES: [Bundle; 3] = [pumbo_common::lang::COMMON, pumbo_perms_core::
 /// Name of the plugin on Pumpkin; also the namespace of its permission nodes.
 pub const PLUGIN_NAME: &str = "pumboperms";
 
-/// Host node that decides whether a player sees `/pp` at all.
-pub const COMMAND_NODE: &str = "pumboperms:command";
-
 #[cfg(all(target_arch = "wasm32", feature = "mc263", feature = "mc262"))]
 compile_error!("enable only one of the features `mc263` and `mc262`");
 #[cfg(all(target_arch = "wasm32", not(any(feature = "mc263", feature = "mc262"))))]

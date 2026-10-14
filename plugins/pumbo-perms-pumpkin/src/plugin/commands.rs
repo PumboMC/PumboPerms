@@ -1,8 +1,11 @@
 //! `/pumboperms` and its alias `/pp`.
 
+use std::path::Path;
+
 use pumbo_common::clock::now_ms;
 use pumbo_common::text::Args;
 use pumbo_perms_core::command::{self, Action, Env, Who, split_args};
+use pumbo_perms_core::files;
 use pumbo_perms_core::perms::KnownName;
 use pumbo_perms_core::ui::{self, Text, value};
 
@@ -81,10 +84,11 @@ fn run(sender: &CommandSender, server: &Server, raw: &str) {
         let out = {
             let Rt { engine, online, .. } = &mut *rt;
             let lookup = |name: &str| {
-                online
-                    .iter()
-                    .find(|(_, o)| o.name.eq_ignore_ascii_case(name))
-                    .map(|(uuid, o)| KnownName { uuid: uuid.clone(), name: o.name.clone() })
+                online.iter().find(|(_, o)| o.name.eq_ignore_ascii_case(name)).map(|(uuid, o)| KnownName {
+                    uuid: uuid.clone(),
+                    name: o.name.clone(),
+                    online: false,
+                })
             };
             let env = Env { now, online: &lookup, version: env!("CARGO_PKG_VERSION"), version_rows: rows };
             command::run(engine, &who, &args, &env)
@@ -174,31 +178,13 @@ fn version_rows(rt: &Rt) -> Vec<(String, String)> {
     rows
 }
 
-fn export(rt: &mut Rt, name: &str, now: u64) -> Result<Text, Text> {
-    let dir = format!("{}/exports", rt.dir);
-    let path = format!("{dir}/{name}.json");
-    let json = pumbo_perms_core::export::dump(&rt.engine.perms, now);
-    let result = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, json));
-    match result {
-        Ok(()) => Ok(ui::success(rt.lang(), "exported", &Args::new().arg(value(format!("exports/{name}.json"))))),
-        Err(e) => Err(ui::error(rt.lang(), "export-failed", &Args::new().arg(value(e)))),
-    }
+fn export(rt: &Rt, name: &str, now: u64) -> Result<Text, Text> {
+    let path = files::export_to(&rt.engine, Path::new(&rt.dir), name, now)?;
+    Ok(ui::success(rt.lang(), "exported", &Args::new().arg(value(path))))
 }
 
 fn import(rt: &mut Rt, who: &Who, name: &str, now: u64) -> command::Outcome {
-    let path = format!("{}/exports/{name}.json", rt.dir);
-    let json = match std::fs::read_to_string(&path) {
-        Ok(j) => j,
-        Err(_) => {
-            let reply = ui::error(rt.lang(), "import-missing", &Args::new().arg(value(format!("exports/{name}.json"))));
-            return command::Outcome { reply, ..command::Outcome::default() };
-        }
-    };
-    let backup = format!("before-import-{}", pumbo_perms_core::export::default_file_name(now));
-    if let Err(reply) = export(rt, &backup, now) {
-        return command::Outcome { reply, ..command::Outcome::default() };
-    }
-    command::import(&mut rt.engine, who, name, &json, &format!("exports/{backup}.json"), now)
+    files::import_file(&mut rt.engine, Path::new(&rt.dir), who, name, now)
 }
 
 /// Tab completion of the greedy argument.
@@ -217,7 +203,7 @@ impl CommandSuggestionHandler for Suggest {
         let online: Vec<KnownName> = server
             .get_all_players()
             .iter()
-            .map(|p| KnownName { uuid: api::uuid_string(&p.get_id()), name: p.get_name() })
+            .map(|p| KnownName { uuid: api::uuid_string(&p.get_id()), name: p.get_name(), online: false })
             .collect();
         let now = now_ms();
         let options =

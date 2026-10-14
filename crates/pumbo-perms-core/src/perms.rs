@@ -157,10 +157,13 @@ impl fmt::Display for PermsError {
 impl std::error::Error for PermsError {}
 
 /// A user by name, as known from earlier joins.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KnownName {
     pub uuid: String,
     pub name: String,
+    /// The last join was with an account the host checked with Mojang: only
+    /// such a name may stand for a UUID in an import.
+    pub online: bool,
 }
 
 /// The result of a promotion or demotion.
@@ -168,6 +171,8 @@ pub struct KnownName {
 pub struct Step {
     pub from: Option<String>,
     pub to: Option<String>,
+    /// End time of the new rung (`None`: permanent).
+    pub expiry: Option<u64>,
 }
 
 /// What a change touched, so that exactly that is saved.
@@ -196,6 +201,14 @@ impl Dirty {
         self.deleted_groups.extend(other.deleted_groups);
         self.deleted_tracks.extend(other.deleted_tracks);
     }
+}
+
+/// A copy of [`Perms`] without the name index ([`Perms::saved`]).
+#[derive(Debug, Clone)]
+pub struct Saved {
+    groups: BTreeMap<String, Group>,
+    users: HashMap<String, User>,
+    tracks: BTreeMap<String, Track>,
 }
 
 /// The whole permission database, in memory.
@@ -262,6 +275,19 @@ impl Perms {
         (p, dirty)
     }
 
+    /// Groups, users and tracks as they are now, to [`Perms::restore`] after a
+    /// change that could not be saved (names are not changed by commands).
+    pub fn saved(&self) -> Saved {
+        Saved { groups: self.groups.clone(), users: self.users.clone(), tracks: self.tracks.clone() }
+    }
+
+    pub fn restore(&mut self, saved: Saved) {
+        self.groups = saved.groups;
+        self.users = saved.users;
+        self.tracks = saved.tracks;
+        self.touch();
+    }
+
     /// Counts the change; cached decisions are rebuilt.
     fn touch(&mut self) {
         self.generation = self.generation.wrapping_add(1);
@@ -317,29 +343,34 @@ impl Perms {
                 .filter(|n| !n.is_empty())
                 .or_else(|| self.names.values().find(|n| n.uuid == uuid).map(|n| n.name.clone()))
                 .unwrap_or_else(|| uuid.clone());
-            return Some(KnownName { uuid, name });
+            let online = self.names.values().any(|n| n.uuid == uuid && n.online);
+            return Some(KnownName { uuid, name, online });
         }
         self.names.get(&pumbo_common::id::name_key(name_or_uuid)).cloned()
     }
 
-    /// Records a nickname seen at join. Returns true when the stored name index
-    /// changed (and should be saved).
-    pub fn seen(&mut self, uuid: &str, name: &str) -> bool {
+    /// Records a nickname seen at join (`online`: an account the host checked
+    /// with Mojang). Returns whether the stored name index changed (and should
+    /// be saved), and the UUID that had the name before when it holds data:
+    /// its groups and permissions stay there, which the platform logs.
+    pub fn seen(&mut self, uuid: &str, name: &str, online: bool) -> (bool, Option<String>) {
         let key = pumbo_common::id::name_key(name);
-        let entry = KnownName { uuid: uuid.to_string(), name: name.to_string() };
+        let entry = KnownName { uuid: uuid.to_string(), name: name.to_string(), online };
+        let previous = self.names.get(&key).map(|n| n.uuid.clone());
         let changed = self.names.get(&key) != Some(&entry);
         if changed {
             // a name now belongs to another account: drop the old mapping of this uuid
             self.names.retain(|_, n| n.uuid != uuid);
             self.names.insert(key, entry);
         }
+        let left = previous.filter(|p| p != uuid && self.users.get(p).is_some_and(|u| !u.data.is_empty()));
         if let Some(u) = self.users.get_mut(uuid)
             && u.name != name
         {
             u.name = name.to_string();
-            return true;
+            return (true, left);
         }
-        changed
+        (changed, left)
     }
 
     /// Users that have `group` as a direct parent (in any context).
@@ -780,15 +811,17 @@ impl Perms {
     }
 
     /// Moves a user one group up a track (in exactly these contexts). A user
-    /// not on the track gets its first group.
+    /// not on the track gets its first group, or the second one when the
+    /// first is the default group the user is already in.
     pub fn promote(
         &mut self,
         uuid: &str,
         name: &str,
         track: &str,
         context: &Contexts,
+        now: u64,
     ) -> Result<(Step, Dirty), PermsError> {
-        self.step(uuid, name, track, context, true)
+        self.step(uuid, name, track, context, true, now)
     }
 
     /// Moves a user one group down a track. The first group is the bottom: a
@@ -799,10 +832,13 @@ impl Perms {
         name: &str,
         track: &str,
         context: &Contexts,
+        now: u64,
     ) -> Result<(Step, Dirty), PermsError> {
-        self.step(uuid, name, track, context, false)
+        self.step(uuid, name, track, context, false, now)
     }
 
+    /// One rung along a track among the live parents; the new rung keeps the
+    /// end time of the old one (a 30-day `vip` gives a 30-day `mvp`).
     fn step(
         &mut self,
         uuid: &str,
@@ -810,16 +846,33 @@ impl Perms {
         track: &str,
         context: &Contexts,
         up: bool,
+        now: u64,
     ) -> Result<(Step, Dirty), PermsError> {
         let t = self.tracks.get(track).ok_or_else(|| PermsError::NoTrack(track.to_string()))?;
         let ladder = t.groups.clone();
         let first = ladder.first().cloned().ok_or_else(|| PermsError::EmptyTrack(track.to_string()))?;
         let empty = Data::default();
         let data = self.users.get(uuid).map(|u| &u.data).unwrap_or(&empty);
-        let mut on: Vec<&String> =
-            ladder.iter().filter(|g| data.parents.iter().any(|p| &p.group == *g && &p.context == context)).collect();
+        let ends = |g: &str| -> Vec<Option<u64>> {
+            let live = data.parents.iter().filter(|p| p.group == g && &p.context == context && alive(p.expiry, now));
+            live.map(|p| p.expiry).collect()
+        };
+        let mut on: Vec<&String> = ladder.iter().filter(|g| !ends(g).is_empty()).collect();
         on.dedup();
+        // A permanent parent wins over a temporary one; of two temporary ones the later end.
+        let expiry = on.first().and_then(|g| {
+            let ends = ends(g);
+            if ends.contains(&None) { None } else { ends.into_iter().flatten().max() }
+        });
+        // The default group counts as the first rung for a user without an
+        // active parent that has no context (the rule of `default`).
+        let in_default =
+            first == self.default_group && !data.parents.iter().any(|p| alive(p.expiry, now) && p.context.is_global());
         let (from, to) = match on.as_slice() {
+            [] if up && in_default => match ladder.get(1) {
+                Some(next) => (Some(first), next.clone()),
+                None => return Err(PermsError::TrackEnd(first)),
+            },
             [] if up => (None, first),
             [] => return Err(PermsError::NotOnTrack),
             [current] => {
@@ -840,11 +893,11 @@ impl Perms {
         let to_c = to.clone();
         let ((), dirty) = self.edit_user(uuid, name, |d| {
             if let Some(f) = &from_c {
-                d.remove_parent(f, context);
+                d.remove_parent(f, context, false);
             }
-            d.add_parent(ParentNode { group: to_c, context: context.clone(), expiry: None });
+            d.add_parent(ParentNode { group: to_c, context: context.clone(), expiry });
         });
-        Ok((Step { from, to: Some(to) }, dirty))
+        Ok((Step { from, to: Some(to), expiry }, dirty))
     }
 
     /// Removes expired nodes everywhere. Returns what changed.
@@ -877,4 +930,29 @@ impl Perms {
 
 fn applicable_parents<'a>(data: &'a Data, query: &'a Query, now: u64) -> impl Iterator<Item = &'a ParentNode> + 'a {
     data.parents.iter().filter(move |p| alive(p.expiry, now) && p.context.applies(query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::PermNode;
+
+    const A: &str = "00000000-0000-0000-0000-0000000000a1";
+    const B: &str = "00000000-0000-0000-0000-0000000000b2";
+
+    #[test]
+    fn seen_warns_when_name_leaves_uuid_with_data() {
+        let mut p = Perms::new();
+        assert_eq!(p.seen(A, "Steve", true), (true, None));
+        // Without data nothing is left behind.
+        assert_eq!(p.seen(B, "Steve", false), (true, None));
+        assert_eq!(p.seen(A, "Steve", true), (true, None));
+        p.edit_user(A, "Steve", |d| {
+            d.set_permission(PermNode { node: "fly".into(), value: true, context: Contexts::global(), expiry: None })
+        });
+        assert_eq!(p.seen(B, "Steve", false), (true, Some(A.to_string())));
+        assert_eq!(p.find_user("steve").map(|k| (k.uuid, k.online)), Some((B.to_string(), false)));
+        // The same account again: no warning.
+        assert_eq!(p.seen(B, "Steve", false), (false, None));
+    }
 }

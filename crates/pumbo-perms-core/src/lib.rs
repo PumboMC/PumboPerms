@@ -9,6 +9,7 @@
 //! - [`engine`]: the database, store, config and messages together
 //! - [`command`]: the `/pp` command
 //! - [`export`]: JSON export and import
+//! - [`files`]: export files and the import of one, for every platform
 //! - [`ipc`]: questions from other plugins (JSON)
 //! - [`host`]: setting decisions on a host that only stores exact nodes
 //! - [`config`]: the `context`, `defaults` and `log` sections
@@ -61,6 +62,7 @@ pub mod config;
 pub mod context;
 pub mod engine;
 pub mod export;
+pub mod files;
 pub mod host;
 pub mod ipc;
 pub mod merge;

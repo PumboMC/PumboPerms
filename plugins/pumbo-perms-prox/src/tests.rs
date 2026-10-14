@@ -35,8 +35,9 @@ fn plugin_on(config: Option<&str>, store: PermsStore) -> (PumboPerms, std::path:
         std::process::id(),
         std::thread::current().id()
     ));
-    let _ = std::fs::create_dir_all(dir.join("imports"));
-    let _ = std::fs::remove_file(dir.join("imports/file.json"));
+    let _ = std::fs::remove_dir_all(dir.join("imports"));
+    let _ = std::fs::remove_dir_all(dir.join("exports"));
+    let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::remove_file(dir.join("config.yml"));
     let _ = std::fs::remove_file(dir.join(common_config::LAST_GOOD));
     if let Some(c) = config {
@@ -119,7 +120,7 @@ fn template_messages_and_manifest() {
 /// again does nothing, a changed one only gives a hint (`follow: false`).
 #[test]
 fn takes_over_permissions_yml() {
-    let (p, dir) = plugin(None);
+    let (p, _) = plugin(None);
     let alice = testing::add_player("Alice", Some("lobby"));
     let alice_uuid = uuid_of(&players::get(alice).unwrap());
     let data = format!(
@@ -140,7 +141,8 @@ fn takes_over_permissions_yml() {
     );
     assert!(has(&set, "pumbo.proxy.server", Context::Global, true));
     assert!(has(&set, "group.vip", Context::Global, true));
-    assert!(std::fs::read_to_string(dir.join("imports/file.json")).unwrap().contains("Jeb_"));
+    let ledger = || p.with(|s| s.engine.ledger(SOURCE).unwrap()).unwrap();
+    assert_eq!(ledger().pending[0].name, "Jeb_");
 
     // Jeb_ joins for the first time with an online-mode account: the entries
     // waiting for the name.
@@ -149,7 +151,7 @@ fn takes_over_permissions_yml() {
     let set = load(&p, jeb);
     assert!(has(&set, "group.vip", Context::Global, true), "{set:?}");
     assert!(logs().contains("joined for the first time"), "{}", logs());
-    assert!(!std::fs::read_to_string(dir.join("imports/file.json")).unwrap().contains("\"pending\""));
+    assert!(ledger().pending.is_empty());
 
     // The same file at the next start: nothing; a changed one: a hint only.
     let before = logs().len();
@@ -630,22 +632,53 @@ fn group_context_prefix_reaches_the_proxy() {
     assert_eq!(kept, ans.data.unwrap());
 }
 
-/// Known bugs: each test shows the correct behaviour and is ignored until fixed.
-mod known_bugs {
-    use super::*;
+#[test]
+fn export_on_broken_database_keeps_existing_file() {
+    testing::reset();
+    let dir = std::env::temp_dir().join(format!("pumbo-perms-prox-broken-export-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("exports")).unwrap();
+    let path = dir.join("exports/nightly.json");
+    std::fs::write(&path, "precious").unwrap();
+    let d = dir.to_string_lossy().to_string();
+    let p = PumboPerms { state: RefCell::new(None), config_dir: d.clone(), data_dir: d };
+    p.start(Err(pumbo_common::store::StoreError::new("disk on fire"))).unwrap();
+    console(&p, "export nightly");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "precious");
+    console(&p, "export fresh");
+    assert!(!dir.join("exports/fresh.json").exists(), "no empty export of a broken database");
+}
 
-    #[test]
-    #[ignore = "known bug, fixed in a following change"]
-    fn export_on_broken_database_keeps_existing_file() {
-        testing::reset();
-        let dir = std::env::temp_dir().join(format!("pumbo-perms-prox-broken-export-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("exports")).unwrap();
-        let path = dir.join("exports/nightly.json");
-        std::fs::write(&path, "precious").unwrap();
-        let d = dir.to_string_lossy().to_string();
-        let p = PumboPerms { state: RefCell::new(None), config_dir: d.clone(), data_dir: d };
-        p.start(Err(pumbo_common::store::StoreError::new("disk on fire"))).unwrap();
-        console(&p, "export nightly");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "precious");
-    }
+/// An offline account that joined before the import does not get the rank of
+/// its nickname: the name table counts only accounts Mojang checked.
+#[test]
+fn offline_join_then_import_run_gets_nothing() {
+    let (p, _) = plugin(Some("import:\n  enabled: false\n"));
+    let offline = testing::add_player("Mod1", Some("lobby"));
+    load(&p, offline);
+    let data = r#"{"format":"pumboperms","version":1,
+        "groups":[{"name":"mod","data":{"permissions":[{"node":"pumbo.bans.ban","value":true}]}}],
+        "by-name":[{"name":"Mod1","data":{"parents":[{"group":"mod"}]}}]}"#;
+    call(&p, METHOD_FILE, file(data)).unwrap();
+    console(&p, "import run file");
+    assert!(logs().contains("players are known only by name") && logs().contains("Mod1"), "{}", logs());
+    assert!(!has(&load(&p, offline), "group.mod", Context::Global, true), "an offline account took the rank");
+    assert_eq!(p.with(|s| s.engine.ledger(SOURCE).unwrap().pending.len()).unwrap(), 1);
+}
+
+/// The ledgers of a database from before schema 2 move into it at start.
+#[test]
+fn ledger_file_moves_into_the_database() {
+    let dir = std::env::temp_dir().join(format!("pumbo-perms-prox-ledger-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("imports")).unwrap();
+    std::fs::write(dir.join("imports/file.json"), r#"{"fingerprint":"f1","at":7,"entries":[]}"#).unwrap();
+    let store = pumbo_common::store::Store::open(dir.join("perms.redb")).unwrap();
+    store.write(|tx| pumbo_common::store::WriteExt::put_u64(tx, pumbo_perms_core::store::META, "schema", 1)).unwrap();
+    testing::reset();
+    let d = dir.to_string_lossy().to_string();
+    let p = PumboPerms { state: RefCell::new(None), config_dir: d.clone(), data_dir: d };
+    p.start(PermsStore::new(store)).unwrap();
+    assert!(logs().contains("schema 1 -> 2"), "{}", logs());
+    assert_eq!(p.with(|s| s.engine.ledger(SOURCE).unwrap().fingerprint).unwrap(), "f1");
+    assert!(dir.join("imports/file.json.migrated").exists());
 }

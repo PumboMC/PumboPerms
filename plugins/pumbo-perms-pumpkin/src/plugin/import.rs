@@ -14,8 +14,8 @@
 //! connected bridge has none of this session, the first pass waits
 //! ([`Rt::hold`]).
 //!
-//! What each source added is kept in `imports/<source>.json` (its ledger),
-//! so a later import replaces only that and `/pp import undo` takes it back.
+//! What each source added is kept in the database (its ledger), so a later
+//! import changes only that and `/pp import undo` takes it back.
 //! Every call to another plugin happens outside the state (`ipc` may run
 //! that plugin's handler inside it).
 
@@ -27,7 +27,7 @@ use pumbo_perms_core::{merge, ui};
 
 use super::api::{self, Server};
 use super::push;
-use super::state::{self, Answer, Bridge, Rt, Step, load_ledger, save_ledger};
+use super::state::{self, Answer, Bridge, Rt, Step};
 
 /// The bridge plugin on Pumpkin.
 pub const BRIDGE: &str = "pumbobridge";
@@ -120,12 +120,7 @@ pub fn command(rt: &mut Rt, server: &Server, who: &Who, source: &str, mode: Sour
         return Outcome { reply: ui::warn(rt.lang(), "import-proxy-rules", &Args::new()), ..Outcome::default() };
     }
     let data = if mode == SourceMode::Undo { Err(String::new()) } else { fetch(server, source) };
-    let ledger = load_ledger(&rt.dir, source);
-    let (out, new) = command::import_source(&mut rt.engine, who, source, data, &ledger, mode, now);
-    if let Some(l) = new {
-        save_ledger(rt, source, &l);
-    }
-    out
+    command::import_source(&mut rt.engine, who, source, data, mode, now)
 }
 
 /// The proxy's PumboPerms rules (`on`) or not any more: steps back or takes
@@ -166,7 +161,16 @@ fn take() -> bool {
 /// import pass, then (with `import.follow`) new versions of the sources.
 pub fn tick(server: &Server) {
     let now = now_ms();
-    if !state::with(|rt| rt.pass_due(now)).unwrap_or(false) {
+    let due = state::with(|rt| {
+        rt.refresh_lock(now);
+        let dir = rt.dir.clone();
+        let plans = rt.retry_database(now, |e| super::open_database(&dir, e.cfg.clone(), e.lang.clone(), now));
+        (plans, rt.resend(), rt.pass_due(now))
+    });
+    state::flush_logs();
+    let Some((plans, resend, due)) = due else { return };
+    push::apply_plans(server, None, plans, resend);
+    if !due {
         return;
     }
     let bridge = bridge();
@@ -183,14 +187,16 @@ pub fn tick(server: &Server) {
     {
         api::info("PumboPerms: PumboBridge had stopped writing the permissions; it writes them again");
     }
-    let Some((cfg, dir, ready, step, ledger)) = state::with(|rt| {
+    let Some((cfg, attachments_imported, ready, step, ledger)) = state::with(|rt| {
         let follow = rt.cfg.import.follow;
         let step = if rt.hold(&bridge, now) {
             Step::Wait
         } else {
             state::decide_import(state::passive(), rt.ready, follow, rt.waiting_until, now)
         };
-        (rt.cfg.import.clone(), rt.dir.clone(), rt.ready, step, load_ledger(&rt.dir, "proxy").fingerprint)
+        let ledger = |s: &str| rt.engine.ledger(s).unwrap_or_default();
+        let attachments_imported = ledger("attachments").at != 0;
+        (rt.cfg.import.clone(), attachments_imported, rt.ready, step, ledger("proxy").fingerprint)
     }) else {
         return;
     };
@@ -220,7 +226,7 @@ pub fn tick(server: &Server) {
     }
     let pending = answers.iter().any(|(_, a)| matches!(a, Answer::Pending));
     let any_data = answers.iter().any(|(_, a)| matches!(a, Answer::Data(..)));
-    let fallback = if cfg.enabled && !ready && !any_data && !pending && load_ledger(&dir, "attachments").at == 0 {
+    let fallback = if cfg.enabled && !ready && !any_data && !pending && !attachments_imported {
         attachments(server)
     } else {
         None

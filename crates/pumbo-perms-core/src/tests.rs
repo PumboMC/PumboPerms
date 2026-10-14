@@ -382,30 +382,30 @@ fn tracks_promote_and_demote() {
     }
     assert_eq!(p.track_insert("ranks", "vip", None), Err(PermsError::OnTrack("vip".into())));
     let g = Contexts::global();
-    let (s, _) = p.promote(U, "Steve", "ranks", &g).unwrap();
+    let (s, _) = p.promote(U, "Steve", "ranks", &g, 0).unwrap();
     assert_eq!((s.from, s.to.as_deref()), (None, Some("member")));
-    let (s, _) = p.promote(U, "Steve", "ranks", &g).unwrap();
+    let (s, _) = p.promote(U, "Steve", "ranks", &g, 0).unwrap();
     assert_eq!((s.from.as_deref(), s.to.as_deref()), (Some("member"), Some("vip")));
     assert_eq!(p.effective(U, &here(), 0).primary, "vip");
-    p.promote(U, "Steve", "ranks", &g).unwrap();
-    assert_eq!(p.promote(U, "Steve", "ranks", &g).map(|_| ()), Err(PermsError::TrackEnd("mvp".into())));
-    let (s, _) = p.demote(U, "Steve", "ranks", &g).unwrap();
+    p.promote(U, "Steve", "ranks", &g, 0).unwrap();
+    assert_eq!(p.promote(U, "Steve", "ranks", &g, 0).map(|_| ()), Err(PermsError::TrackEnd("mvp".into())));
+    let (s, _) = p.demote(U, "Steve", "ranks", &g, 0).unwrap();
     assert_eq!(s.to.as_deref(), Some("vip"));
-    p.demote(U, "Steve", "ranks", &g).unwrap();
-    assert_eq!(p.demote(U, "Steve", "ranks", &g).map(|_| ()), Err(PermsError::TrackStart("member".into())));
-    assert_eq!(p.demote(U2, "Alex", "ranks", &g).map(|_| ()), Err(PermsError::NotOnTrack));
+    p.demote(U, "Steve", "ranks", &g, 0).unwrap();
+    assert_eq!(p.demote(U, "Steve", "ranks", &g, 0).map(|_| ()), Err(PermsError::TrackStart("member".into())));
+    assert_eq!(p.demote(U2, "Alex", "ranks", &g, 0).map(|_| ()), Err(PermsError::NotOnTrack));
     // on two groups of a track at once: refuse to guess
     p.edit_user(U, "Steve", |d| d.add_parent(parent("mvp")));
-    assert!(matches!(p.promote(U, "Steve", "ranks", &g), Err(PermsError::Ambiguous(_))));
+    assert!(matches!(p.promote(U, "Steve", "ranks", &g, 0), Err(PermsError::Ambiguous(_))));
     // tracks per context are separate ladders
     let lobby = ctx("server=lobby");
-    let (s, _) = p.promote(U2, "Alex", "ranks", &lobby).unwrap();
+    let (s, _) = p.promote(U2, "Alex", "ranks", &lobby, 0).unwrap();
     assert_eq!(s.to.as_deref(), Some("member"));
     assert_eq!(p.effective(U2, &here(), 0).primary, "member");
     assert_eq!(p.effective(U2, &Query::new("survival", "", "world"), 0).primary, "default");
-    assert_eq!(p.promote(U, "S", "nope", &g).map(|_| ()), Err(PermsError::NoTrack("nope".into())));
+    assert_eq!(p.promote(U, "S", "nope", &g, 0).map(|_| ()), Err(PermsError::NoTrack("nope".into())));
     p.create_track("empty").unwrap();
-    assert_eq!(p.promote(U, "S", "empty", &g).map(|_| ()), Err(PermsError::EmptyTrack("empty".into())));
+    assert_eq!(p.promote(U, "S", "empty", &g, 0).map(|_| ()), Err(PermsError::EmptyTrack("empty".into())));
 }
 
 #[test]
@@ -436,12 +436,12 @@ fn deleting_and_renaming_groups_cleans_references() {
 #[test]
 fn names_and_lookup() {
     let mut p = Perms::new();
-    assert!(p.seen(U, "Steve"));
-    assert!(!p.seen(U, "Steve"));
+    assert!(p.seen(U, "Steve", false).0);
+    assert!(!p.seen(U, "Steve", false).0);
     assert_eq!(p.find_user("steve").unwrap().uuid, U);
     assert_eq!(p.find_user(U).unwrap().name, "Steve");
     // renamed account: the old name no longer points to it
-    assert!(p.seen(U, "Steve2"));
+    assert!(p.seen(U, "Steve2", false).0);
     assert!(p.find_user("steve").is_none());
     assert_eq!(p.find_user("STEVE2").unwrap().name, "Steve2");
     assert!(p.find_user("nobody").is_none());

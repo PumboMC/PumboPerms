@@ -44,6 +44,7 @@ desc-parent-add: Inherit a group
 desc-parent-add-details: "Example: parent add vip server=survival"
 desc-parent-addtemp: Inherit a group for a time
 desc-parent-remove: Stop inheriting a group
+desc-parent-removetemp: Remove only the temporary parent
 desc-parent-set: Make it the only parent
 desc-parent-set-details: Removes the other parent groups in these contexts.
 desc-meta-info: Prefixes, suffixes and meta
@@ -54,10 +55,12 @@ desc-meta-setprefix-details: "Replaces the other prefixes. Example: meta setpref
 desc-meta-addprefix: Add a prefix
 desc-meta-addtempprefix: Add a prefix for a time
 desc-meta-removeprefix: Remove prefixes
+desc-meta-removetempprefix: Remove only temporary prefixes
 desc-meta-setsuffix: Set the suffix
 desc-meta-addsuffix: Add a suffix
 desc-meta-addtempsuffix: Add a suffix for a time
 desc-meta-removesuffix: Remove suffixes
+desc-meta-removetempsuffix: Remove only temporary suffixes
 desc-user-promote: Move one group up a track
 desc-user-demote: Move one group down a track
 desc-user-clear: Remove everything
@@ -151,20 +154,25 @@ track-end: "{target} is already on the highest group of {track} ({group})."
 track-start: "{target} is already on the lowest group of {track} ({group})."
 track-ambiguous: "{target} is on several groups of {track}: {groups}. Remove the extra ones with parent remove."
 not-on-track: "{target} is not on track {track}{context}."
-promoted: "Promoted {target} on {track}: {from} → {to}{context}."
-promoted-first: "{target} is now {to}, the first group of {track}{context}."
-demoted: "Demoted {target} on {track}: {from} → {to}{context}."
+promoted: "Promoted {target} on {track}: {from} → {to}{context}{until}."
+promoted-first: "{target} is now {to}, the first group of {track}{context}{until}."
+demoted: "Demoted {target} on {track}: {from} → {to}{context}{until}."
 exported: Exported to {0}.
 export-failed: "Export failed: {0}"
+export-exists: "{0} exists, choose another name."
 imported: Imported {0} groups, {1} users and {2} tracks from {3}. The previous data was saved as {4}.
 import-failed: "Import failed: {0}"
-import-source-done: "Imported {0}: {1} entries added, {2} conflicts kept as they were (see /pp log)."
+import-source-done: "Imported {0}: {1} entries added, {2} conflicts kept as they were (see /pp log). Imported entries removed here stay removed."
+import-source-removed: "{0} entries the source no longer has were taken back."
+import-source-resolved: "{0} players named only by nickname go to the UUID bound to that name: {1}"
 import-source-same: "{0} has not changed since the last import."
 import-source-preview: "Importing {0} would add {1} entries ({2} conflicts kept as they are):"
 import-source-undone: "Removed {1} entries imported from {0}."
 import-source-failed: "Cannot import {0}: {1}"
 import-source-pending: "{0} players are known only by name; their entries are added when they join with an online-mode (premium) account: {1}"
 import-source-joined: "{0}: {1} joined for the first time, {2} entries added."
+import-source-name-only: "{0} players are known only by name and get nothing here; give them their ranks with /pp: {1}"
+import-source-joined-name-only: "{0}: {1} joined and got nothing: players known only by name get nothing here; give them their ranks with /pp."
 import-source-offline: "{0}: {1} joined with an offline-mode account and got nothing; the entries for this name wait for an online-mode (premium) account."
 import-fixed: "{0} entries of the file were fixed or left out:"
 import-worlds: "{0} entries with world= kept: the proxy does not see worlds, so they apply nowhere."

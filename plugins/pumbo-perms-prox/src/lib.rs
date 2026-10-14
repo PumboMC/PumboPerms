@@ -70,12 +70,12 @@ use pumbo_common::id::Uuid;
 use pumbo_common::rich::Text as Rich;
 use pumbo_common::store::Store;
 use pumbo_common::text::Args;
-use pumbo_perms_core::command::{self, Action, Env, SourceMode, Who, split_args};
+use pumbo_perms_core::command::{self, Action, COMMAND_NODE, Env, SourceMode, Who, split_args};
 use pumbo_perms_core::context::Query;
 use pumbo_perms_core::engine::Engine;
 use pumbo_perms_core::export::{self, Snapshot};
+use pumbo_perms_core::files;
 use pumbo_perms_core::ipc;
-use pumbo_perms_core::merge::Ledger;
 use pumbo_perms_core::perms::KnownName;
 use pumbo_perms_core::store::PermsStore;
 use pumbo_perms_core::ui;
@@ -92,10 +92,8 @@ use pumbo_sdk::{
 pub const SOURCE: &str = "file";
 /// Expired nodes and changed server lists are looked for this often.
 const TICK_MS: u64 = 1000;
-/// A broken database is logged again after this long.
+/// A broken database is logged and read again after this long.
 const BROKEN_LOG_MS: u64 = 60_000;
-/// Whether a player sees `/pp` at all (set for everyone with any `/pp` right).
-const COMMAND_NODE: &str = "pumbo.perms.command";
 /// `/pp` subcommands also under `/pumboperms` and `/pumbo perms` (`reload`,
 /// `version` and `debug` there are the proxy's own), with aliases.
 const UMBRELLA: &[(&str, &[&str])] = &[
@@ -126,8 +124,6 @@ struct State {
     loaded: HashMap<PlayerId, (String, Vec<PermissionEntry>, String)>,
     /// `permissions.yml` as the proxy sent it last (fingerprint, contents).
     file: Option<(String, Snapshot)>,
-    /// What `permissions.yml` added (`imports/file.json`).
-    ledger: Ledger,
     timer: u64,
     /// The proxy refused `replace`: another provider is configured.
     not_provider: bool,
@@ -139,7 +135,8 @@ pub struct PumboPerms {
     state: RefCell<Option<State>>,
     /// Read-only config folder (`plugins/pumbo-perms/`).
     pub config_dir: String,
-    /// Data folder (`plugins/data/pumbo-perms/`): `perms.redb`, `imports/`, `exports/`.
+    /// Data folder (`plugins/data/pumbo-perms/`): `perms.redb`, `exports/`
+    /// (and `imports/` of a database before schema 2).
     pub data_dir: String,
 }
 
@@ -185,27 +182,6 @@ fn entries(e: &mut Engine, uuid: &str, now: u64) -> Vec<PermissionEntry> {
             },
         })
         .collect()
-}
-
-fn ledger_path(dir: &str) -> String {
-    format!("{dir}/imports/{SOURCE}.json")
-}
-
-fn load_ledger(dir: &str) -> Ledger {
-    std::fs::read_to_string(ledger_path(dir)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
-}
-
-fn save_ledger(dir: &str, ledger: &Ledger) {
-    let path = ledger_path(dir);
-    let result = if *ledger == Ledger::default() {
-        std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
-    } else {
-        let _ = std::fs::create_dir_all(format!("{dir}/imports"));
-        std::fs::write(&path, serde_json::to_string_pretty(ledger).unwrap_or_default())
-    };
-    if let Err(e) = result {
-        log::warn(&format!("PumboPerms: cannot save {path}: {e}"));
-    }
 }
 
 /// [`ipc::info`] on `server` (empty: global) as JSON, built as the host's
@@ -259,6 +235,9 @@ impl PumboPerms {
             }
         }
         let mut engine = Engine::new(store, cfg.core(), lang);
+        if let Some(line) = engine.migrate_ledgers(std::path::Path::new(&format!("{}/imports", self.data_dir))) {
+            log::info(&line);
+        }
         if let Some(why) = &engine.broken {
             // Fail closed: the proxy refuses logins until the database works.
             log::error(&format!("PumboPerms: the database is not available, changes are refused: {why}"));
@@ -287,14 +266,12 @@ impl PumboPerms {
             engine.perms.tracks().count(),
             engine.server_groups.len(),
         );
-        let ledger = load_ledger(&self.data_dir);
         let timer = scheduler::every(TICK_MS);
         *self.state.borrow_mut() = Some(State {
             engine,
             cfg,
             loaded: HashMap::new(),
             file: None,
-            ledger,
             timer,
             not_provider: false,
             broken_logged: None,
@@ -401,15 +378,16 @@ impl PumboPerms {
         };
         let online = players::all();
         let now = now_ms();
-        let dir = self.data_dir.clone();
+        let dir = std::path::PathBuf::from(&self.data_dir);
         let mut reload = false;
         let result = self.with(|s| {
             let rows = Self::version_rows(s);
             let lookup = |name: &str| {
-                online
-                    .iter()
-                    .find(|p| p.profile.name.eq_ignore_ascii_case(name))
-                    .map(|p| KnownName { uuid: uuid_of(p), name: p.profile.name.clone() })
+                online.iter().find(|p| p.profile.name.eq_ignore_ascii_case(name)).map(|p| KnownName {
+                    uuid: uuid_of(p),
+                    name: p.profile.name.clone(),
+                    online: p.online_mode,
+                })
             };
             let env = Env { now, online: &lookup, version: env!("CARGO_PKG_VERSION"), version_rows: rows };
             let out = command::run(&mut s.engine, &who, &args, &env);
@@ -420,7 +398,7 @@ impl PumboPerms {
                 Some(Action::Reload) => reload = true,
                 Some(Action::Export(name)) => text = export_file(&s.engine, &dir, &name, now).unwrap_or_else(|e| e),
                 Some(Action::Import(name)) => {
-                    let o = import_file(&mut s.engine, &dir, &who, &name, now);
+                    let o = files::import_file(&mut s.engine, &dir, &who, &name, now);
                     text = o.reply;
                     changed |= o.changed;
                     log_entry = o.log.or(log_entry);
@@ -435,11 +413,7 @@ impl PumboPerms {
                         }
                         (f, true) => f.clone().ok_or_else(String::new),
                     };
-                    let (o, ledger) = command::import_source(&mut s.engine, &who, &source, data, &s.ledger, mode, now);
-                    if let Some(l) = ledger {
-                        save_ledger(&dir, &l);
-                        s.ledger = l;
-                    }
+                    let o = command::import_source(&mut s.engine, &who, &source, data, mode, now);
                     text = o.reply;
                     changed |= o.changed;
                 }
@@ -490,32 +464,37 @@ impl PumboPerms {
             }
         };
         let now = now_ms();
-        let dir = self.data_dir.clone();
         let line = self
             .with(|s| {
                 s.file = Some((f.fingerprint.clone(), snap.clone()));
-                if !s.cfg.import.enabled || s.ledger.fingerprint == f.fingerprint {
+                if !s.cfg.import.enabled {
                     return None;
                 }
-                if s.ledger.at != 0 && !s.cfg.import.follow {
+                let ledger = match s.engine.ledger(SOURCE) {
+                    Ok(l) => l,
+                    Err(why) => {
+                        // An empty ledger would import everything again.
+                        log::error(&format!("PumboPerms: permissions.yml is not imported automatically: {why}"));
+                        return None;
+                    }
+                };
+                if ledger.fingerprint == f.fingerprint {
+                    return None;
+                }
+                if ledger.at != 0 && !s.cfg.import.follow {
                     return Some((
                         "changed since it was imported; /pp import preview file shows what it would add, /pp import run file imports it".to_string(),
                         false,
                     ));
                 }
-                let (out, ledger) = command::import_source(
+                let out = command::import_source(
                     &mut s.engine,
                     &Who::console(),
                     SOURCE,
                     Ok((f.fingerprint, snap)),
-                    &s.ledger,
                     SourceMode::Run,
                     now,
                 );
-                if let Some(l) = ledger {
-                    save_ledger(&dir, &l);
-                    s.ledger = l;
-                }
                 Some((out.reply.plain(), out.changed))
             })
             .flatten();
@@ -530,33 +509,18 @@ impl PumboPerms {
     }
 }
 
-fn export_file(e: &Engine, dir: &str, name: &str, now: u64) -> Result<Rich, Rich> {
-    let folder = format!("{dir}/exports");
-    let json = export::dump(&e.perms, now);
-    let result = std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(format!("{folder}/{name}.json"), json));
-    let shown = format!("plugins/data/{}/exports/{name}.json", setup::PLUGIN_ID);
-    match result {
-        Ok(()) => Ok(ui::success(&e.lang, "exported", &Args::new().arg(ui::value(shown)))),
-        Err(err) => Err(ui::error(&e.lang, "export-failed", &Args::new().arg(ui::value(err)))),
-    }
-}
-
-fn import_file(e: &mut Engine, dir: &str, who: &Who, name: &str, now: u64) -> command::Outcome {
-    let Ok(json) = std::fs::read_to_string(format!("{dir}/exports/{name}.json")) else {
-        let reply = ui::error(&e.lang, "import-missing", &Args::new().arg(ui::value(format!("exports/{name}.json"))));
-        return command::Outcome { reply, ..command::Outcome::default() };
-    };
-    let backup = format!("before-import-{}", export::default_file_name(now));
-    if let Err(reply) = export_file(e, dir, &backup, now) {
-        return command::Outcome { reply, ..command::Outcome::default() };
-    }
-    command::import(e, who, name, &json, &format!("exports/{backup}.json"), now)
+fn export_file(e: &Engine, dir: &std::path::Path, name: &str, now: u64) -> Result<Rich, Rich> {
+    let path = files::export_to(e, dir, name, now)?;
+    let shown = format!("plugins/data/{}/{path}", setup::PLUGIN_ID);
+    Ok(ui::success(&e.lang, "exported", &Args::new().arg(ui::value(shown))))
 }
 
 impl pumbo_sdk::Plugin for PumboPerms {
     async fn init(&self) -> Result<(), String> {
         pumbo_common::panic::install(log::error);
+        let opening = now_ms();
         let store = Store::open(format!("{}/perms.redb", self.data_dir)).and_then(PermsStore::new);
+        log::info(&format!("PumboPerms: database opened in {} ms", now_ms().saturating_sub(opening)));
         self.start(store)
     }
 
@@ -593,7 +557,6 @@ impl pumbo_sdk::Plugin for PumboPerms {
         let groups = server_groups();
         let (uuid, name) = (uuid_of(&p), p.profile.name.clone());
         let now = now_ms();
-        let dir = self.data_dir.clone();
         let (set, joined) = self
             .with(|s| {
                 if let Some(why) = &s.engine.broken {
@@ -601,18 +564,16 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 }
                 s.not_provider = false;
                 s.engine.server_groups = groups;
-                if let Err(e) = s.engine.seen(&uuid, &name) {
-                    log::warn(&format!("PumboPerms: cannot save the name of {name}: {e}"));
+                match s.engine.seen(&uuid, &name, p.online_mode) {
+                    Ok(Some(moved)) => log::warn(&moved),
+                    Ok(None) => {}
+                    Err(e) => log::warn(&format!("PumboPerms: cannot save the name of {name}: {e}")),
                 }
-                let joined =
-                    command::import_pending(&mut s.engine, SOURCE, &mut s.ledger, &uuid, &name, p.online_mode, now);
-                if joined.as_ref().is_some_and(|o| o.changed) {
-                    save_ledger(&dir, &s.ledger);
-                }
+                let joined = command::on_join(&mut s.engine, &uuid, &name, p.online_mode, now);
                 let set = entries(&mut s.engine, &uuid, now);
                 let info = info_json(&mut s.engine, &uuid, p.context.server.as_deref().unwrap_or(""), now);
                 s.loaded.insert(p.id, (uuid.clone(), set.clone(), info));
-                Ok((set, joined.map(|o| o.reply.plain())))
+                Ok((set, joined.into_iter().map(|o| o.reply.plain()).collect::<Vec<_>>()))
             })
             .ok_or_else(|| "PumboPerms is not loaded".to_string())??;
         for l in joined.iter().flat_map(|t| t.lines()) {
@@ -633,13 +594,15 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 if s.timer != timer {
                     return false;
                 }
-                if let Some(why) = &s.engine.broken
-                    && s.broken_logged.is_none_or(|t| now >= t.saturating_add(BROKEN_LOG_MS))
-                {
+                if s.engine.broken.is_some() && s.broken_logged.is_none_or(|t| now >= t.saturating_add(BROKEN_LOG_MS)) {
                     s.broken_logged = Some(now);
-                    log::error(&format!(
-                        "PumboPerms: the database is not available ({why}); logins wait for it and changes are refused"
-                    ));
+                    if s.engine.retry_open() {
+                        log::info("PumboPerms: the database can be read again; changes work again");
+                    } else if let Some(why) = &s.engine.broken {
+                        log::error(&format!(
+                            "PumboPerms: the database is not available ({why}); logins wait for it and changes are refused"
+                        ));
+                    }
                 }
                 let (due, saved) = s.engine.expire(now);
                 if let Err(e) = saved {

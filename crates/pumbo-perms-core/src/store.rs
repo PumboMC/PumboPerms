@@ -7,16 +7,24 @@
 //! - `perms_tracks`: track name -> [`Track`]
 //! - `perms_log`: 20-digit sequence number -> [`LogEntry`]
 //! - `perms_host_nodes`: nodes the platform ever handed to its host (value empty)
+//! - `perms_imports`: source name -> [`Ledger`] (what an import added), from schema 2
 //! - `perms_meta`: `schema`, `log_seq` (numbers)
 //!
 //! The whole database is read once at start; every change writes what it
-//! touched in one transaction together with its log entry.
+//! touched in one transaction together with its log entry, an import also
+//! with its ledger.
+//!
+//! Schema 1 (0.1.2-beta and older) kept the ledgers as files
+//! (`imports/<source>.json`); [`PermsStore::migrate_ledgers`] moves them into
+//! the table and raises the schema to 2. A build that knows only schema 1
+//! refuses the file after that.
 
 use std::collections::BTreeSet;
 
 use pumbo_common::store::{Durability, ReadExt, Result, Store, StoreError, WriteExt, WriteOps};
 use serde::{Deserialize, Serialize};
 
+use crate::merge::Ledger;
 use crate::model::{Group, Track, User};
 use crate::perms::{Dirty, KnownName, Perms};
 
@@ -26,10 +34,11 @@ pub const NAMES: &str = "perms_names";
 pub const TRACKS: &str = "perms_tracks";
 pub const LOG: &str = "perms_log";
 pub const HOST_NODES: &str = "perms_host_nodes";
+pub const IMPORTS: &str = "perms_imports";
 pub const META: &str = "perms_meta";
 
 /// Version of the stored data.
-pub const SCHEMA: u64 = 1;
+pub const SCHEMA: u64 = 2;
 
 /// One change, as shown by `/pp log`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +61,9 @@ pub struct LogEntry {
 struct StoredName {
     uuid: String,
     name: String,
+    /// Absent in schema 1: such a name counts as offline until the next join.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    online: bool,
 }
 
 /// The permission tables of one store.
@@ -65,6 +77,7 @@ impl PermsStore {
     /// schema than this build knows is refused.
     pub fn new(store: Store) -> Result<Self> {
         let schema = store.read(|tx| tx.get_u64(META, "schema"))?;
+        // Schema 1 stays until the platform calls `migrate_ledgers`.
         match schema {
             None => store.write(|tx| tx.put_u64(META, "schema", SCHEMA))?,
             Some(v) if v > SCHEMA => {
@@ -96,7 +109,7 @@ impl PermsStore {
             let mut names: Vec<KnownName> = Vec::new();
             for (k, v) in tx.collect_prefix(NAMES, "")? {
                 let n: StoredName = decode(NAMES, &k, &v)?;
-                names.push(KnownName { uuid: n.uuid, name: n.name });
+                names.push(KnownName { uuid: n.uuid, name: n.name, online: n.online });
             }
             let mut tracks: Vec<Track> = Vec::new();
             for (k, v) in tx.collect_prefix(TRACKS, "")? {
@@ -128,9 +141,97 @@ impl PermsStore {
             tx.put_json(
                 NAMES,
                 &pumbo_common::id::name_key(&name.name),
-                &StoredName { uuid: name.uuid.clone(), name: name.name.clone() },
+                &StoredName { uuid: name.uuid.clone(), name: name.name.clone(), online: name.online },
             )
         })
+    }
+
+    /// [`PermsStore::commit`] of an import together with the ledger of its
+    /// source (an empty ledger removes it).
+    pub fn commit_import(
+        &self,
+        perms: &Perms,
+        dirty: &Dirty,
+        log: Option<&LogEntry>,
+        log_max: u64,
+        (source, ledger): (&str, &Ledger),
+    ) -> Result<()> {
+        self.store.write(|tx| {
+            write_dirty(tx, perms, dirty)?;
+            if let Some(entry) = log {
+                append_log(tx, entry, log_max)?;
+            }
+            if *ledger == Ledger::default() {
+                tx.remove(IMPORTS, source)?;
+            } else {
+                tx.put_json(IMPORTS, source, ledger)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// What `source` added at its last import. A ledger that does not decode is
+    /// an error, never an empty one: that would add everything again.
+    pub fn ledger(&self, source: &str) -> Result<Ledger> {
+        Ok(self.store.get_json(IMPORTS, source)?.unwrap_or_default())
+    }
+
+    /// Every source with a ledger; a damaged one comes as its error.
+    pub fn ledgers(&self) -> Result<Vec<(String, Result<Ledger>)>> {
+        let all = self.store.read(|tx| tx.collect_prefix(IMPORTS, ""))?;
+        Ok(all
+            .into_iter()
+            .map(|(k, v)| {
+                let l = decode(IMPORTS, &k, &v);
+                (k, l)
+            })
+            .collect())
+    }
+
+    /// The schema of the file.
+    pub fn schema(&self) -> Result<u64> {
+        Ok(self.store.read(|tx| tx.get_u64(META, "schema"))?.unwrap_or(SCHEMA))
+    }
+
+    /// Schema 1 to 2: every `<dir>/<source>.json` goes into `perms_imports`
+    /// as it is (an unreadable one stays unreadable there and blocks its
+    /// source), all in one transaction with the new schema; then the files
+    /// are renamed to `<source>.json.migrated`. Returns the moved sources,
+    /// `None` at schema 2.
+    pub fn migrate_ledgers(&self, dir: &std::path::Path) -> Result<Option<Vec<String>>> {
+        if self.schema()? >= 2 {
+            return Ok(None);
+        }
+        let mut files: Vec<(String, std::path::PathBuf, Vec<u8>)> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(source) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json"))
+                else {
+                    continue;
+                };
+                if !crate::export::is_valid_file_name(source) {
+                    continue;
+                }
+                let bytes = std::fs::read(&path)
+                    .map_err(|e| StoreError::new(format!("cannot read {}: {e}", path.display())))?;
+                files.push((source.to_string(), path, bytes));
+            }
+        }
+        files.sort();
+        self.store.write(|tx| {
+            for (source, _, bytes) in &files {
+                tx.put(IMPORTS, source, bytes)?;
+            }
+            tx.put_u64(META, "schema", SCHEMA)
+        })?;
+        for (_, path, _) in &files {
+            let mut done = path.as_os_str().to_owned();
+            done.push(".migrated");
+            // The data is in the table; a file left behind is only read again by an old build.
+            let _ = std::fs::rename(path, done);
+        }
+        Ok(Some(files.into_iter().map(|(s, _, _)| s).collect()))
     }
 
     /// Replaces every group, user and track (import), with a log entry.
@@ -295,7 +396,7 @@ mod tests {
         );
         d.merge(p.create_track("ranks").unwrap());
         s.commit(&p, &d, Some(&entry(1)), 100).unwrap();
-        p.seen(U, "Steve");
+        p.seen(U, "Steve", true);
         s.save_name(&p.find_user("steve").unwrap()).unwrap();
 
         let (mut q, dirty) = s.load().unwrap();
@@ -331,15 +432,11 @@ mod tests {
     }
 
     #[test]
-    fn damaged_records_and_newer_schema_are_errors() {
+    fn damaged_records_are_errors() {
         let store = Store::in_memory();
         store.write(|tx| tx.put(GROUPS, "vip", b"{broken")).unwrap();
         let s = PermsStore::new(store).unwrap();
         assert!(s.load().is_err());
-
-        let store = Store::in_memory();
-        store.write(|tx| tx.put_u64(META, "schema", SCHEMA + 1)).unwrap();
-        assert!(PermsStore::new(store).is_err());
     }
 
     #[test]
@@ -358,6 +455,93 @@ mod tests {
         let (r, _) = s.load().unwrap();
         assert!(r.group("old").is_none() && r.group("new").is_some() && r.group("default").is_some());
         assert_eq!(s.log_page(1, 10).unwrap().1, 1);
+    }
+
+    fn ledger(fingerprint: &str) -> Ledger {
+        Ledger { fingerprint: fingerprint.into(), at: 1, ..Ledger::default() }
+    }
+
+    #[test]
+    fn ledger_commits_with_import() {
+        let s = PermsStore::in_memory().unwrap();
+        let (mut p, _) = s.load().unwrap();
+        let d = p.create_group("vip").unwrap();
+        s.commit_import(&p, &d, Some(&entry(1)), 100, ("file", &ledger("f1"))).unwrap();
+        assert_eq!(s.ledger("file").unwrap().fingerprint, "f1");
+        assert!(s.load().unwrap().0.group("vip").is_some());
+        assert_eq!(s.ledger("other").unwrap(), Ledger::default());
+        // A failed import changes neither.
+        let backend = pumbo_common::store::FaultyBackend::default();
+        let writes = backend.fail_writes.clone();
+        let s = PermsStore::new(Store::new(backend)).unwrap();
+        writes.store(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(s.commit_import(&p, &d, None, 100, ("file", &ledger("f2"))).is_err());
+        assert_eq!(s.ledger("file").unwrap(), Ledger::default());
+        assert!(s.load().unwrap().0.group("vip").is_none());
+        // An empty ledger removes the source.
+        let s = PermsStore::in_memory().unwrap();
+        s.commit_import(&p, &d, None, 100, ("file", &ledger("f1"))).unwrap();
+        s.commit_import(&p, &Dirty::default(), None, 100, ("file", &Ledger::default())).unwrap();
+        assert!(s.ledgers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unreadable_ledger_blocks_auto_import() {
+        let store = Store::in_memory();
+        store.write(|tx| tx.put(IMPORTS, "file", b"{broken")).unwrap();
+        let s = PermsStore::new(store).unwrap();
+        assert!(s.ledger("file").is_err(), "never an empty ledger, which would import everything again");
+        let all = s.ledgers().unwrap();
+        assert!(all.len() == 1 && all[0].1.is_err());
+        let mut e = crate::engine::Engine::new(
+            Ok(s),
+            crate::config::CoreCfg::default(),
+            pumbo_common::lang::Lang::load(&[pumbo_common::lang::COMMON, crate::LANG], "en", None).0,
+        );
+        let snap = crate::export::parse(r#"{"format":"pumboperms","version":1,"groups":[{"name":"vip"}]}"#).unwrap();
+        let out = crate::command::import_source(
+            &mut e,
+            &crate::command::Who::console(),
+            "file",
+            Ok(("f".into(), snap)),
+            crate::command::SourceMode::Run,
+            1,
+        );
+        assert!(out.reply.plain().contains("ledger of file is damaged") && !out.changed, "{}", out.reply.plain());
+        assert!(e.perms.group("vip").is_none());
+    }
+
+    #[test]
+    fn newer_schema_is_refused() {
+        let store = Store::in_memory();
+        store.write(|tx| tx.put_u64(META, "schema", SCHEMA + 1)).unwrap();
+        let err = PermsStore::new(store).unwrap_err();
+        assert!(err.0.contains("newer than this version understands"), "{err}");
+    }
+
+    #[test]
+    fn schema_1_migrates_to_2() {
+        let dir = std::env::temp_dir().join(format!("pumbo-perms-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("file.json"), serde_json::to_string(&ledger("f1")).unwrap()).unwrap();
+        std::fs::write(dir.join("proxy.json"), "{broken").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a ledger").unwrap();
+        let store = Store::in_memory();
+        store.write(|tx| tx.put_u64(META, "schema", 1)).unwrap();
+        let s = PermsStore::new(store).unwrap();
+        assert_eq!(s.schema().unwrap(), 1);
+        assert_eq!(s.migrate_ledgers(&dir).unwrap(), Some(vec!["file".to_string(), "proxy".to_string()]));
+        assert_eq!(s.schema().unwrap(), 2);
+        assert_eq!(s.ledger("file").unwrap().fingerprint, "f1");
+        assert!(s.ledger("proxy").is_err(), "an unreadable file stays unreadable");
+        assert!(dir.join("file.json.migrated").exists() && !dir.join("file.json").exists());
+        assert!(dir.join("notes.txt").exists());
+        // Once is enough.
+        assert_eq!(s.migrate_ledgers(&dir).unwrap(), None);
+        // A new database starts at schema 2 with nothing to move.
+        assert_eq!(PermsStore::in_memory().unwrap().schema().unwrap(), SCHEMA);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

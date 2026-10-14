@@ -22,6 +22,8 @@ Pumpkin keeps a list of permission values per player ("attachments") and checks 
 
 `/tick freeze` also stops the check of temporary permissions every second. An expired one still goes at the next moment PumboPerms runs: a player joins, leaves, changes worlds or sends any command, or another plugin asks PumboPerms.
 
+One copy of PumboPerms owns `perms.redb`. It keeps `perms.redb.lock` next to it and refreshes it every 10 seconds while it runs; a second copy loaded on the same folder (a second `.wasm` file, a reload that starts the new copy first) finds the lock, logs "the database is open in another instance", refuses changes and tries again every 10 seconds. A lock not refreshed for 30 seconds counts as left behind. A server that crashed or was killed leaves its lock behind, so after a quick restart PumboPerms waits up to 30 seconds for it to go stale: until then it imports nothing, sets no permissions and refuses changes, then opens the database and sets the permissions of the players online. `/tick freeze` stops the periodic refresh, so a freeze longer than 30 seconds in which nobody uses a command or joins, together with loading a second copy in that time, lets both copies open the database.
+
 If PumboPerms itself crashes (Pumpkin then shows the plugin as failed), the permissions it last set stay on online players until the server restarts, temporary ones included. Restart the server; `/plugin unload` does not take them off.
 
 Pumpkin never has to call PumboPerms while it checks a permission, which keeps the server safe under load.
@@ -67,6 +69,8 @@ The plugin needs the `fs.read.data` and `fs.write.data` permissions of Pumpkin's
 ## Updating
 
 Replace the file with the new one of the same name (`PumboPerms-26.3.wasm` or `PumboPerms-26.2.wasm`) and restart the server. Keep the name, so the update overwrites the old file instead of adding a second PumboPerms next to it. `plugins/data/pumboperms/` stays.
+
+Coming from 0.1.2-beta, run `/pp export` first. The first start of the new version moves the import ledgers (`imports/<source>.json`, renamed to `.json.migrated`) into `perms.redb` and raises its schema to 2; 0.1.2-beta then refuses that file as newer than it understands. To go back, put the old file in place and import the export with `/pp import <file>` on a fresh `perms.redb`.
 
 ## Building
 
@@ -130,7 +134,7 @@ Rust stable with the `wasm32-wasip2` target is required.
 
 Durations: `30s`, `10m`, `1h30m`, `7d`, `2w`, `1mo`, `1y`. Contexts: `server=lobby`, `group=lobbies`, `world=world_nether`. Text with spaces goes in quotes: `"&6[VIP] "`.
 
-Export writes `plugins/data/pumboperms/exports/<file>.json`; import reads such a file, saves the current data as `before-import-<date>.json` first and then replaces everything.
+Export writes `plugins/data/pumboperms/exports/<file>.json`. It never overwrites a file (choose another name) and refuses to run while the database cannot be read. The export holds groups, players and tracks, not the log, the known nicknames or the import ledgers. Import reads such a file, saves the current data as `before-import-<date and time with milliseconds>.json` first and then replaces everything.
 
 ## Taking over other sources
 
@@ -140,7 +144,7 @@ PumboPerms is meant to be the only plugin that writes permissions on a server. A
 2. The plugins listed in `import.plugins` that answer `{"op":"export-permissions"}` in the PumboPerms export format.
 3. Only when neither gave anything: the attachments other plugins set on online players (`attachments`), as player permissions.
 
-An import only adds. A group or player entry that is already there stays as it is; a different value in the source is a conflict that is kept as it was and noted in `/pp log`. Weight, prefixes and suffixes are taken only where the group has none. What a source added is remembered in `plugins/data/pumboperms/imports/<source>.json`, so `/pp import undo <source>` takes back exactly that (an entry you changed since stays), and a later import of the same source replaces only its own entries. Each source is imported once; with `import.follow: true` again whenever it changes. `/pp import preview <source>` shows what would change, `/pp import run <source>` imports by hand (also a second time).
+An import only adds. A group or player entry that is already there stays as it is; a different value in the source is a conflict that is kept as it was and noted in `/pp log`. Weight, prefixes and suffixes are taken only where the group has none. What a source added is remembered in the database (its ledger), so `/pp import undo <source>` takes back exactly that (an entry you changed since stays, and so does a group that is on a track, inherited by another group or has members). A later import of the same source takes back only what the source no longer has and adds what is new; an imported entry you removed in PumboPerms stays removed. Players the source names only by nickname get nothing here, because Pumpkin does not tell whether Mojang checked an account: the import reply lists them, give them their ranks with `/pp`. A ledger that cannot be read stops the automatic import of that source with an error in the log. Each source is imported once; with `import.follow: true` again whenever it changes. `/pp import preview <source>` shows what would change, `/pp import run <source>` imports by hand (also a second time).
 
 After the first import PumboPerms asks PumboBridge to release the attachments it wrote for the proxy (`release-permissions`), and writes them alone. When the plugin is unloaded, it takes its attachments back.
 

@@ -1,7 +1,7 @@
 //! `config.yml`: the core sections and the Pumpkin-only `provider`.
 
 use pumbo_common::config::{Check, Settings};
-use pumbo_perms_core::config::{ContextCfg, CoreCfg, DefaultsCfg, LogCfg};
+use pumbo_perms_core::config::{ContextCfg, CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
 use serde::{Deserialize, Serialize};
 
 /// The file written at the first start.
@@ -16,25 +16,6 @@ pub struct Config {
     pub log: LogCfg,
     pub provider: ProviderCfg,
     pub import: ImportCfg,
-}
-
-/// Taking over other permission sources (PumboBridge spec §5.3).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct ImportCfg {
-    /// At start, import the proxy's table (through PumboBridge), the plugins
-    /// below, or else the attachments other plugins set.
-    pub enabled: bool,
-    /// Import a source again whenever it changes (otherwise once).
-    pub follow: bool,
-    /// Other plugins that answer `{"op":"export-permissions"}`.
-    pub plugins: Vec<String>,
-}
-
-impl Default for ImportCfg {
-    fn default() -> Self {
-        Self { enabled: true, follow: false, plugins: Vec::new() }
-    }
 }
 
 impl Default for Config {
@@ -74,7 +55,14 @@ impl Default for ProviderCfg {
 
 impl Config {
     pub fn core(&self) -> CoreCfg {
-        CoreCfg { context: self.context.clone(), defaults: self.defaults.clone(), log: self.log.clone(), worlds: true }
+        CoreCfg {
+            context: self.context.clone(),
+            defaults: self.defaults.clone(),
+            log: self.log.clone(),
+            worlds: true,
+            // Pumpkin does not tell whether Mojang checked an account.
+            names_checked: false,
+        }
     }
 }
 
