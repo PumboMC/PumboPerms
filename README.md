@@ -45,14 +45,14 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <summary><b>Permission rules: the same answer everywhere</b></summary>
 
 - ☑️ (Dev) Wildcards and denials set on the proxy, such as `pumbo.bans.*`, apply on the servers exactly as on the proxy. Until then, give exact nodes (`pumbo.bans.ban`) on a network.
-- ☑️ (Dev) `server=Lobby` and `server=lobby` mean the same server.
+- ✅ (Dev) `server=Lobby` and `server=lobby` mean the same server.
 - ☑️ (Dev) The `default` group works the same on the proxy and on the servers.
-- ☑️ (Dev) `world=` in `/pp` on the proxy is refused with a clear message, because the proxy does not see worlds, and `/pp ... permission check` shows the answer the server uses.
+- ✅ (Dev) `world=` in `/pp` on the proxy is refused with a clear message, because the proxy does not see worlds, and `/pp ... permission check` shows the answer the server uses.
 - ☑️ (Dev) PumboPerms on a server answers other plugins with the proxy's ranks instead of an old local copy.
 - ☑️ (Dev) A cancelled world change keeps the permissions of the old world.
 - ☑️ (Dev) Permissions that other plugins set for a session survive a rank update.
-- ☑️ (Dev) `group.<name>` answers whether the player is in the group, and `permission set group.<name>` points you to `parent add`.
-- ☑️ (Dev) Removing a temporary permission or group leaves the permanent one alone, and temporary ranks on a track expire as set.
+- ✅ (Dev) `group.<name>` answers whether the player is in the group, and `permission set group.<name>` points you to `parent add`.
+- ✅ (Dev) Removing a temporary permission or group leaves the permanent one alone, and temporary ranks on a track expire as set.
 - ☑️ (Dev) Staff who have `/pp` on the proxy have it on the servers too.
 
 </details>
