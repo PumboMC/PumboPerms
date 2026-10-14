@@ -52,7 +52,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 - ✅ (Dev) A cancelled world change keeps the permissions of the old world.
 - ✅ (Dev) Permissions that other plugins set for a session survive a rank update.
 - ✅ (Dev) `group.<name>` answers whether the player is in the group, and `permission set group.<name>` points you to `parent add`.
-- Removing a temporary permission or group leaves the permanent one alone, and temporary ranks on a track expire as set.
+- ✅ (Dev) Removing a temporary permission or group leaves the permanent one alone, and temporary ranks on a track expire as set.
 - ✅ (Dev) Staff who have `/pp` on the proxy have it on the servers too.
 
 </details>
@@ -75,15 +75,15 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <details open>
 <summary><b>Data and imports</b></summary>
 
-- Running `/pp import run` again keeps the groups, tracks, weights and inheritance you changed with `/pp`, and removes only what the source dropped.
-- Imports by player name match the right account.
+- ✅ (Dev) Running `/pp import run` again keeps the groups, tracks, weights and inheritance you changed with `/pp`, and removes only what the source dropped.
+- ✅ (Dev) Imports by player name match the right account.
 - ✅ (Dev) Imports reject invalid contexts and duplicate entries.
-- Pending imports work on Pumpkin too.
-- Import records live in the database and are written in one step.
-- Long names with special characters no longer stop an import.
-- `/pp export` keeps the old file when the database cannot be read.
-- Two servers cannot open the same PumboPerms database at once.
-- Database format versions with upgrade steps.
+- ✅ (Dev) Pending imports run on Pumpkin as on the proxy; there, players known only by name get their ranks with `/pp`.
+- ✅ (Dev) Import records live in the database and are written in one step.
+- ✅ (Dev) Long names with special characters no longer stop an import.
+- ✅ (Dev) `/pp export` keeps the old file when the database cannot be read.
+- ✅ (Dev) Two servers cannot open the same PumboPerms database at once.
+- ✅ (Dev) Database format versions with upgrade steps.
 
 </details>
 
@@ -95,7 +95,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 - ✅ (Dev) The known causes of internal errors in PumboPerms on Pumpkin are fixed, and PumboBridge notices when the plugin stops.
 - ✅ (Dev) Expired temporary permissions end on the servers even when a database write fails.
 - ✅ (Dev) A config file with a syntax error keeps the last working settings and shows the line with the error.
-- Commands that change nothing no longer reload the database.
+- ✅ (Dev) Commands that change nothing no longer reload the database.
 
 </details>
 
@@ -131,7 +131,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 - ✅ (Dev) Tests for the Pumpkin plugin code.
 - Performance tests that fail when PumboPerms gets slower.
 - ✅ (Dev) Property tests for the node, context and import parsers.
-- Upgrade tests from older PumboPerms databases.
+- ✅ (Dev) Upgrade tests from older PumboPerms databases.
 
 </details>
 
