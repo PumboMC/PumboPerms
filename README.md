@@ -116,11 +116,11 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <details open>
 <summary><b>Speed</b></summary>
 
-- A rank change recomputes only the players it affects.
-- Servers stop reading the proxy's whole database every few seconds.
-- The table of player names stays small and fast with many players.
-- Lower cost per permission check and per expiry check.
-- Lower memory use on the proxy for large networks.
+- ☑️ (Dev) A rank change recomputes only the players it affects.
+- ☑️ (Dev) Servers stop reading the proxy's whole database every few seconds.
+- ☑️ (Dev) The table of player names stays small and fast with many players.
+- ☑️ (Dev) Lower cost per permission check and per expiry check.
+- ☑️ (Dev) Lower memory use on the proxy for large networks.
 
 </details>
 
@@ -129,7 +129,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 
 - Cross tests in CI on PumboProx and on real Pumpkin servers: the proxy plugin on PumboProx, the Pumpkin plugin on its own, and both together through PumboBridge, on Pumpkin 0.2.0 (Minecraft 26.3) and 0.1.0-dev (Minecraft 26.2).
 - ☑️ (Dev) Tests for the Pumpkin plugin code.
-- Performance tests that fail when PumboPerms gets slower.
+- ☑️ (Dev) Performance tests that fail when PumboPerms gets slower.
 - ☑️ (Dev) Property tests for the node, context and import parsers.
 - ☑️ (Dev) Upgrade tests from older PumboPerms databases.
 
