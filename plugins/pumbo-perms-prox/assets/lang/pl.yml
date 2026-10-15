@@ -60,10 +60,12 @@ desc-export-details: Zapisuje exports/<plik>.json w folderze wtyczki.
 desc-import: Wczytanie danych z pliku
 desc-import-details: Zastępuje wszystko danymi z exports/<plik>.json. Obecne dane są najpierw eksportowane.
 desc-import-source: Przejęcie innego źródła uprawnień (proxy, wtyczka, attachmenty)
-desc-editor: Edytor w przeglądarce (planowany)
 desc-reload: Przeładowanie configu
 desc-version: Wersja, baza i tryb
 desc-info: Grupy, uprawnienia i meta
+desc-perm-group: Zarządzanie uprawnieniami
+desc-parent-group: Zarządzanie grupami nadrzędnymi
+desc-meta-group: Prefiksy, sufiksy i meta
 desc-perm-info: Lista uprawnień
 desc-perm-set: Ustawia uprawnienie
 desc-perm-set-details: "Przykład: permission set minecraft:command.gamemode true world=world"
@@ -130,7 +132,10 @@ bad-node-namespace: "{0} to nie jest poprawne uprawnienie: dozwolony jest jeden 
 bad-node-wildcard: "{0} to nie jest poprawne uprawnienie: * może być tylko ostatnią częścią (a.b.*)."
 bad-value: "{0} to nie jest true ani false."
 bad-number: "{0} to nie jest liczba całkowita."
-bad-context: "Zły kontekst: {0}. Użyj server=, group= albo world=."
+bad-context-key: "{0} to nie jest kontekst: użyj server=, group= albo world=."
+bad-context-value: "{0} to nie jest poprawna wartość kontekstu."
+bad-context-repeated: Kontekst {0} podano dwa razy.
+bad-meta-key: "{0} to nie jest poprawny klucz meta: 1-64 znaki a-z, 0-9, _, . i -."
 no-worlds: "Proxy nie widzi światów, więc world= nie działa tutaj."
 bad-text: Tekst jest za długi albo ma znaki sterujące (najwyżej 256 bajtów, bez łamania linii).
 import-file-console: "Cały plik importuje tylko konsola: import podmienia wszystkie grupy i graczy."
@@ -148,6 +153,7 @@ kind-suffix: sufiks
 # zmiany
 perm-set: "{node} = {value} dla: {target}{context}."
 perm-settemp: "{node} = {value} dla: {target}{context}, na {duration}."
+perm-settemp-exists: "{0} ma już czas wygaśnięcia. Najpierw usuń go przez {1}, potem ustaw nowy czas."
 perm-unset: "Usunięto {node} dla: {target}{context}."
 perm-unset-none: "{target}: brak {node}{context}."
 perm-clear: "Usunięto uprawnienia ({count}) dla: {target}{context}."
@@ -246,11 +252,14 @@ hover-info: Kliknij, żeby pokazać
 
 # --- perms-prox ---
 # PumboPerms na PumboProx (polski).
-prefix: "&#f28c28PumboPerms &8» "
+prefix: "&8[&#f28c28&lP&#ffd54f&lP&8] "
 reloaded-warnings: "Wczytano, ostrzeżenia: {0}. Szczegóły w logu proxy."
 version-mode: Tryb
 mode-provider: dostawca uprawnień proxy
 mode-not-provider: "nie jest dostawcą: ustaw permissions.provider w pumboprox.yml"
 version-online: Online
 version-servers: Serwery
+source-unknown: "nie ma tu źródła {0}; na PumboProx jest nim {1} (permissions.yml)"
+source-no-file: proxy nie wysłało jeszcze permissions.yml
+source-file-errors: "permissions.yml ma błędy: {0}"
 

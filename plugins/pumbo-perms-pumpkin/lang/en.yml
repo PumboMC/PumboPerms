@@ -1,5 +1,5 @@
 # PumboPerms on Pumpkin (English).
-prefix: "&#f28c28PumboPerms &8» "
+prefix: "&8[&#f28c28&lP&#ffd54f&lP&8] "
 reloaded-warnings: Reloaded with {0} warnings, see the server log.
 version-mode: Mode
 mode-attachments: permission attachments
@@ -9,3 +9,6 @@ mode-proxy: ranks from PumboPerms on the proxy (through PumboBridge)
 import-proxy-rules: PumboPerms on the proxy manages this server, there is nothing to import from it. Use /pp on the proxy.
 proxy-rules: PumboPerms on the proxy manages the ranks of this network, changes here do not apply. Use /pp on the proxy.
 sender-refused: PumboPerms commands run only from players and the console.
+source-no-attachments: no attachments of other plugins on online players
+source-pending: the source has no data yet (is the proxy connected?)
+source-absent: no plugin {0} answers export-permissions

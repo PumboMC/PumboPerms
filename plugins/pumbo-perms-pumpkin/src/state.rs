@@ -51,6 +51,10 @@ pub struct Rt {
     pub pushed: HashMap<String, HashMap<String, bool>>,
     /// Whether the permission check event is answered (fixed at load).
     pub check_event: bool,
+    /// `defaults.op-level` of the nodes registered in Pumpkin at load.
+    pub registered_op_level: u8,
+    /// When the periodic refresh last ran (ms).
+    pub last_refresh: u64,
     /// Permission checks answered from memory (check-event mode).
     pub answered: u64,
     /// Log lines collected inside [`with`], written after it (true: a warning).
@@ -112,6 +116,8 @@ impl Rt {
     ) -> Self {
         let mut rt = Self {
             dir,
+            registered_op_level: cfg.defaults.op_level,
+            last_refresh: 0,
             cfg,
             engine,
             catalog: Catalog::pumpkin(),
@@ -391,6 +397,16 @@ impl Rt {
         plans
     }
 
+    /// Whether the periodic refresh is due: `provider.refresh-seconds` of the
+    /// config in force, so `/pp reload` changes the period at once.
+    pub fn refresh_due(&mut self, now: u64) -> bool {
+        if now.saturating_sub(self.last_refresh) < u64::from(self.cfg.provider.refresh_seconds) * 1000 {
+            return false;
+        }
+        self.last_refresh = now;
+        true
+    }
+
     /// Operator levels and worlds of online players as the server reports
     /// them (`(uuid, level, world)`), and expired nodes: the changes.
     pub fn refresh(&mut self, players: &[(String, u8, String)], now: u64) -> Vec<Plan> {
@@ -648,12 +664,15 @@ pub fn passive_reply(
         let uuid = pumbo_common::id::Uuid::parse(uuid)?.to_string();
         serde_json::from_str(&info(&uuid)?).ok()
     };
-    let reply = match serde_json::from_slice::<Request>(message) {
-        Err(e) => serde_json::json!({ "ok": false, "error": format!("bad request: {e}") }),
-        Ok(Request::Hello) => serde_json::json!({
-            "ok": true, "plugin": "PumboPerms", "version": env!("CARGO_PKG_VERSION"),
-            "protocol": ipc::PROTOCOL, "passive": true,
-        }),
+    let reply = match ipc::parse(message) {
+        Err(reply) => reply,
+        Ok(Request::Hello) => {
+            let mut hello = ipc::hello(env!("CARGO_PKG_VERSION"));
+            if let Some(o) = hello.as_object_mut() {
+                o.insert("passive".into(), true.into());
+            }
+            hello
+        }
         Ok(Request::Check { uuid, node, .. }) => {
             let host = pumbo_perms_core::node::normalize(&node).map(|n| pumbo_perms_core::node::host_form(&n));
             match (pumbo_common::id::Uuid::parse(&uuid), host) {
@@ -722,7 +741,7 @@ pub fn export_answer(reply: Option<&[u8]>) -> (bool, Answer) {
     }
     let Some(bytes) = reply else { return (false, Answer::Absent) };
     match serde_json::from_slice::<Reply>(bytes) {
-        Err(e) => (false, Answer::Bad(format!("not a PumboPerms export: {e}"))),
+        Err(e) => (false, Answer::Bad(export::not_an_export(&e))),
         Ok(r) if !r.ok => (false, if r.pending { Answer::Pending } else { Answer::Absent }),
         Ok(Reply { data: None, .. }) => (false, Answer::Bad("no data".into())),
         Ok(Reply { fingerprint, data: Some(snap), .. }) => {
@@ -1209,6 +1228,10 @@ mod tests {
         let hello: serde_json::Value =
             serde_json::from_slice(&passive_reply(br#"{"op":"hello"}"#, |_, _| None, |_| None)).unwrap();
         assert_eq!((hello["ok"].clone(), hello["passive"].clone()), (true.into(), true.into()));
+        assert_eq!(hello["ops"], serde_json::json!(pumbo_perms_core::ipc::OPS));
+        let other: serde_json::Value =
+            serde_json::from_slice(&passive_reply(br#"{"op":"nope"}"#, |_, _| None, |_| None)).unwrap();
+        assert_eq!(other["error"], "unsupported op");
         assert!(ipc_reply(check.as_bytes(), None, 0).is_err());
     }
 
@@ -1506,6 +1529,21 @@ mod tests {
         assert!(rt.resends(vec![OTHER.into()], 2_600).is_empty());
         rt.leave(OTHER, 2_600);
         assert!(rt.due_resends(9_000).is_empty());
+    }
+
+    #[test]
+    fn reload_reads_refresh_seconds() {
+        let mut rt = rt();
+        assert_eq!(rt.cfg.provider.refresh_seconds, 5);
+        assert!(rt.refresh_due(100_000));
+        assert!(!rt.refresh_due(104_999));
+        assert!(rt.refresh_due(105_000));
+        // `/pp reload` replaces the config; the same task follows the new period.
+        let (cfg, _) = pumbo_common::config::load::<Config>("provider:\n  refresh-seconds: 1\n");
+        rt.cfg = cfg;
+        assert!(!rt.refresh_due(105_999));
+        assert!(rt.refresh_due(106_000));
+        assert!(rt.refresh_due(107_000));
     }
 
     #[test]

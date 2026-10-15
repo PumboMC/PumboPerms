@@ -28,8 +28,14 @@ fn plugin(config: Option<&str>) -> (PumboPerms, std::path::PathBuf) {
 }
 
 fn plugin_on(config: Option<&str>, store: PermsStore) -> (PumboPerms, std::path::PathBuf) {
+    plugin_after(config, store, || {})
+}
+
+/// [`plugin_on`] with `before` run on the fresh host, as another plugin loaded earlier.
+fn plugin_after(config: Option<&str>, store: PermsStore, before: impl FnOnce()) -> (PumboPerms, std::path::PathBuf) {
     testing::reset();
     testing::with(|h| h.servers = vec![server("lobby", &["hubs"]), server("survival", &[])]);
+    before();
     let dir = std::env::temp_dir().join(format!(
         "pumbo-perms-prox-test-{}-{:?}",
         std::process::id(),
@@ -85,6 +91,54 @@ fn call_as(p: &PumboPerms, caller: &str, method: &str, payload: Vec<u8>) -> Resu
     block_on(p.on_service_call(c))
 }
 
+fn registered() -> Vec<String> {
+    testing::with(|h| h.commands.iter().filter(|c| !c.umbrella).map(|c| c.name.clone()).collect())
+}
+
+fn command(p: &PumboPerms, name: &str, args: &[&str]) {
+    let e = CommandEvent { player: None, name: name.into(), args: args.iter().map(|a| a.to_string()).collect() };
+    block_on(p.on_command(e));
+}
+
+#[test]
+fn aliases_come_from_config() {
+    let (p, dir) = plugin(Some("commands:\n  aliases: [perms, p]\n  disabled: [editor]\n"));
+    assert_eq!(registered(), ["perms", "p"]);
+    command(&p, "p", &["user"]);
+    assert!(logs().contains("Usage: /perms user <player> <subcommand>"), "{}", logs());
+    let umbrella: Vec<String> =
+        testing::with(|h| h.commands.iter().filter(|c| c.umbrella).map(|c| c.name.clone()).collect());
+    assert!(umbrella.contains(&"user".to_string()) && !umbrella.contains(&"editor".to_string()), "{umbrella:?}");
+    command(&p, "perms", &["editor"]);
+    assert!(logs().contains("Unknown subcommand editor. Use /perms help."), "{}", logs());
+    // A reload keeps the registered short commands until the plugin restarts.
+    std::fs::write(dir.join("config.yml"), "commands:\n  aliases: [x]\n").unwrap();
+    block_on(p.on_reload()).unwrap();
+    assert!(logs().contains("commands.aliases changes after"), "{}", logs());
+    assert!(logs().contains("commands.disabled applies to /pumboperms <subcommand> after"), "{}", logs());
+    testing::with(|h| h.logs.clear());
+    command(&p, "perms", &["user"]);
+    assert!(logs().contains("Usage: /perms user"), "{}", logs());
+}
+
+#[test]
+fn cleared_alias_list_registers_only_full_name() {
+    let (p, _dir) = plugin(Some("commands:\n  aliases: []\n"));
+    assert!(registered().is_empty(), "{:?}", registered());
+    command(&p, "user", &[]);
+    assert!(logs().contains("Usage: /pumboperms user <player> <subcommand>"), "{}", logs());
+}
+
+#[test]
+fn taken_alias_is_skipped_with_warning() {
+    let (p, _dir) = plugin_after(None, PermsStore::in_memory().unwrap(), || {
+        Command::new("pp").usage("/pp").register().unwrap();
+    });
+    assert!(logs().contains("/pp not registered, /pumboperms works"), "{}", logs());
+    command(&p, "user", &[]);
+    assert!(logs().contains("Usage: /pumboperms user <player> <subcommand>"), "{}", logs());
+}
+
 #[test]
 fn template_messages_and_manifest() {
     let (cfg, w) = common_config::load::<setup::Config>(setup::CONFIG_TEMPLATE);
@@ -94,7 +148,7 @@ fn template_messages_and_manifest() {
     for code in ["en", "pl"] {
         let (l, w) = Lang::load(&setup::BUNDLES, code, None);
         assert!(w.is_empty(), "{w:?}");
-        assert!(l.get("prefix").contains("PumboPerms"));
+        assert_eq!(l.get("prefix"), pumbo_common::style::tag_code("PumboPerms", pumbo_common::style::accent::PERMS));
     }
     // Every permission is declared with a description.
     let declared: Vec<&str> = MANIFEST.lines().filter_map(|l| l.trim().strip_prefix("- node: ")).collect();
@@ -132,7 +186,7 @@ fn takes_over_permissions_yml() {
         "by-name":[{{"name":"Jeb_","data":{{"parents":[{{"group":"vip"}}]}}}}]}}"#
     );
     call(&p, METHOD_FILE, file(&data)).unwrap();
-    assert!(logs().contains("permissions.yml: PumboPerms » Imported file"), "{}", logs());
+    assert!(logs().contains("permissions.yml: [PP] Imported file"), "{}", logs());
     assert!(logs().contains("Jeb_"), "pending player named in the log: {}", logs());
     let set = load(&p, alice);
     assert!(has(&set, "minecraft:command.gamemode", Context::Server("lobby".into()), true), "{set:?}");
@@ -332,6 +386,56 @@ fn pending_import_skips_offline_accounts() {
     let online = testing::add_player("Mod1", Some("lobby"));
     testing::with(|h| h.players.get_mut(&online).unwrap().online_mode = true);
     assert!(has(&load(&p, online), "group.mod", Context::Global, true));
+}
+
+/// A bad group name in permissions.yml comes in under a valid one and a bad
+/// player name is left out; the rest is imported and the log names both whole.
+#[test]
+fn bad_names_in_permissions_yml_are_fixed_or_left_out() {
+    const BAD_GROUP: &str = "zła grupa!";
+    const BAD_PLAYER: &str = "ŻółwiaGęśŚliczna_bardzo_długa_nazwa_z_ogonkami";
+    let (p, _) = plugin(None);
+    let alice = testing::add_player("Alice", Some("lobby"));
+    let data = serde_json::json!({
+        "format": "pumboperms", "version": 1,
+        "groups": [{"name": BAD_GROUP, "data": {"permissions": [{"node": "fly", "value": true}]}},
+                   {"name": "vip", "data": {"permissions": [{"node": "minecraft:command.gamemode", "value": true}]}}],
+        "users": [{"uuid": uuid_of(&players::get(alice).unwrap()), "name": "Alice",
+                   "data": {"parents": [{"group": "vip"}, {"group": BAD_GROUP}]}}],
+        "by-name": [{"name": BAD_PLAYER, "data": {"parents": [{"group": "vip"}]}}],
+    });
+    call(&p, METHOD_FILE, file(&data.to_string())).unwrap();
+    let log = logs();
+    assert!(
+        !log.contains("cannot be imported") && log.contains("2 entries of the file were fixed or left out"),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!("{BAD_GROUP:?} imported as zla-grupa"))
+            && log.contains(&format!("{BAD_PLAYER:?} left out")),
+        "{log}"
+    );
+    let alice = load(&p, alice);
+    assert!(has(&alice, "group.vip", Context::Global, true) && has(&alice, "group.zla-grupa", Context::Global, true));
+    assert!(has(&alice, "fly", Context::Global, true));
+}
+
+/// A file the plugin cannot read: preview and run give the reason the log gives.
+#[test]
+fn rejected_permissions_yml_is_named_in_import_replies() {
+    let (p, _) = plugin(None);
+    call(&p, METHOD_FILE, file(r#"{"format":"pumboperms","version":99}"#)).unwrap();
+    let why = "export version 99 is newer than this version understands (1)";
+    assert!(logs().contains(&format!("permissions.yml cannot be imported: {why}")), "{}", logs());
+    for mode in ["preview", "run"] {
+        testing::with(|h| h.logs.clear());
+        console(&p, &format!("import {mode} file"));
+        assert!(
+            logs().contains(&format!("Cannot import file: permissions.yml has errors: {why}")),
+            "{mode}: {}",
+            logs()
+        );
+    }
 }
 
 /// A `config.yml` that is not valid YAML at start: the last good copy, not the
@@ -902,4 +1006,114 @@ fn memory_at_scale() {
     let grown = rss_kb().saturating_sub(before);
     println!("memory at scale: the process grew by {} MB", grown / 1024);
     assert!(grown < 64 * 1024, "{grown} KB");
+}
+
+/// A group with 200 nodes: its views come in pages, and every message a
+/// player gets stays under the host's text limit as valid JSON.
+#[test]
+fn long_views_fit_proxy_text_limit() {
+    use pumbo_sdk::testing::Sent;
+
+    let (p, _) = plugin(None);
+    let admin = testing::add_player("Admin", Some("lobby"));
+    load(&p, admin);
+    console(&p, "user Admin permission set pumbo.perms.*");
+    console(&p, "creategroup big");
+    let long = "x".repeat(60);
+    for i in 0..200 {
+        console(&p, &format!("group big permission set some.node.{i:03}.{long} true server=lobby"));
+    }
+    let before = testing::sent_to(admin).len();
+    for line in ["group big info", "group big permission info", "group big info 11", "group big permission info 99"] {
+        block_on(p.run(Some(admin), split_args(line)));
+    }
+    let texts: Vec<String> = testing::sent_to(admin)
+        .into_iter()
+        .skip(before)
+        .filter_map(|s| match s {
+            Sent::Message(Text::Json(j)) => Some(j),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts.len(), 4);
+    for j in &texts {
+        assert!(j.len() < MAX_TEXT, "{}", j.len());
+        serde_json::from_str::<serde_json::Value>(j).unwrap();
+    }
+    assert!(texts[0].contains("1/11") && texts[1].contains("1/11") && texts[3].contains("11/11"), "{}", texts[0]);
+    assert!(texts[3].contains("some.node.199"));
+
+    // A reply too long for one message is cut between lines.
+    let lines: Vec<String> = (0..2000).map(|i| format!("&aline {i} {long}")).collect();
+    let parts = messages(&Rich::parse(&lines.join("\n")));
+    assert!(parts.len() > 1);
+    let mut seen = 0;
+    for part in parts {
+        let Text::Json(j) = part else { panic!("not JSON") };
+        assert!(j.len() < MAX_TEXT, "{}", j.len());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        seen += v["extra"].as_array().unwrap().iter().filter(|x| x["text"] != "\n").count();
+    }
+    assert_eq!(seen, 2000, "every line once");
+}
+
+/// A prefix's codes end with the value: `&r` inside it and its end give the
+/// chat template its own style back.
+#[test]
+fn placeholder_values_close_their_tags() {
+    let (p, _) = plugin(None);
+    let steve = testing::add_player("Steve", Some("lobby"));
+    load(&p, steve);
+    console(&p, "creategroup admin");
+    console(&p, "group admin setdisplayname &4&lAdmin");
+    console(&p, "user Steve parent add admin");
+    console(&p, "user Steve meta setprefix 10 \"&c[Admin]&r <x> \"");
+    console(&p, "user Steve meta setsuffix 10 &#00ff00!");
+    let ask = |key: &str| PlaceholderRequest {
+        key: key.into(),
+        arg: None,
+        player: Some(steve),
+        context: pumbo_sdk::PlayerContext { server: Some("lobby".into()), groups: Vec::new() },
+    };
+    let got = block_on(p.on_placeholder(vec![ask("prefix"), ask("suffix"), ask("rank"), ask("group")]));
+    let shown: Vec<String> = got
+        .iter()
+        .map(|t| match t {
+            Some(Text::Mini(s)) => format!("mini {s}"),
+            Some(Text::Legacy(s)) => format!("legacy {s}"),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "mini <color:#ff5555>[Admin]</color> \\<x> ",
+            "mini <color:#00ff00>!</color>",
+            "mini <color:#aa0000><bold>Admin</bold></color>",
+            "legacy admin",
+        ]
+    );
+}
+
+/// Tab on the proxy answers from the same table as on Pumpkin, for `/pp`
+/// and for `/pumboperms <sub>`.
+#[test]
+fn suggest_follows_the_command_line() {
+    let (p, _) = plugin(None);
+    let admin = testing::add_player("Admin", Some("lobby"));
+    let joe = testing::add_player("Joe", Some("lobby"));
+    load(&p, admin);
+    load(&p, joe);
+    console(&p, "user Admin permission set pumbo.perms.*");
+    console(&p, "creategroup vip");
+    let s = |who: PlayerId, name: &str, args: &str| block_on(p.on_suggest(who, name.into(), args.into())).unwrap();
+    assert!(s(admin, "pp", "").contains(&"user".to_string()));
+    assert_eq!(s(admin, "pp", "user J"), ["Joe"]);
+    assert_eq!(s(admin, "user", "Joe parent add v"), ["vip"]);
+    assert!(
+        s(admin, "pp", "user Joe permission set minecraft:command.gamem")
+            .contains(&"minecraft:command.gamemode".into())
+    );
+    assert_eq!(s(joe, "pp", ""), ["help"]);
+    assert!(s(joe, "pp", "user ").is_empty(), "no names without user.info");
 }

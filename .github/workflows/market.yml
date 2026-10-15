@@ -39,6 +39,9 @@ jobs:
             sleep 10
           done
           test -f "dist/$f"
+          # The market file keeps one name across releases, so an update
+          # replaces the old file on the server instead of adding a second one.
+          mv "dist/$f" dist/PumboPerms-26.3.wasm
           body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
           # The market gets the changes first, then the links.
           changes=$(printf '%s\n' "$body" | awk '/^## What.s changed/{f=1;next} f&&/^(## |Previous release|\*\*Full changelog)/{exit} f' | sed '/^$/d')
@@ -46,7 +49,7 @@ jobs:
           prev=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq "[.[] | select(.tag_name != \"$TAG\")][0].tag_name // empty")
           {
             echo "version=$v"
-            echo "file=dist/$f"
+            echo "file=dist/PumboPerms-26.3.wasm"
             echo "notes<<PUMBO_NOTES_END"
             if [ -n "$changes" ]; then printf "## What's changed\n\n%s\n\n" "$changes"; fi
             echo "Full notes: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"

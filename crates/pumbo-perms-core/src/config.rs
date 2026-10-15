@@ -1,6 +1,6 @@
 //! The `context`, `defaults`, `log` and `import` sections of `config.yml`.
 
-use pumbo_common::config::Check;
+use pumbo_common::config::{Check, Commands};
 use serde::{Deserialize, Serialize};
 
 use crate::context::{self, Contexts};
@@ -83,6 +83,9 @@ pub struct CoreCfg {
     /// Pumpkin sets it to false.
     #[serde(skip, default = "yes")]
     pub names_checked: bool,
+    /// Subcommands switched off (`commands.disabled`), by their main name.
+    #[serde(skip)]
+    pub disabled: Vec<String>,
 }
 
 fn yes() -> bool {
@@ -97,8 +100,29 @@ impl Default for CoreCfg {
             log: LogCfg::default(),
             worlds: true,
             names_checked: true,
+            disabled: Vec::new(),
         }
     }
+}
+
+/// The `commands:` section of both platforms: `/pp` next to `/pumboperms`.
+pub fn default_commands() -> Commands {
+    Commands { aliases: vec!["pp".into()], disabled: Vec::new() }
+}
+
+/// [`Commands::validate`], and `disabled` keeps only `/pp` subcommands, each
+/// by its main name.
+pub fn validate_commands(c: &mut Commands, check: &mut Check<'_>) {
+    c.validate(check);
+    let mut kept: Vec<String> = Vec::new();
+    for name in std::mem::take(&mut c.disabled) {
+        match crate::command::subcommand(&name) {
+            Some(main) if !kept.iter().any(|k| k == main) => kept.push(main.to_string()),
+            Some(_) => {}
+            None => check.warn("commands.disabled", format!("'{name}' is not a /pp subcommand, ignored")),
+        }
+    }
+    c.disabled = kept;
 }
 
 impl CoreCfg {

@@ -18,10 +18,7 @@ use pumbo_perms_core::config::CoreCfg;
 use pumbo_perms_core::engine::Engine;
 use pumbo_perms_core::store::PermsStore;
 
-use api::{
-    ArgumentType, Command, CommandNode, Context, EventPriority, Permission, PermissionDefault, Plugin, PluginMetadata,
-    SchedulerExt, StringType,
-};
+use api::{Command, Context, EventPriority, Permission, PermissionDefault, Plugin, PluginMetadata, SchedulerExt};
 
 use crate::PLUGIN_NAME;
 
@@ -74,6 +71,8 @@ impl Plugin for PumboPerms {
         })?;
         let (lang, more) = settings::load_lang(&dir, &cfg.language);
         warnings.extend(more);
+        let (aliases, more) = cfg.aliases();
+        warnings.extend(more);
         for w in &warnings {
             if w.fatal {
                 api::error(&format!("PumboPerms: config: {w}"));
@@ -82,16 +81,18 @@ impl Plugin for PumboPerms {
             }
         }
         let now = now_ms();
-        let (lock, engine) = match open_database(&dir, cfg.core(), lang.clone(), now) {
+        let (lock, mut engine) = match open_database(&dir, cfg.core(), lang.clone(), now) {
             Ok((lock, engine)) => (Some(lock), engine),
             // Started without the database; the periodic task tries again.
             Err(why) => (None, Engine::new(Err(StoreError::new(why)), cfg.core(), lang)),
         };
+        let root = crate::config::root(&aliases);
+        engine.root = root.clone();
+        let tree = crate::suggest::tree(&pumbo_perms_core::command::tree_lines(&engine));
         if let Some(why) = &engine.broken {
             api::error(&format!("PumboPerms: the database is not available, changes are refused: {why}"));
         }
         let check_event = cfg.provider.check_event;
-        let refresh_ticks = u64::from(cfg.provider.refresh_seconds) * 20;
         let op_level = cfg.defaults.op_level;
         let summary = format!(
             "PumboPerms {} loaded ({}): {} groups, {} users, {} tracks",
@@ -111,10 +112,10 @@ impl Plugin for PumboPerms {
             if op_level == 0 { PermissionDefault::Deny } else { PermissionDefault::Op(api::level_from(op_level)) };
         let mut nodes: Vec<(String, String)> = ACTIONS
             .iter()
-            .map(|a| (format!("{PLUGIN_NAME}:{a}"), format!("PumboPerms: /pp {}", a.replace('.', " "))))
+            .map(|a| (format!("{PLUGIN_NAME}:{a}"), format!("PumboPerms: {root} {}", a.replace('.', " "))))
             .collect();
         let command_node = pumbo_perms_core::host::command_node();
-        nodes.push((command_node.clone(), "PumboPerms: see /pp (any PumboPerms permission)".into()));
+        nodes.push((command_node.clone(), format!("PumboPerms: see {root} (any PumboPerms permission)")));
         for (node, description) in nodes {
             let _ = context.register_permission(&Permission { node, description, default, children: vec![] });
         }
@@ -122,14 +123,15 @@ impl Plugin for PumboPerms {
         // Commands first: registering a command while players are online makes
         // Pumpkin check permissions, which must not reach this plugin's check
         // handler during its own load.
-        let command = Command::new(&[PLUGIN_NAME.into(), "pp".into()], "PumboPerms: permissions, groups and ranks")
-            .then(
-                CommandNode::argument("args", &ArgumentType::String(StringType::Greedy))
-                    .suggest(commands::Suggest)
-                    .execute(commands::Pp { with_args: true }),
-            )
-            .execute(commands::Pp { with_args: false });
-        context.register_command(command, &command_node);
+        // Each name is a whole command: Pumpkin 0.2.0 suggests nothing right
+        // after an alias, which it registers as a redirect.
+        for name in std::iter::once(PLUGIN_NAME.to_string()).chain(aliases) {
+            let mut command = Command::new(&[name], "PumboPerms: permissions, groups and ranks");
+            for node in &tree {
+                command = command.then(commands::node(node, &mut Vec::new()));
+            }
+            context.register_command(command.execute(commands::Pp { path: Vec::new() }), &command_node);
+        }
 
         context.register_event_handler::<api::PlayerJoinEvent, _>(events::Join, EventPriority::Lowest, false)?;
         context.register_event_handler::<api::PlayerLeaveEvent, _>(events::Leave, EventPriority::Lowest, false)?;
@@ -138,7 +140,8 @@ impl Plugin for PumboPerms {
             EventPriority::Lowest,
             false,
         )?;
-        context.schedule_repeating_task(refresh_ticks, refresh_ticks, |server| events::tick(&server));
+        // `provider.refresh-seconds` is read at every run, so a reload changes it.
+        context.schedule_repeating_task(20, 20, |server| events::tick(&server));
         // The first run imports other sources and takes over the attachments
         // (not in on_load: other plugins answer only after their load). Every
         // second, the pass itself decides when it is due.

@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "pumbo-common"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c3e5a8caee581f011bd0a17187325fdbe8b65f6c"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#aebc9a76f30422fdd85ce2a545c8019ee4aea919"
 dependencies = [
  "md-5",
  "rand_core 0.6.4",
@@ -578,14 +578,14 @@ dependencies = [
 [[package]]
 name = "pumbo-contracts"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c3e5a8caee581f011bd0a17187325fdbe8b65f6c"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#aebc9a76f30422fdd85ce2a545c8019ee4aea919"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "pumbo-perms-core"
-version = "0.1.2-beta"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "pumbo-common",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-perms-prox"
-version = "0.1.2-beta"
+version = "1.0.0"
 dependencies = [
  "pumbo-common",
  "pumbo-contracts",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-perms-pumpkin"
-version = "0.1.2-beta"
+version = "1.0.0"
 dependencies = [
  "pumbo-common",
  "pumbo-perms-core",
@@ -621,7 +621,7 @@ dependencies = [
 [[package]]
 name = "pumbo-sdk"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c3e5a8caee581f011bd0a17187325fdbe8b65f6c"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#aebc9a76f30422fdd85ce2a545c8019ee4aea919"
 dependencies = [
  "ciborium",
  "futures",

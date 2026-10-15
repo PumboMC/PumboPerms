@@ -294,7 +294,7 @@ fn one_holder_has_no_true_ties() {
     // server (4) beats world (1)
     assert_eq!(p.check(U, "x", &here(), 0), Some(false));
     // y: same node, same contexts, same kind -> the second replaced the first;
-    // context scores are powers of two, so different contexts never tie
+    // different contexts can still tie (group=a and group=b), then false wins
     assert_eq!(p.check(U, "y", &here(), 0), Some(false));
 }
 

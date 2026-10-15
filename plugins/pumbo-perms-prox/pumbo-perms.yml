@@ -1,6 +1,6 @@
 # Manifest of PumboPerms for PumboProx, built into pumbo-perms.wasm (pumbo_sdk::embed!).
 id: pumbo-perms
-version: 0.1.2-beta
+version: 1.0.0
 api: "0.1"
 events: [disconnect, command, timer]
 short-name: perms
@@ -21,7 +21,7 @@ permissions:
   - node: pumbo.perms.reload
     description: Reload the config and messages (/pp reload)
   - node: pumbo.perms.debug
-    description: Debug log on and off (/pumbo perms debug)
+    description: Debug log on and off (/pumboperms debug)
   - node: pumbo.perms.log
     description: Read the change log (/pp log)
   - node: pumbo.perms.log.notify

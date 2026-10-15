@@ -9,7 +9,7 @@
 //!   every change (`permissions.replace`). The proxy answers checks from that
 //!   copy and hands the decisions to the servers through PumboBridge, so a
 //!   change shows everywhere at once without calling this plugin per check,
-//! - `/pp` (also `/pumboperms <sub>` and `/pumbo perms <sub>`), from players
+//! - `/pp` (also `/pumboperms <sub>`), from players
 //!   and the console; contexts are `server=<name>` and `group=<server group>`,
 //! - at the first start it takes over the proxy's `permissions.yml` (the proxy
 //!   sends it through the service method `file`); players named there only by
@@ -96,15 +96,16 @@ const TICK_MS: u64 = 1000;
 const PORTION: usize = 25;
 /// A broken database is logged and read again after this long.
 const BROKEN_LOG_MS: u64 = 60_000;
-/// `/pp` subcommands also under `/pumboperms` and `/pumbo perms` (`reload`,
-/// `version` and `debug` there are the proxy's own), with aliases.
+/// The full name of the main command: `/pumbo<short-name>`.
+const FULL_NAME: &str = "pumboperms";
+/// `/pp` subcommands also under `/pumboperms` (`reload`, `version` and `debug`
+/// there are the proxy's own), with aliases.
 const UMBRELLA: &[(&str, &[&str])] = &[
     ("help", &[]),
     ("info", &[]),
     ("log", &[]),
     ("export", &[]),
     ("import", &[]),
-    ("editor", &[]),
     ("groups", &["listgroups"]),
     ("tracks", &["listtracks"]),
     ("creategroup", &[]),
@@ -121,11 +122,14 @@ const UMBRELLA: &[(&str, &[&str])] = &[
 struct State {
     engine: Engine,
     cfg: setup::Config,
+    /// The short commands registered at start (`commands.aliases`).
+    aliases: Vec<String>,
     /// Players the proxy loaded from this plugin: UUID, the last set the proxy
     /// took and the info (`ipc::Info` as JSON) on the player's server then.
     loaded: HashMap<PlayerId, (String, Vec<PermissionEntry>, String)>,
-    /// `permissions.yml` as the proxy sent it last (fingerprint, contents).
-    file: Option<(String, Snapshot)>,
+    /// `permissions.yml` as the proxy sent it last (fingerprint, contents),
+    /// or why it cannot be imported.
+    file: Option<Result<(String, Snapshot), String>>,
     timer: u64,
     /// The proxy refused `replace`: another provider is configured.
     not_provider: bool,
@@ -152,8 +156,37 @@ fn uuid_of(p: &PlayerInfo) -> String {
     Uuid::from_high_low(p.profile.id.high, p.profile.id.low).to_string()
 }
 
+/// A player as `/pp` sees the sender: on their server, no operator level.
+fn who_of(p: &PlayerInfo) -> Who {
+    let server = if p.in_virtual { String::new() } else { p.context.server.clone().unwrap_or_default() };
+    Who { server, ..Who::player(&p.profile.name, &uuid_of(p), 0, "") }
+}
+
 fn json(t: &Rich) -> Text {
     Text::Json(pumbo_common::rich::json(t))
+}
+
+/// The host cuts a text longer than this (`MAX_TEXT` in pumbo-host).
+const MAX_TEXT: usize = 32 * 1024;
+
+/// `t` in messages whose JSON stays under [`MAX_TEXT`], cut between lines.
+fn messages(t: &Rich) -> Vec<Text> {
+    let mut out = Vec::new();
+    let (mut part, mut size) = (Rich::new(), 0);
+    for line in &t.lines {
+        // One line alone costs a little more than inside a message, so the sum is an upper bound.
+        let n = pumbo_common::rich::json(&Rich::from(line.clone())).len();
+        if size + n > MAX_TEXT && !part.is_empty() {
+            out.push(json(&std::mem::take(&mut part)));
+            size = 0;
+        }
+        part.push(line.clone());
+        size += n;
+    }
+    if !part.is_empty() {
+        out.push(json(&part));
+    }
+    out
 }
 
 fn reply(to: Option<PlayerId>, t: &Rich) {
@@ -161,7 +194,7 @@ fn reply(to: Option<PlayerId>, t: &Rich) {
         return;
     }
     match to {
-        Some(id) => players::send_message(id, json(t)),
+        Some(id) => messages(t).into_iter().for_each(|m| players::send_message(id, m)),
         None => log::info(&t.plain()),
     }
 }
@@ -249,18 +282,26 @@ impl PumboPerms {
         }
         engine.server_groups = server_groups();
         let _ = std::fs::create_dir_all(format!("{}/exports", self.data_dir));
-        let mut spec = vec![Command::new("pp").permission(COMMAND_NODE).usage("/pp help")];
-        for (name, aliases) in UMBRELLA {
-            let mut c = Command::new(name).permission(COMMAND_NODE).usage(&format!("/pp {name}")).umbrella();
-            for a in *aliases {
+        // A short command another plugin holds is refused by the proxy.
+        let (wanted, _) = cfg.commands.aliases_to_register(FULL_NAME, |_| None);
+        let mut aliases = Vec::new();
+        for alias in wanted {
+            match Command::new(&alias).permission(COMMAND_NODE).usage(&format!("/{alias} help")).register() {
+                Ok(()) => aliases.push(alias),
+                Err(e) => log::warn(&format!("PumboPerms: /{alias} not registered, /{FULL_NAME} works: {e}")),
+            }
+        }
+        engine.root = format!("/{}", aliases.first().map_or(FULL_NAME, String::as_str));
+        let off =
+            |name: &str| command::subcommand(name).is_some_and(|main| engine.cfg.disabled.iter().any(|d| d == main));
+        for (name, other) in UMBRELLA.iter().filter(|(name, _)| !off(name)) {
+            let mut c =
+                Command::new(name).permission(COMMAND_NODE).usage(&format!("{} {name}", engine.root)).umbrella();
+            for a in *other {
                 c = c.alias(a);
             }
-            spec.push(c);
-        }
-        for c in spec {
-            let name = c.0.name.clone();
             if let Err(e) = c.register() {
-                log::warn(&format!("PumboPerms: /{name} not registered: {e}"));
+                log::warn(&format!("PumboPerms: /{FULL_NAME} {name} not registered: {e}"));
             }
         }
         let summary = format!(
@@ -275,6 +316,7 @@ impl PumboPerms {
         *self.state.borrow_mut() = Some(State {
             engine,
             cfg,
+            aliases,
             loaded: HashMap::new(),
             file: None,
             timer,
@@ -285,10 +327,10 @@ impl PumboPerms {
         Ok(())
     }
 
-    /// `/pp reload` and `/pumbo perms reload`: config and messages (the
+    /// `/pp reload` and `/pumboperms reload`: config and messages (the
     /// database stays). A file that is not valid YAML changes nothing.
     fn reload(&self) -> Result<Rich, String> {
-        let (cfg, mut warnings) = setup::load_config(&self.config_dir);
+        let (mut cfg, mut warnings) = setup::load_config(&self.config_dir);
         let (lang, w) = setup::load_lang(&self.config_dir, &cfg.language);
         warnings.extend(w);
         if let Some(w) = warnings.iter().find(|w| w.fatal) {
@@ -296,6 +338,21 @@ impl PumboPerms {
             return Err(w.message.clone());
         }
         warnings.extend(pumbo_common::config::keep_last_good(&self.config_dir, &self.data_dir));
+        if let Some(Some(registered)) =
+            self.with(|s| (cfg.commands.aliases != s.cfg.commands.aliases).then(|| s.cfg.commands.aliases.clone()))
+        {
+            warnings.push(pumbo_common::config::Warning::new(
+                Some("commands.aliases"),
+                "commands.aliases changes after /prox plugins reload pumbo-perms",
+            ));
+            cfg.commands.aliases = registered;
+        }
+        if self.with(|s| cfg.commands.disabled != s.cfg.commands.disabled) == Some(true) {
+            warnings.push(pumbo_common::config::Warning::new(
+                Some("commands.disabled"),
+                "commands.disabled applies to /pumboperms <subcommand> after /prox plugins reload pumbo-perms",
+            ));
+        }
         for w in &warnings {
             log::warn(&format!("PumboPerms: config: {w}"));
         }
@@ -400,8 +457,7 @@ impl PumboPerms {
             None => Who::console(),
             Some(id) => {
                 let Some(p) = players::get(id) else { return };
-                let server = if p.in_virtual { String::new() } else { p.context.server.clone().unwrap_or_default() };
-                Who { server, ..Who::player(&p.profile.name, &uuid_of(&p), 0, "") }
+                who_of(&p)
             }
         };
         let online = players::all();
@@ -432,14 +488,14 @@ impl PumboPerms {
                     log_entry = o.log.or(log_entry);
                 }
                 Some(Action::Source(source, mode)) => {
+                    let l = &s.engine.lang;
                     let data = match (&s.file, source == SOURCE) {
-                        (_, false) => {
-                            Err(format!("unknown source {source}; on PumboProx it is {SOURCE} (permissions.yml)"))
+                        (_, false) => Err(l.format("source-unknown", &Args::new().arg(&source).arg(SOURCE))),
+                        (None, true) if mode != SourceMode::Undo => Err(l.get("source-no-file")),
+                        (Some(Err(why)), true) if mode != SourceMode::Undo => {
+                            Err(l.format("source-file-errors", &Args::new().arg(why)))
                         }
-                        (None, true) if mode != SourceMode::Undo => {
-                            Err("the proxy has not sent permissions.yml yet".to_string())
-                        }
-                        (f, true) => f.clone().ok_or_else(String::new),
+                        (f, true) => f.clone().and_then(Result::ok).ok_or_else(String::new),
                     };
                     let o = command::import_source(&mut s.engine, &who, &source, data, mode, now);
                     text = o.reply;
@@ -489,6 +545,7 @@ impl PumboPerms {
             Ok(s) => s,
             Err(e) => {
                 log::warn(&format!("PumboPerms: permissions.yml cannot be imported: {e}"));
+                self.with(|s| s.file = Some(Err(e)));
                 return;
             }
         };
@@ -496,7 +553,7 @@ impl PumboPerms {
         let now = now_ms();
         let line = self
             .with(|s| {
-                s.file = Some((f.fingerprint.clone(), snap.clone()));
+                s.file = Some(Ok((f.fingerprint.clone(), snap.clone())));
                 if !s.cfg.import.enabled {
                     return None;
                 }
@@ -559,10 +616,30 @@ impl pumbo_sdk::Plugin for PumboPerms {
     }
 
     async fn on_command(&self, e: CommandEvent) {
-        // `/pp <args>`, or a subcommand of `/pumboperms` and `/pumbo perms`.
-        let mut words = if e.name == "pp" { Vec::new() } else { vec![e.name] };
+        // `/pp <args>`, or a subcommand of `/pumboperms`.
+        let short = self.with(|s| s.aliases.contains(&e.name)).unwrap_or(false);
+        let mut words = if short { Vec::new() } else { vec![e.name] };
         words.extend(e.args);
         self.run(e.player, split_args(&words.join(" "))).await;
+    }
+
+    /// Tab completion of `/pp` and `/pumboperms <sub>`: what the same line
+    /// gives on Pumpkin.
+    async fn on_suggest(&self, player: PlayerId, name: String, args: String) -> Option<Vec<String>> {
+        let who = who_of(&players::get(player)?);
+        let short = self.with(|s| s.aliases.contains(&name)).unwrap_or(false);
+        let line = if short { args } else { format!("{name} {args}") };
+        let mut words = split_args(&line);
+        if line.is_empty() || line.ends_with(' ') {
+            words.push(String::new());
+        }
+        let online: Vec<KnownName> = players::all()
+            .iter()
+            .map(|p| KnownName { uuid: uuid_of(p), name: p.profile.name.clone(), online: p.online_mode })
+            .collect();
+        let now = now_ms();
+        // Busy: nothing rather than the host's player names.
+        Some(self.with(|s| command::complete(&mut s.engine, &who, &words, &online, now)).unwrap_or_default())
     }
 
     /// `%pumboperms_prefix%`, `_suffix`, `_rank`, `_group`, `_groups` and
@@ -578,7 +655,12 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 let uuid = s.loaded.get(&r.player?)?.0.clone();
                 let q = s.engine.place(r.context.server.as_deref().unwrap_or(""), "");
                 let info = ipc::info(&mut s.engine, &uuid, &q, now)?;
-                ipc::placeholder(&info, &r.key, r.arg.as_deref()).map(Text::Legacy)
+                let v = ipc::placeholder(&info, &r.key, r.arg.as_deref())?;
+                // Codes in a prefix must not run into the rest of a chat template.
+                Some(match r.key.as_str() {
+                    "prefix" | "suffix" | "rank" => Text::Mini(pumbo_common::rich::mini(&v)),
+                    _ => Text::Legacy(v),
+                })
             })
             .collect()
     }
@@ -703,7 +785,7 @@ impl pumbo_sdk::Plugin for PumboPerms {
     }
 }
 
-pumbo_sdk::plugin!(PumboPerms);
+pumbo_sdk::plugin!(PumboPerms, suggest);
 pumbo_sdk::embed!(
     manifest = "pumbo-perms.yml",
     config = "assets/config.yml",

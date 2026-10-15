@@ -1,4 +1,4 @@
-//! `/pumboperms` and its alias `/pp`.
+//! `/pumboperms` and its short names such as `/pp`.
 
 use std::path::Path;
 
@@ -10,30 +10,62 @@ use pumbo_perms_core::perms::KnownName;
 use pumbo_perms_core::ui::{self, Text, value};
 
 use super::api::{
-    self, Arg, CommandError, CommandHandler, CommandSender, CommandSenderType, CommandSuggestion,
-    CommandSuggestionHandler, CommandSuggestions, ConsumedArgs, Server, SuggestionRequest,
+    self, Arg, ArgumentType, CommandError, CommandHandler, CommandNode, CommandSender, CommandSenderType,
+    CommandSuggestion, CommandSuggestionHandler, CommandSuggestions, ConsumedArgs, Server, StringType,
+    SuggestionRequest,
 };
 use super::state::{self, Rt, SenderKind};
 use super::{push, settings};
+use crate::suggest::{Node, Word};
 
-/// Runs the command; `with_args` when the greedy argument is there.
+/// Runs a complete command: the words of its path in the tree, with the
+/// arguments Pumpkin read.
 pub struct Pp {
-    pub with_args: bool,
+    pub path: Vec<Word>,
 }
 
 impl CommandHandler for Pp {
     fn handle(&self, sender: CommandSender, server: Server, args: ConsumedArgs) -> Result<i32, CommandError> {
-        let raw = if self.with_args {
-            match args.get_value("args") {
-                Arg::Simple(s) | Arg::Msg(s) => s,
-                _ => String::new(),
+        let mut words = Vec::new();
+        for word in &self.path {
+            match word {
+                Word::Fixed(w) => words.push(w.clone()),
+                Word::Slot(name, rest) => {
+                    let value = match args.get_value(name) {
+                        Arg::Simple(s) | Arg::Msg(s) => s,
+                        _ => String::new(),
+                    };
+                    if *rest {
+                        words.extend(split_args(&value));
+                    } else {
+                        words.push(value);
+                    }
+                }
             }
-        } else {
-            String::new()
-        };
-        run(&sender, &server, &raw);
+        }
+        run(&sender, &server, &words);
         Ok(1)
     }
+}
+
+/// The Pumpkin node of `n` with everything below it; `path` leads to `n`.
+pub fn node(n: &Node, path: &mut Vec<Word>) -> CommandNode {
+    path.push(n.word.clone());
+    let mut built = match &n.word {
+        Word::Fixed(w) => CommandNode::literal(w),
+        Word::Slot(name, rest) => {
+            let kind = if *rest { StringType::Greedy } else { StringType::Quotable };
+            CommandNode::argument(name, &ArgumentType::String(kind)).suggest(Suggest)
+        }
+    };
+    for child in &n.children {
+        built = built.then(node(child, path));
+    }
+    if n.executes {
+        built = built.execute(Pp { path: path.clone() });
+    }
+    path.pop();
+    built
 }
 
 /// Who sent a command, read from the host before the state is taken; `None`
@@ -57,7 +89,7 @@ pub fn who_of(sender: &CommandSender) -> Option<Who> {
     state::who_for(kind, player.as_ref().map(|(n, u, l, w)| (n.as_str(), u.as_str(), *l, w.as_str())))
 }
 
-fn run(sender: &CommandSender, server: &Server, raw: &str) {
+fn run(sender: &CommandSender, server: &Server, args: &[String]) {
     let Some(who) = who_of(sender) else {
         let refused = state::with(|rt| ui::error(rt.lang(), "sender-refused", &Args::new()));
         api::reply(
@@ -66,7 +98,6 @@ fn run(sender: &CommandSender, server: &Server, raw: &str) {
         );
         return;
     };
-    let args = split_args(raw);
     let now = now_ms();
     let result = state::with(|rt| {
         let mut plans = rt.due_expiry(now);
@@ -91,7 +122,7 @@ fn run(sender: &CommandSender, server: &Server, raw: &str) {
                 })
             };
             let env = Env { now, online: &lookup, version: env!("CARGO_PKG_VERSION"), version_rows: rows };
-            command::run(engine, &who, &args, &env)
+            command::run(engine, &who, args, &env)
         };
         let mut reply = out.reply;
         let mut changed = out.changed;
@@ -190,13 +221,14 @@ fn import(rt: &mut Rt, who: &Who, name: &str, now: u64) -> command::Outcome {
     files::import_file(&mut rt.engine, Path::new(&rt.dir), who, name, now)
 }
 
-/// Tab completion of the greedy argument.
+/// Tab completion of every argument, from the whole line after the command
+/// name (whichever name was typed).
 pub struct Suggest;
 
 impl CommandSuggestionHandler for Suggest {
     fn suggest(&self, sender: CommandSender, server: Server, request: SuggestionRequest) -> CommandSuggestions {
-        let typed = request.remaining.clone();
-        let mut args = split_args(&typed);
+        let typed = request.input.split_once(' ').map_or("", |(_, rest)| rest);
+        let mut args = split_args(typed);
         if typed.is_empty() || typed.ends_with(' ') {
             args.push(String::new());
         }

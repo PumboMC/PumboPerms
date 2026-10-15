@@ -16,10 +16,12 @@
 //!
 //! What each source added is kept in the database (its ledger), so a later
 //! import changes only that and `/pp import undo` takes it back.
-//! Every call to another plugin happens outside the state (`ipc` may run
-//! that plugin's handler inside it).
+//! The import tick calls other plugins outside the state (`ipc` may run that
+//! plugin's handler inside it); `/pp import` asks its source inside the
+//! state, so a call back into PumboPerms finds it busy.
 
 use pumbo_common::clock::now_ms;
+use pumbo_common::lang::Lang;
 use pumbo_common::text::Args;
 use pumbo_perms_core::command::{self, Outcome, SourceMode, Who};
 use pumbo_perms_core::export::{self, Snapshot};
@@ -100,14 +102,14 @@ fn plugin_of(source: &str) -> &str {
     if source == "proxy" { BRIDGE } else { source }
 }
 
-fn fetch(server: &Server, source: &str) -> Result<(String, Snapshot), String> {
+fn fetch(lang: &Lang, server: &Server, source: &str) -> Result<(String, Snapshot), String> {
     if source == "attachments" {
-        return attachments(server).ok_or_else(|| "no attachments of other plugins on online players".into());
+        return attachments(server).ok_or_else(|| lang.get("source-no-attachments"));
     }
     match ask(plugin_of(source)) {
         Answer::Data(f, s) => Ok((f, s)),
-        Answer::Pending => Err("the source has no data yet (is the proxy connected?)".into()),
-        Answer::Absent => Err(format!("no plugin {} answers export-permissions", plugin_of(source))),
+        Answer::Pending => Err(lang.get("source-pending")),
+        Answer::Absent => Err(lang.format("source-absent", &Args::new().arg(plugin_of(source)))),
         Answer::Bad(e) => Err(e),
     }
 }
@@ -119,7 +121,7 @@ pub fn command(rt: &mut Rt, server: &Server, who: &Who, source: &str, mode: Sour
         // The bridge holds only the flag that the proxy rules: nothing to import.
         return Outcome { reply: ui::warn(rt.lang(), "import-proxy-rules", &Args::new()), ..Outcome::default() };
     }
-    let data = if mode == SourceMode::Undo { Err(String::new()) } else { fetch(server, source) };
+    let data = if mode == SourceMode::Undo { Err(String::new()) } else { fetch(rt.lang(), server, source) };
     command::import_source(&mut rt.engine, who, source, data, mode, now)
 }
 

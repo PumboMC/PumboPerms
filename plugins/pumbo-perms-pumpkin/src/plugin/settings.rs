@@ -38,9 +38,10 @@ pub fn load_lang(dir: &str, code: &str) -> (Lang, Vec<Warning>) {
 }
 
 /// `/pp reload`: config and messages (the database stays as it is). Whether
-/// the permission check event is answered only changes with a restart.
+/// the permission check event is answered, the command tree and the
+/// operator level of the nodes registered in Pumpkin change with a restart.
 pub fn reload(rt: &mut Rt) -> Text {
-    let (cfg, mut warnings) = load_config(&rt.dir);
+    let (mut cfg, mut warnings) = load_config(&rt.dir);
     let (lang, more) = load_lang(&rt.dir, &cfg.language);
     warnings.extend(more);
     if let Some(w) = warnings.iter().find(|w| w.fatal) {
@@ -49,6 +50,22 @@ pub fn reload(rt: &mut Rt) -> Text {
     }
     if cfg.provider.check_event != rt.check_event {
         warnings.push(Warning::new(Some("provider.check-event"), "changes after a server restart"));
+    }
+    if cfg.commands.aliases != rt.cfg.commands.aliases {
+        warnings.push(Warning::new(Some("commands.aliases"), "commands.aliases changes after a server restart"));
+        cfg.commands.aliases.clone_from(&rt.cfg.commands.aliases);
+    }
+    if cfg.commands.disabled != rt.cfg.commands.disabled {
+        warnings.push(Warning::new(
+            Some("commands.disabled"),
+            "commands.disabled applies to /pp now, to the command tree after a server restart",
+        ));
+    }
+    if cfg.defaults.op_level != rt.registered_op_level {
+        warnings.push(Warning::new(
+            Some("defaults.op-level"),
+            "defaults.op-level applies to /pp now, to Pumpkin's own permission checks after a server restart",
+        ));
     }
     rt.engine.cfg = cfg.core();
     rt.engine.lang = lang;
