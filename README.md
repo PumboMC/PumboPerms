@@ -30,7 +30,7 @@
 
 ## Roadmap
 
-PumboPerms is in beta. The next release makes it safe and predictable on networks. Open a topic for the details.
+The next release, 1.0.0, makes PumboPerms ready for production on single servers and on networks. ✅ FIXED - confirmed in game, ☑️ FIXED - not confirmed in game yet. Open a topic for the details.
 
 Work on the next release happens on the [`dev`](https://github.com/PumboMC/PumboPerms/tree/dev) branch. Items marked (Dev) are fixed there and ship with the next release: ✅ confirmed in game, ☑️ not confirmed in game yet.
 
@@ -44,9 +44,9 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <details open>
 <summary><b>Permission rules: the same answer everywhere</b></summary>
 
-- ☑️ (Dev) Wildcards and denials set on the proxy, such as `pumbo.bans.*`, apply on the servers exactly as on the proxy. Until then, give exact nodes (`pumbo.bans.ban`) on a network.
+- ✅ (Dev) Wildcards and denials set on the proxy, such as `pumbo.bans.*`, apply on the servers exactly as on the proxy. Until then, give exact nodes (`pumbo.bans.ban`) on a network.
 - ✅ (Dev) `server=Lobby` and `server=lobby` mean the same server.
-- ☑️ (Dev) The `default` group works the same on the proxy and on the servers.
+- ✅ (Dev) The `default` group works the same on the proxy and on the servers.
 - ✅ (Dev) `world=` in `/pp` on the proxy is refused with a clear message, because the proxy does not see worlds, and `/pp ... permission check` shows the answer the server uses.
 - ☑️ (Dev) PumboPerms on a server answers other plugins with the proxy's ranks instead of an old local copy.
 - ☑️ (Dev) A cancelled world change keeps the permissions of the old world.
@@ -64,26 +64,26 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 - ☑️ (Dev) Networks with thousands of ranked players stay in proxy mode. Today a large database makes the servers fall back to their local ranks.
 - ☑️ (Dev) Servers refresh the proxy's ranks after changes to the database or the permission provider, and do not treat an old copy as current.
 - ☑️ (Dev) Updates from the proxy carry a version and a confirmation, so a server cannot keep an older set.
-- ☑️ (Dev) After a rank change, the affected players get their new command list at once.
+- ✅ (Dev) After a rank change, the affected players get their new command list at once.
 - ☑️ (Dev) A player who leaves during an update keeps no removed rights, and server permissions end with the session.
 - ☑️ (Dev) A new PumboPerms file placed next to the old one stops the proxy with a clear message instead of turning permissions off.
-- ☑️ (Dev) Permission checks for offline players see changes at once.
-- ☑️ (Dev) While PumboPerms reloads on the proxy, `/pp` answers that it is restarting instead of going to the server.
+- ✅ (Dev) Permission checks for offline players see changes at once.
+- ✅ (Dev) While PumboPerms reloads on the proxy, `/pp` answers that it is restarting instead of going to the server.
 
 </details>
 
 <details open>
 <summary><b>Data and imports</b></summary>
 
-- ☑️ (Dev) Running `/pp import run` again keeps the groups, tracks, weights and inheritance you changed with `/pp`, and removes only what the source dropped.
-- ☑️ (Dev) Imports by player name match the right account.
+- ✅ (Dev) Running `/pp import run` again keeps the groups, tracks, weights and inheritance you changed with `/pp`, and removes only what the source dropped.
+- ✅ (Dev) Imports by player name match the right account.
 - ☑️ (Dev) Imports reject invalid contexts and duplicate entries.
 - ☑️ (Dev) Pending imports run on Pumpkin as on the proxy; there, players known only by name get their ranks with `/pp`.
-- ☑️ (Dev) Import records live in the database and are written in one step.
+- ✅ (Dev) Import records live in the database and are written in one step.
 - ☑️ (Dev) Long names with special characters no longer stop an import.
 - ☑️ (Dev) `/pp export` keeps the old file when the database cannot be read.
 - ☑️ (Dev) Two servers cannot open the same PumboPerms database at once.
-- ☑️ (Dev) Database format versions with upgrade steps.
+- ✅ (Dev) Database format versions with upgrade steps.
 
 </details>
 
@@ -94,7 +94,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 - ☑️ (Dev) A damaged database shows up in the log with the reason.
 - ☑️ (Dev) The known causes of internal errors in PumboPerms on Pumpkin are fixed, and PumboBridge notices when the plugin stops.
 - ☑️ (Dev) Expired temporary permissions end on the servers even when a database write fails.
-- ☑️ (Dev) A config file with a syntax error keeps the last working settings and shows the line with the error.
+- ✅ (Dev) A config file with a syntax error keeps the last working settings and shows the line with the error.
 - ☑️ (Dev) Commands that change nothing no longer reload the database.
 
 </details>
@@ -102,14 +102,14 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <details open>
 <summary><b>Commands</b></summary>
 
-- Tab completion for `/pp` subcommands, players, groups and nodes, on PumboProx and on Pumpkin.
-- Tab completion shows only what the player may use.
-- Rename `/pp` and `/pumboperms` in `config.yml`.
-- Long `/pp` lists split into pages.
-- `meta set` checks keys, and `meta unset` removes the key you name.
-- `/pp reload` applies all settings.
-- Polish messages without English fragments.
-- Clearer colours in the `/pp` help.
+- ✅ (Dev) Tab completion for `/pp` subcommands, players, groups and nodes, on PumboProx and on Pumpkin.
+- ☑️ (Dev) Tab completion shows only what the player may use.
+- ☑️ (Dev) Rename `/pp` and `/pumboperms` in `config.yml`.
+- ☑️ (Dev) Long `/pp` lists split into pages.
+- ☑️ (Dev) `meta set` checks keys, and `meta unset` removes the key you name.
+- ☑️ (Dev) `/pp reload` applies all settings.
+- ☑️ (Dev) Polish messages without English fragments.
+- ✅ (Dev) A clearer `/pp` in chat, laid out like LuckPerms: a `[PP]` tag on every line, the help grouped by topic, views between bars in the Pumbo colours, `true` in green, `false` in red and prefixes in their own colours.
 
 </details>
 
@@ -127,7 +127,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. Deta
 <details open>
 <summary><b>Quality</b></summary>
 
-- Cross tests in CI on PumboProx and on real Pumpkin servers: the proxy plugin on PumboProx, the Pumpkin plugin on its own, and both together through PumboBridge, on Pumpkin 0.2.0 (Minecraft 26.3) and 0.1.0-dev (Minecraft 26.2).
+- ☑️ (Dev) Cross tests in CI on PumboProx and on real Pumpkin servers: the proxy plugin on PumboProx, the Pumpkin plugin on its own, and both together through PumboBridge, on Pumpkin 0.2.0 (Minecraft 26.3) and 0.1.0-dev (Minecraft 26.2).
 - ☑️ (Dev) Tests for the Pumpkin plugin code.
 - ☑️ (Dev) Performance tests that fail when PumboPerms gets slower.
 - ☑️ (Dev) Property tests for the node, context and import parsers.
