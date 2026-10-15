@@ -3,7 +3,7 @@
 //! On Pumpkin they come through the plugin message channel (`ipc`), on
 //! PumboProx through the service registry. Requests:
 //!
-//! - `{"op":"hello"}` -> `{"ok":true,"plugin":"PumboPerms","version":"0.1.0","protocol":1}`
+//! - `{"op":"hello"}` -> `{"ok":true,"plugin":"PumboPerms","version":"0.1.0","protocol":1,"ops":[...]}`
 //! - `{"op":"check","uuid":"…","node":"pumbo.bans.ban","world":"world","op-level":0}`
 //!   -> `{"ok":true,"value":true}` (`null`: nobody decides, use your default)
 //! - `{"op":"info","uuid":"…","world":"world"}` -> rank, prefix, suffix, groups
@@ -11,7 +11,8 @@
 //! - `{"op":"fill","uuid":"…","world":"world","text":"%pumboperms_prefix%Steve"}`
 //!   -> `{"ok":true,"text":"[VIP] Steve"}`: the placeholders of [`placeholder`]
 //!
-//! Errors: `{"ok":false,"error":"…"}`.
+//! Errors: `{"ok":false,"error":"…"}`; an op this version does not know gets
+//! `"unsupported op"`.
 
 use std::collections::BTreeMap;
 
@@ -23,6 +24,8 @@ use crate::node;
 
 /// Version of the message format.
 pub const PROTOCOL: u32 = 1;
+/// The operations this version answers (`hello` lists them).
+pub const OPS: &[&str] = &["hello", "check", "info", "fill"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
@@ -121,13 +124,28 @@ pub fn fill(info: &Info, text: &str) -> String {
     out
 }
 
+/// A request, or the error reply to it: `unsupported op` for an op this
+/// version does not know, `bad request` for a known op with bad fields.
+pub fn parse(request: &[u8]) -> Result<Request, serde_json::Value> {
+    let bad = |e: serde_json::Error| error(&format!("bad request: {e}"));
+    let v: serde_json::Value = serde_json::from_slice(request).map_err(bad)?;
+    let op = v.get("op").and_then(serde_json::Value::as_str).unwrap_or_default();
+    if !op.is_empty() && op != "ping" && !OPS.contains(&op) {
+        return Err(error("unsupported op"));
+    }
+    serde_json::from_value(v).map_err(bad)
+}
+
+/// The answer to `hello`; `version` is the plugin version.
+pub fn hello(version: &str) -> serde_json::Value {
+    serde_json::json!({ "ok": true, "plugin": "PumboPerms", "version": version, "protocol": PROTOCOL, "ops": OPS })
+}
+
 /// Answers one request; `version` is the plugin version.
 pub fn handle(e: &mut Engine, request: &[u8], now: u64, version: &str) -> Vec<u8> {
-    let reply = match serde_json::from_slice::<Request>(request) {
-        Err(err) => error(&format!("bad request: {err}")),
-        Ok(Request::Hello) => {
-            serde_json::json!({ "ok": true, "plugin": "PumboPerms", "version": version, "protocol": PROTOCOL })
-        }
+    let reply = match parse(request) {
+        Err(reply) => reply,
+        Ok(Request::Hello) => hello(version),
         Ok(Request::Check { uuid, node, world, op_level }) => match (uuid_of(&uuid), node::normalize(&node)) {
             (Some(uuid), Ok(node)) => {
                 serde_json::json!({ "ok": true, "value": e.decide(&uuid, &node, &world, op_level, now) })
@@ -228,7 +246,27 @@ mod tests {
             ask(&mut e, &format!(r#"{{"op":"fill","uuid":"{U}","text":"%pumboperms_meta:none% %pumboperms_prefix"}}"#));
         assert_eq!(r["text"], "%pumboperms_meta:none% %pumboperms_prefix");
         assert_eq!(ask(&mut e, "nonsense")["ok"], false);
+        assert_eq!(
+            ask(&mut e, r#"{"op":"check"}"#)["error"].as_str().map(|s| s.starts_with("bad request")),
+            Some(true)
+        );
         assert_eq!(ask(&mut e, r#"{"op":"check","uuid":"x","node":"a"}"#)["ok"], false);
         assert_eq!(ask(&mut e, &format!(r#"{{"op":"check","uuid":"{U}","node":"a b"}}"#))["ok"], false);
+    }
+
+    #[test]
+    fn hello_lists_ops() {
+        let mut e = Engine::in_memory(CoreCfg::default(), Lang::load(&[COMMON], "en", None).0);
+        let ops = ask(&mut e, r#"{"op":"hello"}"#)["ops"].clone();
+        assert_eq!(ops, serde_json::json!(["hello", "check", "info", "fill"]));
+    }
+
+    #[test]
+    fn unknown_op_is_unsupported() {
+        let mut e = Engine::in_memory(CoreCfg::default(), Lang::load(&[COMMON], "en", None).0);
+        assert_eq!(
+            ask(&mut e, r#"{"op":"rank-changed","uuid":"x"}"#),
+            serde_json::json!({"ok": false, "error": "unsupported op"})
+        );
     }
 }

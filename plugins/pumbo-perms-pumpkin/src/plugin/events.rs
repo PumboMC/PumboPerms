@@ -81,6 +81,9 @@ impl EventHandler<PlayerChangeWorldEvent> for ChangeWorld {
 
 /// Every `refresh-seconds`: expired nodes, changed operator levels and worlds.
 pub fn tick(server: &Server) {
+    if !state::with(|rt| rt.refresh_due(now_ms())).unwrap_or(false) {
+        return;
+    }
     let players: Vec<(String, u8, String)> = server
         .get_all_players()
         .iter()

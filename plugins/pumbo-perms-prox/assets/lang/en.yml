@@ -60,10 +60,12 @@ desc-export-details: Writes exports/<file>.json in the plugin folder.
 desc-import: Load all data from a file
 desc-import-details: Replaces everything with exports/<file>.json. The current data is exported first.
 desc-import-source: Take over another permission source (proxy, a plugin, attachments)
-desc-editor: Web editor (planned)
 desc-reload: Reload config and messages
 desc-version: Version, storage and mode
 desc-info: Groups, permissions and meta
+desc-perm-group: Manage permissions
+desc-parent-group: Manage parent groups
+desc-meta-group: Prefixes, suffixes and meta
 desc-perm-info: List the permissions
 desc-perm-set: Set a permission
 desc-perm-set-details: "Example: permission set minecraft:command.gamemode true world=world"
@@ -130,7 +132,10 @@ bad-node-namespace: "{0} is not a valid permission: only one : is allowed."
 bad-node-wildcard: "{0} is not a valid permission: * may only be the last part (a.b.*)."
 bad-value: "{0} is not true or false."
 bad-number: "{0} is not a whole number."
-bad-context: "Invalid context: {0}. Use server=, group= or world=."
+bad-context-key: "{0} is not a context: use server=, group= or world=."
+bad-context-value: "{0} is not a valid context value."
+bad-context-repeated: Context {0} is given twice.
+bad-meta-key: "{0} is not a valid meta key: 1-64 characters a-z, 0-9, _, . and -."
 no-worlds: "The proxy does not see worlds, so world= is not available here."
 bad-text: The text is too long or has control characters (at most 256 bytes, no line breaks).
 import-file-console: "Only the console can import a whole file: it replaces every group and player."
@@ -148,6 +153,7 @@ kind-suffix: suffix
 # changes
 perm-set: Set {node} to {value} for {target}{context}.
 perm-settemp: Set {node} to {value} for {target}{context} for {duration}.
+perm-settemp-exists: "{0} already has an end time. Remove it with {1} first, then set the new time."
 perm-unset: Removed {node} from {target}{context}.
 perm-unset-none: "{target} has no {node}{context}."
 perm-clear: Removed {count} permissions from {target}{context}.
@@ -246,11 +252,14 @@ hover-info: Click to show
 
 # --- perms-prox ---
 # PumboPerms on PumboProx (English).
-prefix: "&#f28c28PumboPerms &8» "
+prefix: "&8[&#f28c28&lP&#ffd54f&lP&8] "
 reloaded-warnings: Reloaded with {0} warnings, see the proxy log.
 version-mode: Mode
 mode-provider: permission provider of the proxy
 mode-not-provider: "not the provider: set permissions.provider in pumboprox.yml"
 version-online: Online
 version-servers: Servers
+source-unknown: "there is no source {0} here; on PumboProx it is {1} (permissions.yml)"
+source-no-file: the proxy has not sent permissions.yml yet
+source-file-errors: "permissions.yml has errors: {0}"
 

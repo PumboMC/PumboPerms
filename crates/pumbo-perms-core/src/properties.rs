@@ -149,8 +149,9 @@ proptest! {
             "groups": [value.clone()], "users": [value.clone()], "tracks": [value.clone()], "by-name": [value.clone()],
         });
         for input in [raw, value.to_string(), wrapped.to_string()] {
-            if let Err(e) = export::parse(&input) {
-                prop_assert!(!e.is_empty());
+            match export::parse(&input) {
+                Ok(snap) => prop_assert!(snap.fixed.iter().all(|f| !f.contains(['\n', '\r'])), "{:?}", snap.fixed),
+                Err(e) => prop_assert!(!e.is_empty() && !e.contains(['\n', '\r']), "{e}"),
             }
         }
     }

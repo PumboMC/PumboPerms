@@ -68,8 +68,8 @@ pub enum ContextError {
 impl fmt::Display for ContextError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ContextError::UnknownKey(k) => write!(f, "unknown context '{k}' (use server=, group= or world=)"),
-            ContextError::BadValue(v) => write!(f, "invalid context value '{v}'"),
+            ContextError::UnknownKey(k) => write!(f, "unknown context {k:?} (use server=, group= or world=)"),
+            ContextError::BadValue(v) => write!(f, "invalid context value {v:?}"),
             ContextError::Repeated(k) => write!(f, "context '{k}' given twice"),
         }
     }

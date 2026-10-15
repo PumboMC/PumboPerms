@@ -1,7 +1,7 @@
 //! `config.yml`: the core sections and the Pumpkin-only `provider`.
 
-use pumbo_common::config::{Check, Settings};
-use pumbo_perms_core::config::{ContextCfg, CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
+use pumbo_common::config::{Check, Commands, Settings, Warning};
+use pumbo_perms_core::config::{self as core_config, ContextCfg, CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
 use serde::{Deserialize, Serialize};
 
 /// The file written at the first start.
@@ -16,6 +16,7 @@ pub struct Config {
     pub log: LogCfg,
     pub provider: ProviderCfg,
     pub import: ImportCfg,
+    pub commands: Commands,
 }
 
 impl Default for Config {
@@ -27,6 +28,7 @@ impl Default for Config {
             log: LogCfg::default(),
             provider: ProviderCfg::default(),
             import: ImportCfg::default(),
+            commands: core_config::default_commands(),
         }
     }
 }
@@ -49,7 +51,7 @@ pub struct ProviderCfg {
 
 impl Default for ProviderCfg {
     fn default() -> Self {
-        Self { check_event: false, resend_commands: true, refresh_seconds: 1 }
+        Self { check_event: false, resend_commands: true, refresh_seconds: 5 }
     }
 }
 
@@ -62,8 +64,28 @@ impl Config {
             worlds: true,
             // Pumpkin does not tell whether Mojang checked an account.
             names_checked: false,
+            disabled: self.commands.disabled.clone(),
         }
     }
+
+    /// The short commands to register next to `/pumboperms`. Pumpkin's own
+    /// commands and those of the other Pumbo plugins are skipped with a
+    /// warning; which commands third-party plugins registered, the plugin API
+    /// does not tell.
+    pub fn aliases(&self) -> (Vec<String>, Vec<Warning>) {
+        self.commands.aliases_to_register(crate::PLUGIN_NAME, |name| {
+            let node = format!("minecraft:command.{name}");
+            let builtin = pumbo_common::pumpkin::COMMAND_NODES.contains(&node.as_str())
+                || pumbo_common::pumpkin::UNGUARDED_ALIASES.iter().any(|(alias, ..)| *alias == name);
+            let owner = if builtin { Some("Pumpkin") } else { pumbo_common::pumpkin::pumbo_command_owner(name) };
+            owner.map(str::to_string)
+        })
+    }
+}
+
+/// The command shown in help and clicks: the first short command, or the full name.
+pub fn root(aliases: &[String]) -> String {
+    format!("/{}", aliases.first().map_or(crate::PLUGIN_NAME, String::as_str))
 }
 
 impl Settings for Config {
@@ -81,6 +103,7 @@ impl Settings for Config {
         self.defaults = core.defaults;
         self.log = core.log;
         check.clamp("provider.refresh-seconds", &mut self.provider.refresh_seconds, 1, 3600);
+        core_config::validate_commands(&mut self.commands, check);
         let plugins = self.import.plugins.clone();
         check.ensure("import.plugins", &mut self.import.plugins, Vec::new(), |_| {
             plugins.iter().all(|p| {
@@ -110,11 +133,48 @@ mod tests {
         );
         assert_eq!(c.language, "pl");
         assert!(c.provider.check_event);
-        assert_eq!(c.provider.refresh_seconds, 1);
+        assert_eq!(c.provider.refresh_seconds, 1, "clamped up from 0");
         assert_eq!(c.defaults.op_level, 4);
         assert_eq!(w.len(), 3, "{w:?}");
         let (c, w) = config::load::<Config>("language: \"bad lang!\"\n");
         assert_eq!(c.language, "en");
         assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn aliases_come_from_config() {
+        let (c, w) = config::load::<Config>("commands:\n  aliases: [perms, pp]\n  disabled: [u, editor, bogus]\n");
+        assert_eq!(c.aliases(), (vec!["perms".to_string(), "pp".to_string()], Vec::new()));
+        assert_eq!(root(&c.aliases().0), "/perms");
+        assert_eq!(c.core().disabled, vec!["user", "editor"]);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].message.contains("'bogus' is not a /pp subcommand"), "{w:?}");
+        // the defaults: /pp next to /pumboperms
+        assert_eq!(Config::default().aliases().0, vec!["pp"]);
+    }
+
+    #[test]
+    fn cleared_alias_list_registers_only_full_name() {
+        let (c, _) = config::load::<Config>("commands:\n  aliases: []\n");
+        let (aliases, w) = c.aliases();
+        assert!(aliases.is_empty() && w.is_empty());
+        assert_eq!(root(&aliases), "/pumboperms");
+    }
+
+    #[test]
+    fn taken_alias_is_skipped_with_warning() {
+        let (c, _) = config::load::<Config>("commands:\n  aliases: [ban, tp, login, pf, pp]\n");
+        let (aliases, w) = c.aliases();
+        assert_eq!(aliases, vec!["pp"]);
+        let w: Vec<String> = w.into_iter().map(|w| w.message).collect();
+        assert_eq!(
+            w,
+            vec![
+                "/ban belongs to Pumpkin, not registered; /pumboperms works",
+                "/tp belongs to Pumpkin, not registered; /pumboperms works",
+                "/login belongs to PumboAuth, not registered; /pumboperms works",
+                "/pf belongs to PumboFilter, not registered; /pumboperms works",
+            ]
+        );
     }
 }
