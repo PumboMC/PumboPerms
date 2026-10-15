@@ -92,7 +92,10 @@ mod tests {
         for code in ["en", "pl"] {
             let (l, w) = Lang::load(&BUNDLES, code, None);
             assert!(w.is_empty(), "{w:?}");
-            assert!(l.get("prefix").contains("PumboPerms"));
+            assert_eq!(
+                l.get("prefix"),
+                pumbo_common::style::tag_code("PumboPerms", pumbo_common::style::accent::PERMS)
+            );
         }
     }
 

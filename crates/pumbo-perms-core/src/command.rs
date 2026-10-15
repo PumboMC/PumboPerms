@@ -11,10 +11,13 @@ use std::time::Duration;
 
 use pumbo_common::command::permission;
 use pumbo_common::id::is_java_name;
-use pumbo_common::text::{self, Args};
+use pumbo_common::lang::Lang;
+use pumbo_common::pumpkin::{COMMAND_NODES, PUMBO_NODES};
+use pumbo_common::style;
+use pumbo_common::text::{self, Args, Style};
 use pumbo_common::time::{self, format_duration_coarse};
 
-use crate::context::{self, Contexts};
+use crate::context::{self, ContextError, Contexts};
 use crate::engine::Engine;
 use crate::export::Snapshot;
 use crate::merge::{self, Ledger};
@@ -28,7 +31,8 @@ use crate::ui::{self, Click, Line, Text, row, value};
 
 /// Plugin id: permissions are `pumbo.perms.<action>`.
 pub const PLUGIN: &str = "perms";
-/// The command as shown in help and usage lines.
+/// The command shown in help and usage lines unless the platform registered
+/// another one ([`Engine::root`]).
 pub const ROOT: &str = "/pp";
 /// Whether a player sees `/pp` at all: set for everyone with any `/pp` right.
 pub const COMMAND_NODE: &str = "pumbo.perms.command";
@@ -84,6 +88,38 @@ pub const ACTIONS: &[&str] = &[
     "track.delete",
     "track.edit",
 ];
+
+/// First words after the root that `commands.disabled` can switch off, with
+/// the other names each one answers to.
+const SUBCOMMANDS: &[(&str, &[&str])] = &[
+    ("user", &["u"]),
+    ("group", &["g"]),
+    ("track", &["t"]),
+    ("groups", &["listgroups"]),
+    ("tracks", &["listtracks"]),
+    ("creategroup", &[]),
+    ("deletegroup", &[]),
+    ("createtrack", &[]),
+    ("deletetrack", &[]),
+    ("promote", &[]),
+    ("demote", &[]),
+    ("log", &[]),
+    ("export", &[]),
+    ("import", &[]),
+    ("editor", &[]),
+    ("reload", &[]),
+    ("version", &["info"]),
+];
+
+/// The main name of a first word (`u` -> `user`); `None` for anything else.
+pub fn subcommand(word: &str) -> Option<&'static str> {
+    let word = word.to_lowercase();
+    SUBCOMMANDS.iter().find(|(name, other)| *name == word || other.contains(&word.as_str())).map(|(name, _)| *name)
+}
+
+fn switched_off(e: &Engine, word: &str) -> bool {
+    subcommand(word).is_some_and(|main| e.cfg.disabled.iter().any(|d| d == main))
+}
 
 /// Log entries on one page.
 const LOG_PAGE: usize = 10;
@@ -164,7 +200,7 @@ impl Outcome {
 type Res = Result<Outcome, Text>;
 
 /// Splits the argument string into words at ASCII spaces, as Minecraft and
-/// Pumpkin do; `"..."` keeps spaces (`\"` is a quote).
+/// Pumpkin do; `"..."` keeps spaces (`\"` is a quote, `\\` a backslash).
 pub fn split_args(raw: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -173,9 +209,8 @@ pub fn split_args(raw: &str) -> Vec<String> {
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\\' if quoted && chars.peek() == Some(&'"') => {
-                cur.push('"');
-                chars.next();
+            '\\' if quoted && matches!(chars.peek(), Some('"' | '\\')) => {
+                cur.extend(chars.next());
             }
             '"' => {
                 quoted = !quoted;
@@ -198,7 +233,7 @@ pub fn split_args(raw: &str) -> Vec<String> {
 
 /// Runs `/pp <args>`.
 pub fn run(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Outcome {
-    match dispatch(e, who, args, env) {
+    let mut out = match dispatch(e, who, args, env) {
         Ok(o) => {
             e.end();
             o
@@ -208,7 +243,13 @@ pub fn run(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Outcome {
             e.rollback();
             Outcome::reply(reply)
         }
+    };
+    if !who.is_console() {
+        // In chat a view sits between two bars and every line starts with the
+        // prefix (`[PP] ...`).
+        out.reply = ui::tagged(&e.lang, ui::framed(&e.lang, std::mem::take(&mut out.reply)));
     }
+    out
 }
 
 /// Whether the sender may do `action`.
@@ -243,6 +284,9 @@ fn dispatch(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
     let now = env.now;
     let sub = lower(args.first());
     let rest = args.get(1..).unwrap_or(&[]);
+    if switched_off(e, &sub) {
+        return Err(ui::unknown(&e.lang, &sub, &format!("{} help", e.root)));
+    }
     match sub.as_str() {
         "" | "help" | "?" => Ok(Outcome::reply(general_help(e, who, page_of(rest), now))),
         "version" | "info" => {
@@ -271,7 +315,7 @@ fn dispatch(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
         "import" => {
             need(e, who, "import", now)?;
             let Some(name) = rest.first().map(|n| n.to_lowercase()) else {
-                return Err(ui::usage(&e.lang, "/pp import <file> | run|preview|undo <source>"));
+                return Err(ui::usage(&e.lang, &format!("{} import <file> | run|preview|undo <source>", e.root)));
             };
             let mode = match name.as_str() {
                 "run" => Some(SourceMode::Run),
@@ -281,7 +325,7 @@ fn dispatch(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
             };
             if let Some(mode) = mode {
                 let Some(source) = rest.get(1).map(|n| n.to_lowercase()) else {
-                    return Err(ui::usage(&e.lang, "/pp import run|preview|undo <source>"));
+                    return Err(ui::usage(&e.lang, &format!("{} import run|preview|undo <source>", e.root)));
                 };
                 if !crate::export::is_valid_file_name(&source) {
                     return Err(ui::error(&e.lang, "bad-file-name", &Args::new().arg(value(&source))));
@@ -307,15 +351,15 @@ fn dispatch(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
         }
         "groups" | "listgroups" => {
             need(e, who, "group.list", now)?;
-            Ok(Outcome::reply(groups_view(e)))
+            Ok(Outcome::reply(groups_view(e, view_page(who, rest))))
         }
         "tracks" | "listtracks" => {
             need(e, who, "track.list", now)?;
-            Ok(Outcome::reply(tracks_view(e)))
+            Ok(Outcome::reply(tracks_view(e, view_page(who, rest))))
         }
         "creategroup" | "deletegroup" | "createtrack" | "deletetrack" => {
             let Some(name) = rest.first() else {
-                return Err(ui::usage(&e.lang, &format!("/pp {sub} <name>")));
+                return Err(ui::usage(&e.lang, &format!("{} {sub} <name>", e.root)));
             };
             let verb = if sub.starts_with("create") { "create" } else { "delete" };
             let inner = [name.clone(), verb.to_string()];
@@ -323,7 +367,7 @@ fn dispatch(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
         }
         "promote" | "demote" => {
             let (Some(player), Some(track)) = (rest.first(), rest.get(1)) else {
-                return Err(ui::usage(&e.lang, &format!("/pp {sub} <player> <track> [context...]")));
+                return Err(ui::usage(&e.lang, &format!("{} {sub} <player> <track> [context...]", e.root)));
             };
             let mut inner = vec![player.clone(), sub.clone(), track.clone()];
             inner.extend(rest.iter().skip(2).cloned());
@@ -332,12 +376,18 @@ fn dispatch(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
         "user" | "u" => user_cmd(e, who, rest, env),
         "group" | "g" => group_cmd(e, who, rest, env),
         "track" | "t" => track_cmd(e, who, rest, env),
-        _ => Err(ui::unknown(&e.lang, &sub, "/pp help")),
+        _ => Err(ui::unknown(&e.lang, &sub, &format!("{} help", e.root))),
     }
 }
 
 fn page_of(rest: &[String]) -> usize {
     rest.first().and_then(|p| p.parse::<usize>().ok()).unwrap_or(1).max(1)
+}
+
+/// The page of a view to show: every row (0) for the console, which cannot
+/// click the page arrows.
+fn view_page(who: &Who, rest: &[String]) -> usize {
+    if who.is_console() { 0 } else { page_of(rest) }
 }
 
 /// Refuses a change while the database is broken; otherwise remembers the
@@ -353,43 +403,42 @@ fn writable(e: &mut Engine) -> Result<(), Text> {
 // ----- help -----
 
 const GENERAL: &[(&str, &str, &str)] = &[
-    ("/pp user <player>", "user.", "desc-user"),
-    ("/pp group <name>", "group.", "desc-group"),
-    ("/pp track <name>", "track.", "desc-track"),
-    ("/pp groups", "group.list", "desc-groups"),
-    ("/pp tracks", "track.list", "desc-tracks"),
-    ("/pp creategroup <name>", "group.create", "desc-group-create"),
-    ("/pp deletegroup <name>", "group.delete", "desc-group-delete"),
-    ("/pp createtrack <name>", "track.create", "desc-track-create"),
-    ("/pp deletetrack <name>", "track.delete", "desc-track-delete"),
-    ("/pp promote <player> <track> [context...]", "user.promote", "desc-promote"),
-    ("/pp demote <player> <track> [context...]", "user.demote", "desc-demote"),
-    ("/pp log [page]", "log", "desc-log"),
-    ("/pp export [file]", "export", "desc-export"),
-    ("/pp import <file>", "import", "desc-import"),
-    ("/pp import run|preview|undo <source>", "import", "desc-import-source"),
-    ("/pp editor", "editor", "desc-editor"),
-    ("/pp reload", "reload", "desc-reload"),
-    ("/pp version", "version", "desc-version"),
+    ("user <player>", "user.", "desc-user"),
+    ("group <name>", "group.", "desc-group"),
+    ("track <name>", "track.", "desc-track"),
+    ("groups [page]", "group.list", "desc-groups"),
+    ("tracks [page]", "track.list", "desc-tracks"),
+    ("creategroup <name>", "group.create", "desc-group-create"),
+    ("deletegroup <name>", "group.delete", "desc-group-delete"),
+    ("createtrack <name>", "track.create", "desc-track-create"),
+    ("deletetrack <name>", "track.delete", "desc-track-delete"),
+    ("promote <player> <track> [context...]", "user.promote", "desc-promote"),
+    ("demote <player> <track> [context...]", "user.demote", "desc-demote"),
+    ("log [page]", "log", "desc-log"),
+    ("export [file]", "export", "desc-export"),
+    ("import <file>", "import", "desc-import"),
+    ("import run|preview|undo <source>", "import", "desc-import-source"),
+    ("reload", "reload", "desc-reload"),
+    ("version", "version", "desc-version"),
 ];
 
 /// Subcommands of a user or group: (arguments, action without the kind, description).
 const HOLDER: &[(&str, &str, &str)] = &[
-    ("info", "info", "desc-info"),
-    ("permission info", "permission.info", "desc-perm-info"),
+    ("info [page]", "info", "desc-info"),
+    ("permission info [page]", "permission.info", "desc-perm-info"),
     ("permission set <node> [true|false] [context...]", "permission.set", "desc-perm-set"),
     ("permission settemp <node> [true|false] <duration> [context...]", "permission.set", "desc-perm-settemp"),
     ("permission unset <node> [context...]", "permission.unset", "desc-perm-unset"),
     ("permission unsettemp <node> [context...]", "permission.unset", "desc-perm-unsettemp"),
     ("permission check <node> [context...]", "permission.check", "desc-perm-check"),
     ("permission clear [context...]", "permission.clear", "desc-perm-clear"),
-    ("parent info", "parent.info", "desc-parent-info"),
+    ("parent info [page]", "parent.info", "desc-parent-info"),
     ("parent add <group> [context...]", "parent.add", "desc-parent-add"),
     ("parent addtemp <group> <duration> [context...]", "parent.add", "desc-parent-addtemp"),
     ("parent remove <group> [context...]", "parent.remove", "desc-parent-remove"),
     ("parent removetemp <group> [context...]", "parent.remove", "desc-parent-removetemp"),
     ("parent set <group> [context...]", "parent.set", "desc-parent-set"),
-    ("meta info", "meta.info", "desc-meta-info"),
+    ("meta info [page]", "meta.info", "desc-meta-info"),
     ("meta set <key> <value> [context...]", "meta.set", "desc-meta-set"),
     ("meta unset <key> [context...]", "meta.unset", "desc-meta-unset"),
     ("meta setprefix <priority> <text> [context...]", "meta.set", "desc-meta-setprefix"),
@@ -416,7 +465,7 @@ const GROUP_ONLY: &[(&str, &str, &str)] = &[
     ("rename <new-name>", "rename", "desc-group-rename"),
     ("setweight <weight>", "setweight", "desc-group-setweight"),
     ("setdisplayname <name|clear>", "setdisplayname", "desc-group-setdisplayname"),
-    ("listmembers", "listmembers", "desc-group-listmembers"),
+    ("listmembers [page]", "listmembers", "desc-group-listmembers"),
 ];
 
 const TRACK: &[(&str, &str, &str)] = &[
@@ -461,13 +510,16 @@ fn split_usage(usage: &str) -> (String, String) {
     (words.get(..n).unwrap_or(&[]).join(" "), words.get(n..).unwrap_or(&[]).join(" "))
 }
 
+/// The permission of a help entry: `x.*` for an action prefix `x.`.
+fn node_of(action: &str) -> String {
+    if action.ends_with('.') { format!("pumbo.{PLUGIN}.{action}*") } else { permission(PLUGIN, action) }
+}
+
 fn entry(e: &Engine, usage: &str, action: &str, summary: &str) -> Entry {
     let details_key = format!("{summary}-details");
     let details = if e.lang.has(&details_key) { e.lang.get(&details_key) } else { String::new() };
-    let permission =
-        if action.ends_with('.') { format!("pumbo.{PLUGIN}.{action}*") } else { permission(PLUGIN, action) };
     let (command, args) = split_usage(usage);
-    Entry::new(command, e.lang.get(summary)).args(args).details(details).permission(permission)
+    Entry::new(command, e.lang.get(summary)).args(args).details(details).permission(node_of(action))
 }
 
 /// The permission nodes the sender has among those of PumboPerms.
@@ -475,44 +527,79 @@ fn allowed_nodes(e: &mut Engine, who: &Who, now: u64) -> HashSet<String> {
     ACTIONS.iter().filter(|a| allowed(e, who, a, now)).map(|a| permission(PLUGIN, a)).collect()
 }
 
-fn show_help(e: &mut Engine, who: &Who, help: Help, page: usize, now: u64) -> Text {
+/// Whether the sender may use an entry with this permission ([`node_of`]).
+fn rights(e: &mut Engine, who: &Who, now: u64) -> impl Fn(&str) -> bool + use<> {
     let nodes = allowed_nodes(e, who, now);
-    let check = |n: &str| match n.strip_suffix('*') {
+    move |n: &str| match n.strip_suffix('*') {
         Some(prefix) => nodes.iter().any(|a| a.starts_with(prefix)),
         None => nodes.contains(n),
-    };
+    }
+}
+
+fn show_help(e: &mut Engine, who: &Who, help: Help, page: usize, now: u64) -> Text {
+    let check = rights(e, who, now);
+    // Every command in one reply; the views keep their pages.
+    let help = help
+        .per_page(usize::MAX)
+        .tag(style::prefix(&e.lang), Line::parse(&format!("{}> ", ui::MUTED)))
+        .whole_descriptions()
+        .framed();
     if who.is_console() { help.console(&e.lang, check) } else { help.chat(&e.lang, page, check) }
 }
 
 fn general_help(e: &mut Engine, who: &Who, page: usize, now: u64) -> Text {
-    let mut help = Help::new("PumboPerms", format!("{ROOT} help"))
+    let mut help = Help::new("PumboPerms", style::accent::PERMS, format!("{} help", e.root))
         .version(env!("CARGO_PKG_VERSION"))
-        .root(ROOT)
+        .root(e.root.clone())
         .section(e.lang.get("help-section"));
-    for (u, a, d) in GENERAL {
-        help.push(entry(e, u, a, d));
+    for (u, a, d) in GENERAL.iter().filter(|(u, ..)| !switched_off(e, u.split(' ').next().unwrap_or_default())) {
+        help.push(entry(e, &format!("{} {u}", e.root), a, d));
     }
     show_help(e, who, help, page, now)
 }
 
+/// The words of the player and group help that stand for their own list of
+/// commands (`/pp user <player> permission`), with the
+/// message that describes each.
+const SUBGROUPS: &[(&str, &str)] =
+    &[("permission", "desc-perm-group"), ("parent", "desc-parent-group"), ("meta", "desc-meta-group")];
+
 fn holder_help(e: &mut Engine, who: &Who, t: &Target, filter: &str, page: usize, now: u64) -> Text {
-    let base = t.command();
+    let base = t.command(&e.root);
     let kind = t.kind();
     let extra = if t.is_user() { USER_ONLY } else { GROUP_ONLY };
-    let section_key = if t.is_user() { "title-user" } else { "title-group" };
-    let section = e.lang.format(section_key, &Args::new().arg(t.label()));
     let help_command = if filter.is_empty() { format!("{base} help") } else { format!("{base} {filter} help") };
-    let mut help = Help::new("PumboPerms", help_command).root(base.clone()).section(section);
-    for (u, a, d) in HOLDER.iter().chain(extra.iter()).filter(|(u, _, _)| filter.is_empty() || u.starts_with(filter)) {
-        help.push(entry(e, &format!("{base} {u}"), &format!("{kind}.{a}"), d));
+    // The player or group help lists `permission ...`, `parent ...` and
+    // `meta ...`; each of those lists its own commands under its root. The
+    // root names the player or group, so the header has no section, which
+    // keeps it within the chat width.
+    let root = if filter.is_empty() { base.clone() } else { format!("{base} {filter}") };
+    let mut help = Help::new("PumboPerms", style::accent::PERMS, help_command).root(root);
+    let mut grouped: Vec<&str> = Vec::new();
+    for (u, a, d) in HOLDER.iter().chain(extra.iter()) {
+        let word = u.split(' ').next().unwrap_or_default();
+        match SUBGROUPS.iter().find(|(w, _)| *w == word) {
+            Some((w, desc)) if filter.is_empty() => {
+                if !grouped.contains(w) {
+                    grouped.push(w);
+                    let node = node_of(&format!("{kind}.{w}."));
+                    help.push(Entry::new(format!("{base} {w}"), e.lang.get(desc)).args("...").permission(node));
+                }
+            }
+            _ if filter.is_empty() || word == filter => {
+                help.push(entry(e, &format!("{base} {u}"), &format!("{kind}.{a}"), d));
+            }
+            _ => {}
+        }
     }
     show_help(e, who, help, page, now)
 }
 
 fn track_help(e: &mut Engine, who: &Who, track: &str, page: usize, now: u64) -> Text {
-    let base = format!("{ROOT} track {track}");
+    let base = format!("{} track {track}", e.root);
     let section = e.lang.format("title-track", &Args::new().arg(track));
-    let mut help = Help::new("PumboPerms", format!("{base} help")).root(base.clone()).section(section);
+    let mut help =
+        Help::new("PumboPerms", style::accent::PERMS, format!("{base} help")).root(base.clone()).section(section);
     for (u, a, d) in TRACK {
         help.push(entry(e, &format!("{base} {u}"), a, d));
     }
@@ -545,10 +632,10 @@ impl Target {
         }
     }
 
-    fn command(&self) -> String {
+    fn command(&self, root: &str) -> String {
         match self {
-            Target::User { uuid, name } => format!("{ROOT} user {}", user_arg(uuid, name)),
-            Target::Group { name } => format!("{ROOT} group {name}"),
+            Target::User { uuid, name } => format!("{root} user {}", user_arg(uuid, name)),
+            Target::Group { name } => format!("{root} group {name}"),
         }
     }
 
@@ -596,7 +683,13 @@ fn checked_text(e: &Engine, raw: &str) -> Result<(), Text> {
     if is_valid_text(raw) { Ok(()) } else { Err(ui::error(&e.lang, "bad-text", &Args::new())) }
 }
 
-/// A meta key from a command; `usage` is the reply for an empty key or one with spaces.
+/// A new meta key: 1-64 characters a-z, 0-9, `_`, `.` and `-`.
+fn is_meta_key(key: &str) -> bool {
+    (1..=64).contains(&key.len())
+        && key.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+/// A meta key that can be stored; `usage` is the reply for an empty key or one with spaces.
 fn checked_key(e: &Engine, key: &str, usage: &str) -> Result<(), Text> {
     checked_text(e, key)?;
     if is_valid_meta_key(key) { Ok(()) } else { Err(ui::usage(&e.lang, usage)) }
@@ -709,14 +802,28 @@ fn split_any_context(e: &Engine, args: &[String]) -> Result<(Vec<String>, Contex
         end -= 1;
     }
     let (pos, ctx) = args.split_at(end);
-    let contexts =
-        Contexts::parse(ctx).map_err(|err| ui::error(&e.lang, "bad-context", &Args::new().arg(value(err))))?;
+    let contexts = Contexts::parse(ctx).map_err(|err| {
+        let (key, arg) = match err {
+            ContextError::UnknownKey(k) => ("bad-context-key", k),
+            ContextError::BadValue(v) => ("bad-context-value", v),
+            ContextError::Repeated(k) => ("bad-context-repeated", k),
+        };
+        ui::error(&e.lang, key, &Args::new().arg(value(arg)))
+    })?;
     Ok((pos.to_vec(), contexts))
 }
 
 /// ` in server=lobby` or nothing.
 fn in_context(e: &Engine, c: &Contexts) -> String {
     if c.is_global() { String::new() } else { e.lang.format("in-context", &Args::new().arg(value(c))) }
+}
+
+/// [`in_context`] in grey, for views.
+fn context_hint(e: &Engine, c: &Contexts) -> String {
+    if c.is_global() {
+        return String::new();
+    }
+    format!("{}{}&r", ui::INFO, e.lang.format("in-context", &Args::new().arg(text::escape(&c.to_string()))))
 }
 
 fn coarse(d: Duration) -> String {
@@ -734,7 +841,7 @@ fn user_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
         if !allowed_prefix(e, who, "user.", env.now) {
             return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
         }
-        return Err(ui::usage(&e.lang, "/pp user <player> <subcommand>"));
+        return Err(ui::usage(&e.lang, &format!("{} user <player> <subcommand>", e.root)));
     };
     let known = find_user(e, env, name)?;
     let t = Target::User { uuid: known.uuid, name: known.name };
@@ -747,7 +854,7 @@ fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
         if !allowed_prefix(e, who, "group.", now) {
             return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
         }
-        return Err(ui::usage(&e.lang, "/pp group <name> <subcommand>"));
+        return Err(ui::usage(&e.lang, &format!("{} group <name> <subcommand>", e.root)));
     };
     let sub = lower(args.get(1));
     let t = Target::Group { name: name.clone() };
@@ -777,7 +884,7 @@ fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
             need(e, who, "group.rename", now)?;
             writable(e)?;
             let Some(to) = rest.first().map(|n| n.to_lowercase()) else {
-                return Err(ui::usage(&e.lang, &format!("{} rename <new-name>", t.command())));
+                return Err(ui::usage(&e.lang, &format!("{} rename <new-name>", t.command(&e.root))));
             };
             let dirty = e.perms.rename_group(&name, &to).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-renamed", &Args::new().arg(value(&name)).arg(value(&to)));
@@ -787,7 +894,7 @@ fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
             need(e, who, "group.setweight", now)?;
             writable(e)?;
             let Some(raw) = rest.first() else {
-                return Err(ui::usage(&e.lang, &format!("{} setweight <weight>", t.command())));
+                return Err(ui::usage(&e.lang, &format!("{} setweight <weight>", t.command(&e.root))));
             };
             let w = parse_int(e, raw)?;
             let ((), dirty) = e.perms.edit_group(&name, |g| g.weight = w).map_err(|err| perms_error(e, &err))?;
@@ -798,7 +905,7 @@ fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
             need(e, who, "group.setdisplayname", now)?;
             writable(e)?;
             if rest.is_empty() {
-                return Err(ui::usage(&e.lang, &format!("{} setdisplayname <name|clear>", t.command())));
+                return Err(ui::usage(&e.lang, &format!("{} setdisplayname <name|clear>", t.command(&e.root))));
             }
             let shown = rest.join(" ");
             checked_text(e, &shown)?;
@@ -835,10 +942,12 @@ fn holder_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], env: &Env)
         }
         "info" | "i" => {
             need(e, who, &format!("{kind}.info"), now)?;
-            if !rest.is_empty() {
-                return Err(ui::usage(&e.lang, &format!("{} info", t.command())));
-            }
-            Ok(Outcome::reply(if t.is_user() { user_view(e, t, now) } else { group_view(e, t, now) }))
+            let page = match rest {
+                [] => view_page(who, rest),
+                [p] if p.parse::<usize>().is_ok() => view_page(who, rest),
+                _ => return Err(ui::usage(&e.lang, &format!("{} info [page]", t.command(&e.root)))),
+            };
+            Ok(Outcome::reply(if t.is_user() { user_view(e, t, page, now) } else { group_view(e, t, page, now) }))
         }
         "permission" | "perm" | "p" | "permissions" => permission_cmd(e, who, t, rest, now),
         "parent" | "parents" | "inherit" => parent_cmd(e, who, t, rest, now),
@@ -847,14 +956,14 @@ fn holder_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], env: &Env)
         "clear" if t.is_user() => {
             need(e, who, "user.clear", now)?;
             if !rest.is_empty() {
-                return Err(ui::usage(&e.lang, &format!("{} clear", t.command())));
+                return Err(ui::usage(&e.lang, &format!("{} clear", t.command(&e.root))));
             }
             writable(e)?;
             let ((), dirty) = t.edit(e, |d| *d = Data::default()).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "user-cleared", &Args::new().arg(t.shown(e)));
             save(e, who, dirty, (kind, &t.label(), "clear".into()), reply, now)
         }
-        _ => Err(ui::unknown(&e.lang, &sub, &format!("{} help", t.command()))),
+        _ => Err(ui::unknown(&e.lang, &sub, &format!("{} help", t.command(&e.root)))),
     }
 }
 
@@ -864,7 +973,7 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
     let rest = args.get(1..).unwrap_or(&[]);
     let (pos, ctx) = if sub == "check" { split_any_context(e, rest)? } else { split_context(e, rest)? };
     let action_log = format!("permission {}", args.join(" "));
-    let base = format!("{} permission", t.command());
+    let base = format!("{} permission", t.command(&e.root));
     match sub.as_str() {
         "" | "help" | "?" => {
             if !allowed_prefix(e, who, &format!("{kind}.permission."), now) {
@@ -874,7 +983,7 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
         }
         "info" | "list" => {
             need(e, who, &format!("{kind}.permission.info"), now)?;
-            Ok(Outcome::reply(nodes_view(e, t, now)))
+            Ok(Outcome::reply(nodes_view(e, t, view_page(who, &pos), now)))
         }
         "set" | "settemp" => {
             need(e, who, &format!("{kind}.permission.set"), now)?;
@@ -903,6 +1012,12 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                 Some(raw) => Some(parse_duration(e, raw)?),
                 None => None,
             };
+            // Changing an end time could cut a punishment short without a word.
+            let timed = |p: &PermNode| p.node == node && p.context == ctx && p.expiry.is_some_and(|x| x > now);
+            if temp && t.data(e).is_some_and(|d| d.permissions.iter().any(timed)) {
+                let undo = format!("{base} unsettemp {node}{}", context_args(&ctx));
+                return Err(ui::error(&e.lang, "perm-settemp-exists", &Args::new().arg(value(&node)).arg(value(undo))));
+            }
             let new =
                 PermNode { node: node.clone(), value: v, context: ctx.clone(), expiry: dur.map(|d| expiry(now, d)) };
             let (_, dirty) = t.edit(e, |d| d.set_permission(new)).map_err(|err| perms_error(e, &err))?;
@@ -966,12 +1081,15 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                 Target::User { uuid, .. } => e.perms.explain(uuid, &node, &q, now),
                 Target::Group { name } => e.perms.group_effective(name, &q, now).explain(&node).cloned(),
             };
-            let a = Args::new().with("node", value(&node)).with("target", t.shown(e));
+            // A view: the player by name as in its info title (the UUID is in
+            // `info`), so the lines fit the chat; a group as `group vip`.
+            let target = if t.is_user() { value(t.label()) } else { t.shown(e) };
+            let a = Args::new().with("node", value(&node)).with("target", target.clone());
             let mut reply = match decision {
                 Some(d) => {
-                    let mut text = ui::info(&e.lang, "perm-check", &a.clone().with("value", ui::boolean(d.value)));
+                    let mut text = ui::header(&e.lang, "perm-check", &a.clone().with("value", ui::boolean(d.value)));
                     let source = match &d.source {
-                        Source::User => t.shown(e),
+                        Source::User => target.clone(),
                         Source::Group(g) => e.lang.format("target-group", &Args::new().arg(value(g))),
                     };
                     let mut how = e.lang.format(
@@ -979,20 +1097,21 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                         &Args::new()
                             .with("source", source)
                             .with("node", value(&d.node))
-                            .with("context", in_context(e, &d.context)),
+                            .with("context", context_hint(e, &d.context)),
                     );
                     if let Some(x) = d.expiry {
-                        how.push_str(&e.lang.format("expires-in", &Args::new().arg(value(left(now, x)))));
+                        let ends = e.lang.format("expires-in", &Args::new().arg(left(now, x)));
+                        how.push_str(&format!("{}{ends}&r", ui::INFO));
                     }
-                    text.push(Line::parse(&format!("  {}{how}", ui::INFO)));
+                    text.push(Line::parse_with(&format!("  {how}"), Style::colored(style::LABEL)));
                     text
                 }
-                None => ui::info(&e.lang, "perm-check-undecided", &a),
+                None => ui::header(&e.lang, "perm-check-undecided", &a),
             };
             if let Target::User { uuid, .. } = t {
                 let host = node::host_form(&node);
                 let hidden = crate::host::hidden(e, uuid, &q, now);
-                hidden_lines(e, hidden.iter().filter(|(w, _)| node::covers(w, &host)), &mut reply);
+                hidden_lines(e, hidden.iter().filter(|(w, _)| node::covers(w, &host)), &mut reply.lines);
             }
             if !e.cfg.worlds && ctx.get(context::WORLD).is_some() {
                 reply.push(ui::row(1, "", &format!("{}! {}", ui::WARN, e.lang.get("perm-check-no-worlds"))));
@@ -1006,15 +1125,16 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
 /// `group.<name>` tells membership: it is given with `parent add`.
 fn not_group_node(e: &Engine, t: &Target, node: &str) -> Result<(), Text> {
     let Some(group) = node.strip_prefix(node::GROUP_PREFIX) else { return Ok(()) };
-    let a = Args::new().with("node", value(node)).with("command", value(t.command())).with("group", value(group));
+    let a =
+        Args::new().with("node", value(node)).with("command", value(t.command(&e.root))).with("group", value(group));
     Err(ui::error(&e.lang, "perm-group-node", &a))
 }
 
 /// "not sent to Pumpkin: <wildcard> hides <narrower>" ([`crate::host::hidden`]).
-fn hidden_lines<'a>(e: &Engine, hidden: impl Iterator<Item = &'a (String, String)>, out: &mut Text) {
+fn hidden_lines<'a>(e: &Engine, hidden: impl Iterator<Item = &'a (String, String)>, out: &mut Vec<Line>) {
     for (w, narrower) in hidden {
         let line = e.lang.format("perm-hidden", &Args::new().arg(value(w)).arg(value(narrower)));
-        out.push(ui::row(1, "", &format!("{}! {line}", ui::WARN)));
+        out.push(Line::parse_with(&format!("  ! {line}"), Style::colored(style::WARN)));
     }
 }
 
@@ -1023,7 +1143,7 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
     let sub = lower(args.first());
     let (pos, ctx) = split_context(e, args.get(1..).unwrap_or(&[]))?;
     let action_log = format!("parent {}", args.join(" "));
-    let base = format!("{} parent", t.command());
+    let base = format!("{} parent", t.command(&e.root));
     if matches!(sub.as_str(), "" | "help" | "?") {
         if !allowed_prefix(e, who, &format!("{kind}.parent."), now) {
             return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
@@ -1032,7 +1152,7 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
     }
     if matches!(sub.as_str(), "info" | "list") {
         need(e, who, &format!("{kind}.parent.info"), now)?;
-        return Ok(Outcome::reply(parents_view(e, t, now)));
+        return Ok(Outcome::reply(parents_view(e, t, view_page(who, &pos), now)));
     }
     let Some(&(_, action, temp)) = PARENT_CHANGES.iter().find(|(w, _, _)| *w == sub) else {
         return Err(ui::unknown(&e.lang, &sub, &format!("{base} help")));
@@ -1108,7 +1228,7 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
     let sub = lower(args.first());
     let (pos, ctx) = split_context(e, args.get(1..).unwrap_or(&[]))?;
     let action_log = format!("meta {}", args.join(" "));
-    let base = format!("{} meta", t.command());
+    let base = format!("{} meta", t.command(&e.root));
     if matches!(sub.as_str(), "" | "help" | "?") {
         if !allowed_prefix(e, who, &format!("{kind}.meta."), now) {
             return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
@@ -1117,7 +1237,7 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
     }
     if matches!(sub.as_str(), "info" | "list") {
         need(e, who, &format!("{kind}.meta.info"), now)?;
-        return Ok(Outcome::reply(meta_view(e, t, now)));
+        return Ok(Outcome::reply(meta_view(e, t, view_page(who, &pos), now)));
     }
     let affix = AFFIX_CHANGES.iter().find(|(w, ..)| *w == sub).map(|&(_, verb, kind, temp)| (verb, kind, temp));
     if affix.is_none() && sub != "set" && sub != "unset" {
@@ -1134,6 +1254,9 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
             };
             let k = k.to_lowercase();
             checked_key(e, &k, &format!("{base} set <key> <value> [context...]"))?;
+            if !is_meta_key(&k) {
+                return Err(ui::error(&e.lang, "bad-meta-key", &Args::new().arg(value(text::escape(&k)))));
+            }
             let v = pos.get(1..).map(|p| p.join(" ")).unwrap_or_else(|| v.clone());
             checked_text(e, &v)?;
             a = a.with("key", value(&k)).with("value", value(&v));
@@ -1227,10 +1350,10 @@ fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], n
     writable(e)?;
     let (pos, ctx) = split_context(e, args)?;
     let Some(track) = pos.first().map(|t| t.to_lowercase()) else {
-        return Err(ui::usage(&e.lang, &format!("{} {sub} <track> [context...]", t.command())));
+        return Err(ui::usage(&e.lang, &format!("{} {sub} <track> [context...]", t.command(&e.root))));
     };
     let Target::User { uuid, name } = t else {
-        return Err(ui::unknown(&e.lang, sub, "/pp help"));
+        return Err(ui::unknown(&e.lang, sub, &format!("{} help", e.root)));
     };
     let up = sub == "promote";
     let a = Args::new().with("target", t.shown(e)).with("track", value(&track)).with("context", in_context(e, &ctx));
@@ -1270,7 +1393,7 @@ fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
         if !allowed_prefix(e, who, "track.", now) {
             return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
         }
-        return Err(ui::usage(&e.lang, "/pp track <name> <subcommand>"));
+        return Err(ui::usage(&e.lang, &format!("{} track <name> <subcommand>", e.root)));
     };
     let sub = lower(args.get(1));
     let rest = args.get(2..).unwrap_or(&[]);
@@ -1297,7 +1420,7 @@ fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
                 let extra = if &shown == g { String::new() } else { format!(" {}({shown})", ui::MUTED) };
                 out.push(
                     Line::parse(&format!("  {}{}. {}{g}{extra}", ui::MUTED, i + 1, ui::VALUE))
-                        .on_click(Click::Suggest(format!("{ROOT} group {g} info"))),
+                        .on_click(Click::Suggest(format!("{} group {g} info", e.root))),
                 );
             }
             Ok(Outcome::reply(out))
@@ -1328,7 +1451,7 @@ fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
                 }
                 ("insert", Some(g)) => {
                     let Some(pos) = rest.get(1).and_then(|p| p.parse::<usize>().ok()).filter(|p| *p >= 1) else {
-                        return Err(ui::usage(&e.lang, &format!("{ROOT} track {name} insert <group> <position>")));
+                        return Err(ui::usage(&e.lang, &format!("{} track {name} insert <group> <position>", e.root)));
                     };
                     let d = e.perms.track_insert(&name, &g, Some(pos - 1));
                     (d, ui::success(&e.lang, "track-added", &Args::new().arg(value(&g)).arg(value(&name))))
@@ -1337,13 +1460,13 @@ fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
                     let d = e.perms.track_remove(&name, &g);
                     (d, ui::success(&e.lang, "track-removed", &Args::new().arg(value(&g)).arg(value(&name))))
                 }
-                (s, None) => return Err(ui::usage(&e.lang, &format!("{ROOT} track {name} {s} <group>"))),
-                _ => return Err(ui::unknown(&e.lang, &sub, "/pp help")),
+                (s, None) => return Err(ui::usage(&e.lang, &format!("{} track {name} {s} <group>", e.root))),
+                _ => return Err(ui::unknown(&e.lang, &sub, &format!("{} help", e.root))),
             };
             let dirty = dirty.map_err(|err| perms_error(e, &err))?;
             save(e, who, dirty, ("track", &name, log), reply, now)
         }
-        _ => Err(ui::unknown(&e.lang, &sub, &format!("{ROOT} track {name} help"))),
+        _ => Err(ui::unknown(&e.lang, &sub, &format!("{} track {name} help", e.root))),
     }
 }
 
@@ -1679,16 +1802,16 @@ fn version(e: &Engine, env: &Env) -> Text {
             format!("server={} group={}", or_dash(&e.cfg.context.server), or_dash(&e.cfg.context.group)),
         ));
     }
-    pumbo_common::style::version("PumboPerms", env.version, rows)
+    style::version("PumboPerms", style::accent::PERMS, env.version, rows)
 }
 
 fn context_suffix(c: &Contexts) -> String {
-    if c.is_global() { String::new() } else { format!(" {}{}", ui::MUTED, text::escape(&c.to_string())) }
+    if c.is_global() { String::new() } else { format!(" {}{}", ui::INFO, text::escape(&c.to_string())) }
 }
 
 fn expiry_suffix(e: &Engine, x: Option<u64>, now: u64) -> String {
     match x {
-        Some(x) => format!(" {}({})", ui::WARN, e.lang.format("expires-in", &Args::new().arg(left(now, x)))),
+        Some(x) => format!(" {}({})", ui::INFO, e.lang.format("expires-in", &Args::new().arg(left(now, x)))),
         None => String::new(),
     }
 }
@@ -1722,38 +1845,50 @@ fn nodes_lines(e: &Engine, t: &Target, data: &Data, now: u64) -> Vec<Line> {
             removable(
                 e,
                 Line::parse(&text),
-                format!("{} permission {unset} {}{}", t.command(), p.node, context_args(&p.context)),
+                format!("{} permission {unset} {}{}", t.command(&e.root), p.node, context_args(&p.context)),
             )
         })
         .collect()
 }
 
-fn parent_lines(e: &Engine, t: &Target, data: &Data, now: u64) -> Vec<Line> {
+/// A prefix, suffix or display name in its own colours. In chat the text as
+/// typed (with its `&` codes) is the tooltip; the console, which has no
+/// tooltips, gets it in grey quotes after the value.
+fn styled(value: &str, chat: bool) -> Line {
+    let raw = format!("{}\"{}\"", ui::INFO, text::escape(value));
+    if chat {
+        Line::parse(&format!("{value}&r")).on_hover(Text::parse(&raw))
+    } else {
+        Line::parse(&format!("{value}&r {raw}"))
+    }
+}
+
+fn parent_lines(e: &Engine, t: &Target, data: &Data, now: u64, chat: bool) -> Vec<Line> {
     data.parents
         .iter()
         .map(|p| {
             let shown = e.perms.display_name(&p.group);
-            let extra =
-                if shown == p.group { String::new() } else { format!(" {}({})", ui::MUTED, text::escape(&shown)) };
+            let mut line = Line::parse(&format!("    {}• {}{}", ui::MUTED, ui::VALUE, p.group));
+            if shown != p.group {
+                // The display name in its colours; the console keeps the text as typed.
+                let name = if chat { styled(&shown, true) } else { Line::parse(&text::escape(&shown)) };
+                line = line
+                    .append(Line::parse(&format!(" {}(", ui::MUTED)))
+                    .append(name)
+                    .append(Line::parse(&format!("{})", ui::MUTED)));
+            }
             let missing = if e.perms.group(&p.group).is_none() { format!(" {}✖", ui::ERROR) } else { String::new() };
-            let text = format!(
-                "    {}• {}{}{extra}{missing}{}{}",
-                ui::MUTED,
-                ui::VALUE,
-                p.group,
-                context_suffix(&p.context),
-                expiry_suffix(e, p.expiry, now)
-            );
+            let tail = format!("{missing}{}{}", context_suffix(&p.context), expiry_suffix(e, p.expiry, now));
             removable(
                 e,
-                Line::parse(&text),
-                format!("{} parent remove {}{}", t.command(), p.group, context_args(&p.context)),
+                line.append(Line::parse(&tail)),
+                format!("{} parent remove {}{}", t.command(&e.root), p.group, context_args(&p.context)),
             )
         })
         .collect()
 }
 
-fn meta_lines(e: &Engine, t: &Target, data: &Data, now: u64) -> Vec<Line> {
+fn meta_lines(e: &Engine, t: &Target, data: &Data, now: u64, chat: bool) -> Vec<Line> {
     let mut metas: Vec<_> = data.meta.iter().collect();
     metas.sort_by(|a, b| (a.kind as u8, -a.priority, &a.key).cmp(&(b.kind as u8, -b.priority, &b.key)));
     metas
@@ -1762,100 +1897,137 @@ fn meta_lines(e: &Engine, t: &Target, data: &Data, now: u64) -> Vec<Line> {
             let (label, remove) = match m.kind {
                 MetaKind::Prefix => (
                     format!("{} {}", e.lang.get("kind-prefix"), m.priority),
-                    format!("{} meta removeprefix {} {}", t.command(), m.priority, quoted(&m.value)),
+                    format!("{} meta removeprefix {} {}", t.command(&e.root), m.priority, quoted(&m.value)),
                 ),
                 MetaKind::Suffix => (
                     format!("{} {}", e.lang.get("kind-suffix"), m.priority),
-                    format!("{} meta removesuffix {} {}", t.command(), m.priority, quoted(&m.value)),
+                    format!("{} meta removesuffix {} {}", t.command(&e.root), m.priority, quoted(&m.value)),
                 ),
-                MetaKind::Meta => (m.key.clone(), format!("{} meta unset {}", t.command(), m.key)),
+                MetaKind::Meta => (m.key.clone(), format!("{} meta unset {}", t.command(&e.root), quoted(&m.key))),
             };
+            let head = format!("    {}• {}{} {}= ", ui::MUTED, ui::LABEL, text::escape(&label), ui::MUTED);
             let shown = match m.kind {
-                MetaKind::Meta => text::escape(&m.value),
-                _ => format!("{}&r {}\"{}\"", m.value, ui::MUTED, text::escape(&m.value)),
+                MetaKind::Meta => Line::parse(&format!("{}{}", ui::VALUE, text::escape(&m.value))),
+                _ => styled(&m.value, chat),
             };
-            let text = format!(
-                "    {}• {}{} {}= {}{}{}{}",
-                ui::MUTED,
-                ui::INFO,
-                text::escape(&label),
-                ui::MUTED,
-                ui::VALUE,
-                shown,
-                context_suffix(&m.context),
-                expiry_suffix(e, m.expiry, now)
-            );
-            removable(e, Line::parse(&text), format!("{remove}{}", context_args(&m.context)))
+            let tail = format!("{}{}", context_suffix(&m.context), expiry_suffix(e, m.expiry, now));
+            let line = Line::parse(&head).append(shown).append(Line::parse(&tail));
+            removable(e, line, format!("{remove}{}", context_args(&m.context)))
         })
         .collect()
 }
 
 /// A value as one [`split_args`] word.
 fn quoted(v: &str) -> String {
-    format!("\"{}\"", v.replace('"', "\\\""))
+    format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn section(out: &mut Text, e: &Engine, label_key: &str, count: usize, lines: Vec<Line>) {
-    out.push(Line::parse(&format!("  {}{} {}({count})", ui::BRAND, e.lang.get(label_key), ui::MUTED)));
+/// Rows on one page of a view.
+const PAGE: usize = 20;
+
+/// The title `out` with page `page` of `rows` and a page bar that runs
+/// `command <page>`; page 0 is every row.
+fn paged(lang: &Lang, mut out: Text, rows: Vec<Line>, page: usize, command: &str) -> Text {
+    if page == 0 {
+        out.lines.extend(rows);
+        return out;
+    }
+    let pages = rows.len().div_ceil(PAGE).max(1);
+    let page = page.clamp(1, pages);
+    out.lines.extend(rows.into_iter().skip((page - 1) * PAGE).take(PAGE));
+    if pages > 1 {
+        out.push(nav(lang, page, pages, command));
+    }
+    out
+}
+
+/// The page bar `━━━ ◀ 2/5 ▶ ━━━` across the chat after the prefix, in the
+/// colours of `[PP]`; the arrows run `command <page>` and are dark grey on the
+/// first and last page.
+fn nav(lang: &Lang, page: usize, pages: usize, command: &str) -> Line {
+    let page = page.min(pages);
+    let arrow = |symbol: &str, target: usize, active: bool| {
+        if active {
+            Line::parse(&format!("{}&l{symbol}", ui::BRAND)).on_click(Click::Run(format!("{command} {target}")))
+        } else {
+            Line::parse(&format!("{}{symbol}", ui::MUTED))
+        }
+    };
+    let centre = arrow("◀", page.saturating_sub(1), page > 1)
+        .append(Line::parse(&format!(" {}{page}/{pages} ", ui::VALUE)))
+        .append(arrow("▶", page + 1, page < pages));
+    let width = pumbo_common::rich::CHAT_WIDTH.saturating_sub(style::prefix(lang).width());
+    style::bar(centre, width, style::BRAND, style::accent::PERMS)
+}
+
+fn section(out: &mut Vec<Line>, e: &Engine, label_key: &str, count: usize, lines: Vec<Line>) {
+    out.push(Line::parse(&format!("  {}{} ({count})", ui::ACCENT, e.lang.get(label_key))));
     if lines.is_empty() {
         out.push(Line::parse(&format!("    {}{}", ui::MUTED, e.lang.get("label-none"))));
     }
-    for l in lines {
-        out.push(l);
-    }
+    out.extend(lines);
 }
 
-fn user_view(e: &mut Engine, t: &Target, now: u64) -> Text {
+fn user_view(e: &mut Engine, t: &Target, page: usize, now: u64) -> Text {
     let Target::User { uuid, .. } = t else { return Text::new() };
     let q = e.query("");
     let eff = e.perms.effective(uuid, &q, now).clone();
     let data = t.data(e).cloned().unwrap_or_default();
-    let mut out = ui::header(&e.lang, "title-user", &Args::new().arg(value(t.label())));
-    out.push(row(1, &e.lang.get("label-uuid"), uuid).on_click(Click::Suggest(uuid.clone())));
+    let out = ui::header(&e.lang, "title-user", &Args::new().arg(value(t.label())));
+    let mut rows = vec![row(1, &e.lang.get("label-uuid"), uuid).on_click(Click::Suggest(uuid.clone()))];
     let rank = e.perms.display_name(&eff.primary);
     let rank_text =
         if rank == eff.primary { text::escape(&rank) } else { format!("{}&r {}({})", rank, ui::MUTED, eff.primary) };
-    out.push(row(1, &e.lang.get("label-rank"), &rank_text));
+    rows.push(row(1, &e.lang.get("label-rank"), &rank_text));
     let none = format!("{}{}", ui::MUTED, e.lang.get("label-none"));
-    let affix = |v: &Option<String>| {
-        v.as_ref().map(|p| format!("{p}&r {}\"{}\"", ui::MUTED, text::escape(p))).unwrap_or_else(|| none.clone())
+    let chat = page != 0;
+    let affix = |label: &str, v: &Option<String>| match v {
+        Some(p) => row(1, label, "").append(styled(p, chat)),
+        None => row(1, label, &none),
     };
-    out.push(row(1, &e.lang.get("label-prefix"), &affix(&eff.prefix)));
-    out.push(row(1, &e.lang.get("label-suffix"), &affix(&eff.suffix)));
+    rows.push(affix(&e.lang.get("label-prefix"), &eff.prefix));
+    rows.push(affix(&e.lang.get("label-suffix"), &eff.suffix));
     let inherited: Vec<String> = eff.groups.iter().map(|g| text::escape(g)).collect();
-    out.push(row(
+    rows.push(row(
         1,
         &e.lang.get("label-inherits"),
         &if inherited.is_empty() { none.clone() } else { inherited.join(", ") },
     ));
     let hidden = crate::host::hidden(e, uuid, &q, now);
-    hidden_lines(e, hidden.iter(), &mut out);
-    section(&mut out, e, "label-parents", data.parents.len(), parent_lines(e, t, &data, now));
-    section(&mut out, e, "label-permissions", data.permissions.len(), nodes_lines(e, t, &data, now));
-    section(&mut out, e, "label-meta", data.meta.len(), meta_lines(e, t, &data, now));
-    out
+    hidden_lines(e, hidden.iter(), &mut rows);
+    section(&mut rows, e, "label-parents", data.parents.len(), parent_lines(e, t, &data, now, chat));
+    section(&mut rows, e, "label-permissions", data.permissions.len(), nodes_lines(e, t, &data, now));
+    section(&mut rows, e, "label-meta", data.meta.len(), meta_lines(e, t, &data, now, chat));
+    paged(&e.lang, out, rows, page, &format!("{} info", t.command(&e.root)))
 }
 
-fn group_view(e: &mut Engine, t: &Target, now: u64) -> Text {
+fn group_view(e: &mut Engine, t: &Target, page: usize, now: u64) -> Text {
     let Target::Group { name } = t else { return Text::new() };
     let Some(group) = e.perms.group(name).cloned() else { return Text::new() };
-    let mut out = ui::header(&e.lang, "title-group", &Args::new().arg(value(name)));
+    let out = ui::header(&e.lang, "title-group", &Args::new().arg(value(name)));
     let none = format!("{}{}", ui::MUTED, e.lang.get("label-none"));
-    let shown = if group.display_name.is_empty() { none.clone() } else { format!("{}&r", group.display_name) };
-    out.push(row(1, &e.lang.get("label-display-name"), &shown));
-    out.push(row(1, &e.lang.get("label-weight"), &group.weight.to_string()));
+    let chat = page != 0;
+    let shown_label = e.lang.get("label-display-name");
+    let shown = if group.display_name.is_empty() {
+        row(1, &shown_label, &none)
+    } else if chat {
+        row(1, &shown_label, "").append(styled(&group.display_name, true))
+    } else {
+        row(1, &shown_label, &format!("{}&r", group.display_name))
+    };
+    let mut rows = vec![shown, row(1, &e.lang.get("label-weight"), &group.weight.to_string())];
     let members = e.perms.members(name).len();
-    out.push(
+    rows.push(
         row(1, &e.lang.get("label-members"), &members.to_string())
-            .on_click(Click::Run(format!("{ROOT} group {name} listmembers")))
+            .on_click(Click::Run(format!("{} group {name} listmembers", e.root)))
             .on_hover(Text::parse(&format!("{}{}", ui::INFO, e.lang.get("hover-members")))),
     );
     let tracks: Vec<String> = e.perms.tracks_of(name).iter().map(|t| t.name.clone()).collect();
-    out.push(row(1, &e.lang.get("label-tracks"), &if tracks.is_empty() { none } else { tracks.join(", ") }));
-    section(&mut out, e, "label-parents", group.data.parents.len(), parent_lines(e, t, &group.data, now));
-    section(&mut out, e, "label-permissions", group.data.permissions.len(), nodes_lines(e, t, &group.data, now));
-    section(&mut out, e, "label-meta", group.data.meta.len(), meta_lines(e, t, &group.data, now));
-    out
+    rows.push(row(1, &e.lang.get("label-tracks"), &if tracks.is_empty() { none } else { tracks.join(", ") }));
+    section(&mut rows, e, "label-parents", group.data.parents.len(), parent_lines(e, t, &group.data, now, chat));
+    section(&mut rows, e, "label-permissions", group.data.permissions.len(), nodes_lines(e, t, &group.data, now));
+    section(&mut rows, e, "label-meta", group.data.meta.len(), meta_lines(e, t, &group.data, now, chat));
+    paged(&e.lang, out, rows, page, &format!("{} info", t.command(&e.root)))
 }
 
 fn holder_header(e: &Engine, t: &Target) -> Text {
@@ -1863,58 +2035,62 @@ fn holder_header(e: &Engine, t: &Target) -> Text {
     ui::header(&e.lang, key, &Args::new().arg(value(t.label())))
 }
 
-fn nodes_view(e: &Engine, t: &Target, now: u64) -> Text {
+fn nodes_view(e: &Engine, t: &Target, page: usize, now: u64) -> Text {
     let data = t.data(e).cloned().unwrap_or_default();
-    let mut out = holder_header(e, t);
-    section(&mut out, e, "label-permissions", data.permissions.len(), nodes_lines(e, t, &data, now));
-    out
+    let mut rows = Vec::new();
+    section(&mut rows, e, "label-permissions", data.permissions.len(), nodes_lines(e, t, &data, now));
+    paged(&e.lang, holder_header(e, t), rows, page, &format!("{} permission info", t.command(&e.root)))
 }
 
-fn parents_view(e: &Engine, t: &Target, now: u64) -> Text {
+fn parents_view(e: &Engine, t: &Target, page: usize, now: u64) -> Text {
     let data = t.data(e).cloned().unwrap_or_default();
-    let mut out = holder_header(e, t);
-    section(&mut out, e, "label-parents", data.parents.len(), parent_lines(e, t, &data, now));
-    out
+    let mut rows = Vec::new();
+    section(&mut rows, e, "label-parents", data.parents.len(), parent_lines(e, t, &data, now, page != 0));
+    paged(&e.lang, holder_header(e, t), rows, page, &format!("{} parent info", t.command(&e.root)))
 }
 
-fn meta_view(e: &Engine, t: &Target, now: u64) -> Text {
+fn meta_view(e: &Engine, t: &Target, page: usize, now: u64) -> Text {
     let data = t.data(e).cloned().unwrap_or_default();
-    let mut out = holder_header(e, t);
-    section(&mut out, e, "label-meta", data.meta.len(), meta_lines(e, t, &data, now));
-    out
+    let mut rows = Vec::new();
+    section(&mut rows, e, "label-meta", data.meta.len(), meta_lines(e, t, &data, now, page != 0));
+    paged(&e.lang, holder_header(e, t), rows, page, &format!("{} meta info", t.command(&e.root)))
 }
 
-fn groups_view(e: &Engine) -> Text {
+fn groups_view(e: &Engine, page: usize) -> Text {
     let mut groups: Vec<_> = e.perms.groups().collect();
     groups.sort_by(|a, b| b.weight.cmp(&a.weight).then(a.name.cmp(&b.name)));
-    let mut out = ui::header(&e.lang, "title-groups", &Args::new().arg(value(groups.len())));
-    for g in groups {
-        let shown = if g.display_name.is_empty() {
-            String::new()
-        } else {
-            format!(" {}({}&r{})", ui::MUTED, g.display_name, ui::MUTED)
-        };
-        let line = Line::parse(&format!(
-            "  {}• {}{}{shown} {}{} {}",
-            ui::MUTED,
-            ui::VALUE,
-            g.name,
-            ui::INFO,
-            e.lang.get("label-weight"),
-            g.weight
-        ))
-        .on_click(Click::Run(format!("{ROOT} group {} info", g.name)))
-        .on_hover(Text::parse(&format!("{}{}", ui::INFO, e.lang.get("hover-info"))));
-        out.push(line);
-    }
-    out
+    let out = ui::header(&e.lang, "title-groups", &Args::new().arg(value(groups.len())));
+    let rows = groups
+        .into_iter()
+        .map(|g| {
+            let shown = if g.display_name.is_empty() {
+                String::new()
+            } else {
+                format!(" {}({}&r{})", ui::MUTED, g.display_name, ui::MUTED)
+            };
+            Line::parse(&format!(
+                "  {}• {}{}{shown} {}{} {}{}",
+                ui::MUTED,
+                ui::VALUE,
+                g.name,
+                ui::LABEL,
+                e.lang.get("label-weight"),
+                ui::VALUE,
+                g.weight
+            ))
+            .on_click(Click::Run(format!("{} group {} info", e.root, g.name)))
+            .on_hover(Text::parse(&format!("{}{}", ui::INFO, e.lang.get("hover-info"))))
+        })
+        .collect();
+    paged(&e.lang, out, rows, page, &format!("{} groups", e.root))
 }
 
-fn tracks_view(e: &Engine) -> Text {
+fn tracks_view(e: &Engine, page: usize) -> Text {
     let tracks: Vec<_> = e.perms.tracks().collect();
-    let mut out = ui::header(&e.lang, "title-tracks", &Args::new().arg(value(tracks.len())));
+    let out = ui::header(&e.lang, "title-tracks", &Args::new().arg(value(tracks.len())));
+    let mut rows = Vec::new();
     if tracks.is_empty() {
-        out.push(Line::parse(&format!("  {}{}", ui::MUTED, e.lang.get("label-none"))));
+        rows.push(Line::parse(&format!("  {}{}", ui::MUTED, e.lang.get("label-none"))));
     }
     for t in tracks {
         let ladder = if t.groups.is_empty() {
@@ -1922,12 +2098,12 @@ fn tracks_view(e: &Engine) -> Text {
         } else {
             t.groups.join(&format!(" {}→ {}", ui::MUTED, ui::VALUE))
         };
-        out.push(
+        rows.push(
             Line::parse(&format!("  {}• {}{} {}: {}{ladder}", ui::MUTED, ui::VALUE, t.name, ui::MUTED, ui::VALUE))
-                .on_click(Click::Run(format!("{ROOT} track {} info", t.name))),
+                .on_click(Click::Run(format!("{} track {} info", e.root, t.name))),
         );
     }
-    out
+    paged(&e.lang, out, rows, page, &format!("{} tracks", e.root))
 }
 
 fn members_view(e: &Engine, group: &str, page: usize) -> Text {
@@ -1952,16 +2128,11 @@ fn members_view(e: &Engine, group: &str, page: usize) -> Text {
         };
         out.push(
             Line::parse(&format!("  {}• {}{}{uuid}", ui::MUTED, ui::VALUE, text::escape(&t.label())))
-                .on_click(Click::Run(format!("{} info", t.command()))),
+                .on_click(Click::Run(format!("{} info", t.command(&e.root)))),
         );
     }
     if pages > 1 {
-        out.push(
-            Line::parse(&format!("  {}{page}/{pages}", ui::MUTED)).append(
-                Line::parse(&format!(" {}▶", ui::BRAND))
-                    .on_click(Click::Run(format!("{ROOT} group {group} listmembers {}", page % pages + 1))),
-            ),
-        );
+        out.push(nav(&e.lang, page, pages, &format!("{} group {group} listmembers", e.root)));
     }
     out
 }
@@ -1984,19 +2155,7 @@ fn log_view(e: &Engine, page: usize, now: u64) -> Text {
     }
     let pages = total.div_ceil(LOG_PAGE).max(1);
     if pages > 1 {
-        let mut nav = Line::parse("  ");
-        if page > 1 {
-            nav = nav.append(
-                Line::parse(&format!("{}◀ ", ui::BRAND)).on_click(Click::Run(format!("{ROOT} log {}", page - 1))),
-            );
-        }
-        nav = nav.append(Line::parse(&format!("{}{}/{pages}", ui::INFO, page.min(pages))));
-        if page < pages {
-            nav = nav.append(
-                Line::parse(&format!(" {}▶", ui::BRAND)).on_click(Click::Run(format!("{ROOT} log {}", page + 1))),
-            );
-        }
-        out.push(nav);
+        out.push(nav(&e.lang, page, pages, &format!("{} log", e.root)));
     }
     out
 }
@@ -2007,11 +2166,11 @@ pub fn log_line(e: &Engine, entry: &LogEntry, now: u64) -> Line {
         e.lang.format("time-ago", &Args::new().arg(coarse(Duration::from_millis(now.saturating_sub(entry.time)))));
     Line::parse(&format!(
         "  {}{ago} {}{} {}» {}{} {} {}{}",
-        ui::MUTED,
+        ui::INFO,
         ui::VALUE,
         text::escape(&safe_name(&entry.actor)),
         ui::MUTED,
-        ui::INFO,
+        ui::LABEL,
         text::escape(&entry.kind),
         text::escape(&entry.target),
         ui::VALUE,
@@ -2030,112 +2189,143 @@ pub fn notification(e: &Engine, entry: &LogEntry) -> Text {
 
 // ----- Tab completion -----
 
-/// Completions for the last argument; online players by [`user_arg`].
+/// Other names of words in the usage lines below the first.
+const WORD_ALIASES: &[(&str, &[&str])] =
+    &[("permission", &["perm", "p", "permissions"]), ("parent", &["parents", "inherit"]), ("info", &["i", "list"])];
+
+/// Every usage line below the root with its action: the help tables.
+fn rows() -> Vec<(String, String)> {
+    let mut rows: Vec<(String, String)> = GENERAL.iter().map(|(u, a, _)| (u.to_string(), a.to_string())).collect();
+    for (kind, slot, extra) in [("user", "player", USER_ONLY), ("group", "name", GROUP_ONLY)] {
+        rows.extend(
+            HOLDER.iter().chain(extra).map(|(u, a, _)| (format!("{kind} <{slot}> {u}"), format!("{kind}.{a}"))),
+        );
+    }
+    rows.extend(TRACK.iter().map(|(u, a, _)| (format!("track <name> {u}"), a.to_string())));
+    rows
+}
+
+/// Every usage line below the root the sender may use: the help tables with
+/// the help's own rights filter.
+fn usage_lines(e: &mut Engine, who: &Who, now: u64) -> Vec<String> {
+    let may = rights(e, who, now);
+    let mut lines = vec!["help".to_string()];
+    for (usage, action) in rows() {
+        if may(&node_of(&action)) && !switched_off(e, usage.split(' ').next().unwrap_or_default()) {
+            lines.push(usage);
+        }
+    }
+    lines
+}
+
+/// Every command below the root, for a platform that registers the whole
+/// command tree: the usage lines without the subcommands `commands.disabled`
+/// switches off, and each level that lists its commands, alone, with
+/// `help [page]` (the page arrows of a help run that) and with `[args...]`,
+/// which takes any other word with the rest of the line, so other names
+/// (`u`, `perm`, `?`), words in upper case and `editor` reach [`run`] as
+/// they do on PumboProx, and Tab offers only the words of the help.
+pub fn tree_lines(e: &Engine) -> Vec<String> {
+    let mut levels = vec![String::new(), "track <name>".to_string()];
+    for holder in ["user <player>", "group <name>"] {
+        levels.push(holder.to_string());
+        levels.extend(["permission", "parent", "meta"].map(|sub| format!("{holder} {sub}")));
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for level in levels {
+        lines.push(format!("{level} help [page]").trim_start().to_string());
+        lines.push(format!("{level} [args...]").trim_start().to_string());
+        lines.push(level);
+    }
+    lines.extend(rows().into_iter().map(|(usage, _)| usage));
+    lines.retain(|l| !l.is_empty() && !switched_off(e, l.split(' ').next().unwrap_or_default()));
+    lines
+}
+
+/// Whether the typed word `w` (lower case) at position `i` is the literal `p`
+/// (`a|b` for either).
+fn word_matches(p: &str, w: &str, i: usize) -> bool {
+    p.split('|').any(|alt| {
+        alt == w
+            || if i == 0 {
+                subcommand(w) == Some(alt)
+            } else {
+                WORD_ALIASES.iter().any(|(name, other)| *name == alt && other.contains(&w))
+            }
+    })
+}
+
+/// Whether `p` is an optional choice (`[true|false]`) that `w` is not one of,
+/// so the word belongs to the slot after it.
+fn skips_choice(p: &str, w: &str) -> bool {
+    p.strip_prefix('[')
+        .and_then(|c| c.strip_suffix(']'))
+        .is_some_and(|c| c.contains('|') && !c.split('|').any(|alt| alt.eq_ignore_ascii_case(w)))
+}
+
+/// The pattern words that may follow `typed` in a usage line (more than one
+/// after an optional `[slot]`); empty when the line does not match.
+fn next_words<'a>(pattern: &[&'a str], typed: &[String]) -> Vec<&'a str> {
+    let mut i = 0;
+    for w in typed {
+        while pattern.get(i).is_some_and(|p| skips_choice(p, w)) {
+            i += 1;
+        }
+        let Some(p) = pattern.get(i) else { return Vec::new() };
+        if p.ends_with("...]") {
+            return vec![p];
+        }
+        let slot = p.starts_with('<') || p.starts_with('[');
+        if !slot && !word_matches(p, &w.to_lowercase(), i) {
+            return Vec::new();
+        }
+        i += 1;
+    }
+    let mut out = Vec::new();
+    for p in pattern.iter().skip(i) {
+        out.push(*p);
+        if !p.starts_with('[') {
+            break;
+        }
+    }
+    out
+}
+
+/// Completions for the last argument from the usage lines the sender may
+/// use; online players by [`user_arg`]. Players, groups and tracks only with
+/// the `info` right of their kind.
 pub fn complete(e: &mut Engine, who: &Who, args: &[String], online: &[KnownName], now: u64) -> Vec<String> {
     let typed = args.last().map(|s| s.to_lowercase()).unwrap_or_default();
-    let n = args.len();
-    let first = lower(args.first());
+    let before = args.get(..args.len().saturating_sub(1)).unwrap_or(&[]);
+    let lines = usage_lines(e, who, now);
+    let [users, groups, tracks] = ["user", "group", "track"].map(|k| allowed(e, who, &format!("{k}.info"), now));
+    let e = &*e;
+    let values = |slot: &str, first: &str| -> Vec<String> {
+        match (slot, first) {
+            ("player", _) if users => online.iter().map(|k| user_arg(&k.uuid, &k.name)).collect(),
+            ("group", _) | ("name", "group" | "deletegroup") if groups => {
+                e.perms.groups().map(|g| g.name.clone()).collect()
+            }
+            ("track", _) | ("name", "track" | "deletetrack") if tracks => {
+                e.perms.tracks().map(|t| t.name.clone()).collect()
+            }
+            ("node", _) => {
+                let catalog = COMMAND_NODES.iter().chain(PUMBO_NODES).map(|n| n.to_string());
+                e.perms.all_nodes().iter().cloned().chain(catalog).chain(own_nodes()).collect()
+            }
+            ("true|false", _) => vec!["true".into(), "false".into()],
+            ("context...", _) => context::KEYS.iter().map(|k| format!("{k}=")).collect(),
+            _ => Vec::new(),
+        }
+    };
     let mut options: Vec<String> = Vec::new();
-    match n {
-        0 | 1 => {
-            for (word, action) in [
-                ("user", "user."),
-                ("group", "group."),
-                ("track", "track."),
-                ("groups", "group.list"),
-                ("tracks", "track.list"),
-                ("creategroup", "group.create"),
-                ("deletegroup", "group.delete"),
-                ("createtrack", "track.create"),
-                ("deletetrack", "track.delete"),
-                ("promote", "user.promote"),
-                ("demote", "user.demote"),
-                ("log", "log"),
-                ("export", "export"),
-                ("import", "import"),
-                ("editor", "editor"),
-                ("reload", "reload"),
-                ("version", "version"),
-                ("help", ""),
-            ] {
-                let ok = action.is_empty()
-                    || if action.ends_with('.') {
-                        allowed_prefix(e, who, action, now)
-                    } else {
-                        allowed(e, who, action, now)
-                    };
-                if ok {
-                    options.push(word.to_string());
-                }
-            }
-        }
-        2 => match first.as_str() {
-            "user" | "u" | "promote" | "demote" => options.extend(online.iter().map(|k| user_arg(&k.uuid, &k.name))),
-            "group" | "g" | "deletegroup" => options.extend(e_groups(e)),
-            "track" | "t" | "deletetrack" => options.extend(e.perms.tracks().map(|t| t.name.clone())),
-            _ => {}
-        },
-        3 => {
-            match first.as_str() {
-                "user" | "u" => options
-                    .extend(["info", "permission", "parent", "meta", "promote", "demote", "clear"].map(String::from)),
-                "group" | "g" => options.extend(
-                    [
-                        "info",
-                        "permission",
-                        "parent",
-                        "meta",
-                        "create",
-                        "delete",
-                        "rename",
-                        "setweight",
-                        "setdisplayname",
-                        "listmembers",
-                    ]
-                    .map(String::from),
-                ),
-                "track" | "t" => options
-                    .extend(["info", "create", "delete", "append", "insert", "remove", "clear"].map(String::from)),
-                "promote" | "demote" => options.extend(e.perms.tracks().map(|t| t.name.clone())),
-                _ => {}
-            }
-        }
-        _ => {
-            let third = lower(args.get(2));
-            let fourth = lower(args.get(3));
-            match (first.as_str(), third.as_str()) {
-                ("user" | "u" | "group" | "g", "permission" | "perm" | "p") if n == 4 => {
-                    options.extend(["info", "set", "settemp", "unset", "unsettemp", "check", "clear"].map(String::from))
-                }
-                ("user" | "u" | "group" | "g", "parent" | "parents" | "inherit") if n == 4 => {
-                    options.push("info".into());
-                    options.extend(PARENT_CHANGES.iter().map(|(w, ..)| w.to_string()));
-                }
-                ("user" | "u" | "group" | "g", "parent" | "parents" | "inherit") if n == 5 => {
-                    options.extend(e_groups(e))
-                }
-                ("user" | "u" | "group" | "g", "meta") if n == 4 => {
-                    options.extend(["info", "set", "unset"].map(String::from));
-                    options.extend(AFFIX_CHANGES.iter().map(|(w, ..)| w.to_string()));
-                }
-                ("user" | "u", "promote" | "demote") if n == 4 => {
-                    options.extend(e.perms.tracks().map(|t| t.name.clone()))
-                }
-                ("track" | "t", "append" | "insert" | "remove") if n == 4 => options.extend(e_groups(e)),
-                ("user" | "u" | "group" | "g", "permission" | "perm" | "p")
-                    if n == 5 && fourth != "clear" && fourth != "info" =>
-                {
-                    options.extend(e.perms.all_nodes().iter().cloned())
-                }
-                ("user" | "u" | "group" | "g", "permission" | "perm" | "p") if n == 6 && fourth.starts_with("set") => {
-                    options.extend(["true", "false"].map(String::from))
-                }
-                _ => {}
-            }
-            if n >= 5 && typed.contains('=') {
-                // contexts are completed by key only
-            } else if n >= 5 && options.is_empty() {
-                options.extend(context::KEYS.iter().map(|k| format!("{k}=")));
+    for line in &lines {
+        let pattern: Vec<&str> = line.split(' ').collect();
+        let first = pattern.first().copied().unwrap_or_default();
+        for p in next_words(&pattern, before) {
+            match p.strip_prefix('<').or_else(|| p.strip_prefix('[')) {
+                Some(slot) => options.extend(values(slot.trim_end_matches(['>', ']']), first)),
+                None => options.extend(p.split('|').map(String::from)),
             }
         }
     }
@@ -2144,10 +2334,6 @@ pub fn complete(e: &mut Engine, who: &Who, args: &[String], online: &[KnownName]
     options.retain(|o| o.to_lowercase().starts_with(&typed));
     options.truncate(100);
     options
-}
-
-fn e_groups(e: &Engine) -> Vec<String> {
-    e.perms.groups().map(|g| g.name.clone()).collect()
 }
 
 /// Every permission node of PumboPerms (`pumbo.perms.<action>`).

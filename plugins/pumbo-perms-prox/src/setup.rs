@@ -1,9 +1,9 @@
 //! Host-independent parts of the PumboProx layer: the config, the message
 //! files and the permission sets handed to the proxy.
 
-use pumbo_common::config::{self, Check, Settings, Warning};
+use pumbo_common::config::{self, Check, Commands, Settings, Warning};
 use pumbo_common::lang::{Bundle, COMMON, Lang};
-use pumbo_perms_core::config::{CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
+use pumbo_perms_core::config::{self as core_config, CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
 use pumbo_perms_core::engine::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -28,11 +28,17 @@ pub struct Config {
     pub language: String,
     pub log: LogCfg,
     pub import: ImportCfg,
+    pub commands: Commands,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { language: "en".into(), log: LogCfg::default(), import: ImportCfg::default() }
+        Self {
+            language: "en".into(),
+            log: LogCfg::default(),
+            import: ImportCfg::default(),
+            commands: core_config::default_commands(),
+        }
     }
 }
 
@@ -40,7 +46,13 @@ impl Config {
     /// The core sections: places come from the player's server, and the proxy
     /// has no operator levels and does not see worlds.
     pub fn core(&self) -> CoreCfg {
-        CoreCfg { defaults: DefaultsCfg { op_level: 0 }, log: self.log.clone(), worlds: false, ..CoreCfg::default() }
+        CoreCfg {
+            defaults: DefaultsCfg { op_level: 0 },
+            log: self.log.clone(),
+            worlds: false,
+            disabled: self.commands.disabled.clone(),
+            ..CoreCfg::default()
+        }
     }
 }
 
@@ -53,6 +65,7 @@ impl Settings for Config {
                 && lang.bytes().all(|b| b.is_ascii_lowercase() || b == b'-' || b == b'_')
         });
         self.language = self.language.trim().to_lowercase();
+        core_config::validate_commands(&mut self.commands, check);
     }
 }
 

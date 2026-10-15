@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════
 #  PumboPerms · config.yml
-#  Apply changes:  /pp reload  (provider.check-event: after a restart)
+#  Apply changes:  /pp reload  (check-event and commands: after a restart)
 #  Groups, users and tracks are not here: /pp keeps them in perms.redb
 #  Full reference: README.md → Configuration
 # ══════════════════════════════════════════════════════════════
@@ -29,7 +29,7 @@ log:
 provider:
   check-event: false         # answer every permission check itself; testing only, see README
   resend-commands: true      # send the command list again after a change
-  refresh-seconds: 1         # checks for expired nodes and new operator levels
+  refresh-seconds: 5         # checks for expired nodes and new operator levels (commands check at once)
 
 
 # ── Taking over other sources ─────────────────────────────────
@@ -38,3 +38,9 @@ import:
   follow: false              # import a source again when it changes (otherwise once; /pp import run <source>)
                              # (`proxy` changes when the proxy reloads permissions.yml without PumboPerms there)
   plugins: []                # other plugins that answer {"op":"export-permissions"}
+
+
+# ── Commands ──────────────────────────────────────────────────
+commands:
+  aliases: [pp]              # short commands for /pumboperms; [] = only /pumboperms
+  disabled: []               # /pp subcommands to switch off, e.g. [editor, export]

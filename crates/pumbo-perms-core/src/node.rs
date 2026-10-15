@@ -16,6 +16,9 @@ use std::fmt;
 /// Longest accepted node.
 pub const MAX_LEN: usize = 200;
 
+/// Longest group or track name.
+pub const MAX_NAME_LEN: usize = 36;
+
 /// Prefix of the nodes that stand for inherited groups (`group.admin`).
 pub const GROUP_PREFIX: &str = "group.";
 
@@ -40,7 +43,7 @@ impl fmt::Display for NodeError {
         match self {
             NodeError::Empty => f.write_str("empty permission"),
             NodeError::TooLong => write!(f, "permission longer than {MAX_LEN} characters"),
-            NodeError::BadChar(c) => write!(f, "character '{c}' is not allowed in a permission"),
+            NodeError::BadChar(c) => write!(f, "character {c:?} is not allowed in a permission"),
             NodeError::EmptySegment => f.write_str("permission has an empty part"),
             NodeError::TwoNamespaces => f.write_str("permission has more than one ':'"),
             NodeError::BadWildcard => f.write_str("'*' may only be the whole last part (a.b.*)"),
@@ -166,7 +169,7 @@ pub fn group_node(group: &str) -> String {
 /// Whether a group or track name is acceptable: 1 to 36 characters from
 /// `a-z 0-9 _ -`.
 pub fn is_valid_name(name: &str) -> bool {
-    (1..=36).contains(&name.len())
+    (1..=MAX_NAME_LEN).contains(&name.len())
         && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 

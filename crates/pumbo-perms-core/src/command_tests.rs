@@ -1,6 +1,8 @@
 //! The `/pp` command end to end, on an in-memory store.
 
 use pumbo_common::lang::{Bundle, COMMON, Lang, check_bundle};
+use pumbo_common::style;
+use pumbo_common::text::{Color, Named};
 
 use crate::LANG;
 use crate::command::{self, Action, Env, SourceMode, Who, import_pending, import_source, split_args};
@@ -13,7 +15,7 @@ use crate::ui::{Click, Text};
 const STEVE: &str = "00000000-0000-0000-0000-00000000000a";
 const ALEX: &str = "00000000-0000-0000-0000-00000000000b";
 
-const PLATFORM: Bundle = Bundle { name: "test", files: &[("en", "prefix: \"&#f28c28PumboPerms &8» \"\n")] };
+const PLATFORM: Bundle = Bundle { name: "test", files: &[("en", "prefix: \"&8[&#f28c28&lP&#ffd54f&lP&8] \"\n")] };
 
 fn engine() -> Engine {
     let lang = Lang::load(&[COMMON, LANG, PLATFORM], "en", None).0;
@@ -242,20 +244,20 @@ fn errors_and_help_are_friendly() {
     let help = console(&mut e, "help");
     assert!(!help.contains('&') && help.contains("/pp reload") && help.contains("/pp user <player>"));
     let sub = console(&mut e, "user Steve");
-    assert!(sub.contains("/pp user Steve permission set <node>"), "{sub}");
+    assert!(sub.contains("/pp user Steve permission ...") && !sub.contains("permission set"), "{sub}");
     let perm_help = console(&mut e, "user Steve permission");
     assert!(perm_help.contains("settemp") && !perm_help.contains("meta setprefix"));
-    // chat help has pages and clickable entries
+    // chat help lists every command at once, with clickable entries
     let op = Who::player("Steve", STEVE, 4, "world");
     let out = command::run(&mut e, &op, &split_args("help"), &env(0));
-    assert!(out.reply.plain().contains("1/3"));
+    let plain = out.reply.plain();
+    assert!(!plain.contains("1/3") && plain.contains("user <player>") && plain.contains("reload"), "{plain}");
     assert!(
-        out.reply
-            .lines
+        out.reply.lines.iter().skip(1).take(8).all(|l| l
+            .segments
             .iter()
-            .skip(1)
-            .take(8)
-            .all(|l| l.segments.iter().all(|s| s.click.is_some() && s.hover.is_some()))
+            .skip(5)
+            .all(|s| s.click.is_some() && s.hover.is_some()))
     );
 }
 
@@ -389,7 +391,66 @@ fn import_drops_parent_without_group() {
     assert!(snap.groups[0].data.parents.is_empty());
     let parents: Vec<&str> = snap.users[0].data.parents.iter().map(|p| p.group.as_str()).collect();
     assert_eq!(parents, vec!["vip", "default"]);
-    assert_eq!(snap.fixed.iter().filter(|f| f.contains("parent ghost")).count(), 2, "{:?}", snap.fixed);
+    assert_eq!(snap.fixed.iter().filter(|f| f.contains("parent \"ghost\"")).count(), 2, "{:?}", snap.fixed);
+}
+
+/// A deny group with a Polish name: preview, run, the ledger, a run of the
+/// same file and undo all use its new name, and its member keeps the deny.
+#[test]
+fn deny_group_with_a_polish_name_keeps_denying() {
+    const BAD_PLAYER: &str = "ŻółwiaGęśŚliczna_bardzo_długa_nazwa_z_ogonkami";
+    let mut e = engine();
+    let json = serde_json::json!({
+        "format": "pumboperms", "version": 1,
+        "groups": [
+            {"name": "vip", "data": {"permissions": [{"node": "fly", "value": true}]}},
+            {"name": "Zakaz Latania", "weight": 10, "data": {"permissions": [{"node": "fly", "value": false}]}},
+        ],
+        "users": [{"uuid": STEVE, "name": "Steve", "data": {"parents": [{"group": "vip"}, {"group": "Zakaz Latania"}]}}],
+        "by-name": [{"name": BAD_PLAYER, "data": {"parents": [{"group": "vip"}]}}],
+    });
+    let snap = export::parse(&json.to_string()).unwrap();
+    let source = |e: &mut Engine, fingerprint: &str, mode| {
+        import_source(e, &Who::console(), "file", Ok((fingerprint.into(), snap.clone())), mode, 1)
+    };
+    let preview = source(&mut e, "f1", SourceMode::Preview).reply.plain();
+    let run = source(&mut e, "f1", SourceMode::Run);
+    for reply in [&preview, &run.reply.plain()] {
+        assert!(reply.contains("2 entries of the file were fixed or left out"), "{reply}");
+        assert!(reply.contains("\"Zakaz Latania\" imported as zakaz-latania"), "{reply}");
+        assert!(reply.contains(&format!("{BAD_PLAYER:?}")), "{reply}");
+    }
+    assert!(preview.contains("Steve in zakaz-latania"), "{preview}");
+    let fly = |e: &mut Engine| e.perms.check(STEVE, "fly", &crate::context::Query::default(), 0);
+    assert_eq!(fly(&mut e), Some(false), "the deny holds");
+    let ledger = e.ledger("file").unwrap();
+    assert!(ledger.pending.is_empty(), "the bad player waits for no join");
+    assert!(format!("{:?}", ledger.entries).contains("zakaz-latania"), "{:?}", ledger.entries);
+    let again = source(&mut e, "f2", SourceMode::Run).reply.plain();
+    assert!(again.contains("0 entries added") && !again.contains("no longer has"), "{again}");
+    assert_eq!(e.ledger("file").unwrap().entries, ledger.entries, "the same file, the same entries");
+    let undo = import_source(&mut e, &Who::console(), "file", Err(String::new()), SourceMode::Undo, 2);
+    assert!(undo.changed, "{}", undo.reply.plain());
+    assert!(e.perms.group("zakaz-latania").is_none() && e.perms.group("vip").is_none());
+    assert_eq!(fly(&mut e), None);
+}
+
+/// A whole-file import keeps every rung of a track over a group with a
+/// Polish name, so a promotion goes where it went before.
+#[test]
+fn import_keeps_every_rung_of_a_track() {
+    let mut e = engine();
+    let json = serde_json::json!({
+        "format": "pumboperms", "version": 1,
+        "groups": [{"name": "Początkujący"}, {"name": "vip"}],
+        "tracks": [{"name": "ranks", "groups": ["default", "Początkujący", "vip"]}],
+    });
+    let out = command::import(&mut e, &Who::console(), "x", &json.to_string(), "before", 1);
+    assert!(out.reply.plain().contains("\"Początkujący\" imported as poczatkujacy"), "{}", out.reply.plain());
+    assert_eq!(e.perms.track("ranks").unwrap().groups, ["default", "poczatkujacy", "vip"]);
+    console(&mut e, "promote Steve ranks");
+    let parents = &e.perms.user(STEVE).unwrap().data.parents;
+    assert!(parents.len() == 1 && parents[0].group == "poczatkujacy", "{parents:?}");
 }
 
 #[test]
@@ -969,4 +1030,498 @@ fn cache_follows_group_change() {
     assert_eq!(e.perms.check(ALEX, "t.x", &places[0], 70_000), None);
     assert_eq!(e.perms.check(SCOPED, "b.t", &places[0], 2_000), Some(true));
     assert_eq!(e.perms.check(SCOPED, "b.t", &places[0], 70_000), None);
+}
+
+fn tab(e: &mut Engine, who: &Who, line: &str) -> Vec<String> {
+    let mut args = split_args(line);
+    if line.is_empty() || line.ends_with(' ') {
+        args.push(String::new());
+    }
+    let online = [KnownName { uuid: STEVE.into(), name: "Steve".into(), online: true }];
+    command::complete(e, who, &args, &online, 0)
+}
+
+#[test]
+fn node_completion_includes_catalog() {
+    let mut e = engine();
+    let con = Who::console();
+    let got = tab(&mut e, &con, "user Steve permission set minecraft:command.gam");
+    assert!(got.contains(&"minecraft:command.gamemode".to_string()), "{got:?}");
+    let got = tab(&mut e, &con, "group default permission check pumbo.perms.user.i");
+    assert_eq!(got, ["pumbo.perms.user.info"]);
+    let pumbo = pumbo_common::pumpkin::PUMBO_NODES[0];
+    assert!(tab(&mut e, &con, &format!("user Steve permission unset {pumbo}")).contains(&pumbo.to_string()));
+    // A node goes where the node goes, contexts only where the line takes them.
+    let at_node = tab(&mut e, &con, "user Steve permission set ");
+    assert!(!at_node.iter().any(|o| o.ends_with('=')), "{at_node:?}");
+    assert!(tab(&mut e, &con, "user Steve permission set fly ").contains(&"server=".to_string()));
+    assert!(tab(&mut e, &con, "user Steve parent add default ").contains(&"server=".to_string()));
+    assert!(tab(&mut e, &con, "user Steve meta set ").is_empty());
+}
+
+#[test]
+fn completion_hides_forbidden_subcommands() {
+    let mut e = engine();
+    console(&mut e, "creategroup vip");
+    console(&mut e, "createtrack ranks");
+    console(&mut e, "group vip permission set secret.node");
+    console(&mut e, "user Steve permission set pumbo.perms.user.info");
+    let p = steve();
+    assert_eq!(tab(&mut e, &p, ""), ["help", "user"]);
+    assert_eq!(tab(&mut e, &p, "user "), ["Steve"]);
+    assert_eq!(tab(&mut e, &p, "user Steve "), ["info"]);
+    assert!(tab(&mut e, &p, "group ").is_empty());
+    assert!(tab(&mut e, &p, "track ").is_empty());
+    assert!(tab(&mut e, &p, "user Steve permission set ").is_empty());
+    // Adding parents without group.info: the word, but no group names.
+    console(&mut e, "user Steve permission set pumbo.perms.user.info false");
+    console(&mut e, "user Steve permission set pumbo.perms.user.parent.add");
+    assert!(tab(&mut e, &p, "user ").is_empty(), "names need user.info");
+    assert_eq!(tab(&mut e, &p, "user Steve "), ["parent"]);
+    assert_eq!(tab(&mut e, &p, "user Steve parent "), ["add", "addtemp"]);
+    assert!(tab(&mut e, &p, "user Steve parent add ").is_empty());
+    console(&mut e, "user Steve permission set pumbo.perms.group.info");
+    assert_eq!(tab(&mut e, &p, "u Steve parents add v"), ["vip"]);
+    // A switched-off subcommand is gone at every level.
+    e.cfg.disabled = vec!["user".into()];
+    assert_eq!(tab(&mut e, &p, ""), ["group", "help"]);
+    assert!(tab(&mut e, &p, "user Steve ").is_empty());
+}
+
+#[test]
+fn meta_key_is_validated_and_quoted() {
+    let mut e = engine();
+    for bad in ["a:b", "x/y", &"k".repeat(65)] {
+        let out = console(&mut e, &format!("user Steve meta set {bad} v"));
+        assert!(out.contains("not a valid meta key"), "{bad}: {out}");
+    }
+    assert!(console(&mut e, "user Steve meta set Rank.Color-2_x gold").contains("Set rank.color-2_x"));
+    assert!(console(&mut e, "user Steve meta unset rank.color-2_x extra").contains("Usage"));
+    // The removal a click puts into the chat box takes exactly that entry.
+    let text = r#"&c[A "q" \x\] "#;
+    console(&mut e, &format!("user Steve meta addprefix 5 {}", quote(text)));
+    console(&mut e, "user Steve meta addprefix 5 other");
+    // A key an import brought, outside the rule for new keys.
+    let odd = crate::model::MetaNode {
+        kind: crate::model::MetaKind::Meta,
+        key: "odd\"key".into(),
+        priority: 0,
+        value: "1".into(),
+        context: crate::context::Contexts::global(),
+        expiry: None,
+    };
+    e.perms.edit_user(STEVE, "Steve", |d| d.meta.push(odd));
+    let out = command::run(&mut e, &Who::console(), &split_args("user Steve meta info"), &env(0));
+    let mut runs = clicks(&out.reply);
+    runs.dedup();
+    for c in runs {
+        if c.join(" ").contains("removeprefix 5 &c") || c.join(" ").contains("unset odd") {
+            let out = command::run(&mut e, &Who::console(), &c, &env(0)).reply.plain();
+            assert!(out.contains("Removed"), "{c:?}: {out}");
+        }
+    }
+    let left: Vec<String> = e.perms.user(STEVE).unwrap().data.meta.iter().map(|m| m.value.clone()).collect();
+    assert_eq!(left, ["gold", "other"], "only the clicked entries went");
+}
+
+/// [`split_args`] backwards, as a test writes a quoted word.
+fn quote(v: &str) -> String {
+    format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+#[test]
+fn settemp_refuses_existing_expiry() {
+    let mut e = engine();
+    console(&mut e, "user Steve permission settemp fly true 10m");
+    let out = console(&mut e, "user Steve permission settemp fly true 1h");
+    assert!(
+        out.contains("already has an end time") && out.contains("/pp user Steve permission unsettemp fly"),
+        "{out}"
+    );
+    let p = e.perms.user(STEVE).unwrap().data.permissions.clone();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].expiry, Some(1_000 + 600_000), "the old end time stays");
+    // Another context is another entry; after unsettemp the new time goes in.
+    assert!(console(&mut e, "user Steve permission settemp fly true 1h server=lobby").contains("for 1h"));
+    console(&mut e, "user Steve permission unsettemp fly");
+    assert!(console(&mut e, "user Steve permission settemp fly true 1h").contains("for 1h"));
+}
+
+#[test]
+fn editor_hidden_from_help() {
+    let mut e = engine();
+    assert!(!console(&mut e, "help").contains("editor"));
+    let op = Who::player("Steve", STEVE, 4, "world");
+    for page in 1..=3 {
+        assert!(!run_as(&mut e, &op, &format!("help {page}"), 0).contains("editor"));
+    }
+    assert!(!tab(&mut e, &Who::console(), "").contains(&"editor".to_string()));
+    assert!(tab(&mut e, &Who::console(), "ed").is_empty());
+    assert!(console(&mut e, "editor").contains("not available yet"));
+}
+
+/// `group=a` and `group=b` score the same, so on a server in both groups the
+/// order of [`crate::perms`] decides: false wins the tie.
+#[test]
+fn group_contexts_tie_resolves_to_false() {
+    let mut e = engine();
+    console(&mut e, "user Steve permission set fly true group=a");
+    console(&mut e, "user Steve permission set fly false group=b");
+    console(&mut e, "user Steve permission set walk false group=a");
+    console(&mut e, "user Steve permission set walk true group=b");
+    let q = crate::context::Query::at("", vec!["a".into(), "b".into()], "");
+    assert_eq!(e.perms.check(STEVE, "fly", &q, 0), Some(false));
+    assert_eq!(e.perms.check(STEVE, "walk", &q, 0), Some(false));
+}
+
+#[test]
+fn views_have_pages_for_players_and_all_rows_for_the_console() {
+    let mut e = engine();
+    console(&mut e, "user Alex permission set pumbo.perms.*");
+    for i in 0..45 {
+        console(&mut e, &format!("creategroup g{i:02}"));
+        console(&mut e, &format!("createtrack t{i:02}"));
+        console(&mut e, &format!("user Steve parent add g{i:02}"));
+        console(&mut e, &format!("user Steve meta set k{i:02} v"));
+    }
+    let alex = Who::player("Alex", ALEX, 0, "world");
+    for (view, letter) in
+        [("groups", 'g'), ("tracks", 't'), ("user Steve parent info", 'g'), ("user Steve meta info", 'k')]
+    {
+        let show =
+            |e: &mut Engine, page: &str| command::run(e, &alex, &split_args(&format!("{view} {page}")), &env(0)).reply;
+        let first = show(&mut e, "1");
+        assert!(first.plain().contains("1/3") && first.plain().contains(&format!("{letter}05")), "{view}");
+        let runs: Vec<String> = first
+            .lines
+            .iter()
+            .flat_map(|l| &l.segments)
+            .filter_map(|s| match &s.click {
+                Some(Click::Run(c)) => Some(c.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(runs.contains(&format!("/pp {view} 2")), "{view}: {runs:?}");
+        let last = show(&mut e, "3").plain();
+        assert!(last.contains("3/3") && last.contains(&format!("{letter}44")), "{view}: {last}");
+        assert!(!last.contains(&format!("{letter}37")), "{view}: {last}");
+        assert_eq!(show(&mut e, "99").plain(), last, "{view}");
+        let all = console(&mut e, view);
+        assert!(all.contains(&format!("{letter}00")) && all.contains(&format!("{letter}44")), "{view}");
+        assert!(!all.contains("1/3"), "{view}: {all}");
+    }
+}
+
+#[test]
+fn completion_skips_a_left_out_choice() {
+    let mut e = engine();
+    let con = Who::console();
+    let got = tab(&mut e, &con, "user Steve permission settemp fly 1h ");
+    assert!(got.contains(&"server=".to_string()), "{got:?}");
+    assert!(tab(&mut e, &con, "user Steve permission settemp fly true 1h ").contains(&"server=".to_string()));
+    assert!(tab(&mut e, &con, "user Steve permission settemp fly ").contains(&"true".to_string()));
+}
+
+/// The colour of the first segment whose text, without the spaces around it, is `text`.
+fn color_of(t: &Text, text: &str) -> Option<Color> {
+    t.lines.iter().flat_map(|l| &l.segments).find(|s| s.text.trim() == text).and_then(|s| s.style.color)
+}
+
+/// The colour of the first segment that contains `part`.
+fn color_with(t: &Text, part: &str) -> Option<Color> {
+    t.lines.iter().flat_map(|l| &l.segments).find(|s| s.text.contains(part)).and_then(|s| s.style.color)
+}
+
+#[test]
+fn info_views_in_colour() {
+    let mut e = engine();
+    for line in [
+        "creategroup vip",
+        "group vip setdisplayname &6VIP",
+        "group vip setweight 10",
+        "group vip meta setprefix 10 \"&6[VIP] \"",
+        "group vip permission settemp fly true 1h server=lobby",
+        "group vip permission set minecraft:command.gamemode false",
+        "user Steve parent add vip",
+        "user Steve permission set essentials:fly true",
+        "user Steve permission set essentials:fly.* false",
+    ] {
+        console(&mut e, line);
+    }
+    let run = |e: &mut Engine, line: &str| command::run(e, &Who::console(), &split_args(line), &env(1_000)).reply;
+
+    let group = run(&mut e, "group vip info");
+    assert_eq!(color_of(&group, "Group"), Some(style::accent::PERMS), "title");
+    assert_eq!(color_of(&group, "vip"), Some(style::VALUE), "name in the title");
+    assert_eq!(color_of(&group, "Weight:"), Some(style::LABEL), "label");
+    assert_eq!(color_of(&group, "10"), Some(style::VALUE), "value");
+    assert_eq!(color_of(&group, "VIP"), Some(Color::Named(Named::Gold)), "display name in its own colour");
+    assert_eq!(color_of(&group, "Permissions (2)"), Some(style::accent::PERMS), "heading");
+    assert_eq!(color_of(&group, "•"), Some(style::MUTED), "marker");
+    assert_eq!(color_of(&group, "true"), Some(style::SUCCESS));
+    assert_eq!(color_of(&group, "false"), Some(style::ERROR));
+    assert_eq!(color_with(&group, "server=lobby"), Some(style::INFO), "context");
+    assert_eq!(color_with(&group, "expires in"), Some(style::INFO), "end time");
+    assert_eq!(color_of(&group, "none"), Some(style::MUTED));
+    assert_eq!(color_of(&group, "prefix 10"), Some(style::LABEL), "meta key");
+
+    let user = run(&mut e, "user Steve info");
+    assert_eq!(color_of(&user, "Prefix:"), Some(style::LABEL));
+    // the prefix in its own colours, then its text in grey quotes
+    assert_eq!(color_of(&user, "[VIP]"), Some(Color::Named(Named::Gold)));
+    assert_eq!(color_of(&user, "\"&6[VIP] \""), Some(style::INFO));
+    assert!(user.plain().contains("Prefix: [VIP]  \"&6[VIP] \""), "{}", user.plain());
+    // a warning keeps its colour after a highlighted value
+    assert!(
+        user.plain().contains("  ! not sent to Pumpkin: essentials:fly hides essentials:fly.*"),
+        "{}",
+        user.plain()
+    );
+    assert_eq!(color_with(&user, "hides"), Some(style::WARN));
+
+    let check = run(&mut e, "group vip permission check fly server=lobby");
+    assert_eq!(check.plain().lines().count(), 2, "{}", check.plain());
+    assert_eq!(color_of(&check, "for group"), Some(style::accent::PERMS), "title of the check");
+    assert_eq!(color_of(&check, "true"), Some(style::SUCCESS));
+    let how = Text::from(check.lines[1].clone());
+    assert_eq!(how.lines[0].segments[0].style.color, Some(style::LABEL), "{:?}", how.lines[0].segments);
+    assert_eq!(color_of(&how, "fly"), Some(style::VALUE));
+    assert_eq!(color_with(&how, "server=lobby"), Some(style::INFO));
+    assert_eq!(color_with(&how, "expires in"), Some(style::INFO));
+    let undecided = run(&mut e, "group vip permission check nothing.here");
+    assert_eq!(color_with(&undecided, "not set"), Some(style::accent::PERMS));
+
+    for (view, title) in [
+        ("groups", "Groups:"),
+        ("tracks", "Tracks:"),
+        ("group vip listmembers", "Members of"),
+        ("log", "Recent changes"),
+    ] {
+        assert_eq!(color_of(&run(&mut e, view), title), Some(style::accent::PERMS), "{view}");
+    }
+    assert_eq!(color_of(&run(&mut e, "groups"), "Weight"), Some(style::LABEL));
+    let log = run(&mut e, "log");
+    assert_eq!(color_with(&log, "group vip"), Some(style::LABEL), "{:?}", log.lines[1].segments);
+    assert_eq!(color_with(&log, " ago"), Some(style::INFO));
+}
+
+#[test]
+fn help_and_usage_take_the_perms_yellow() {
+    let mut e = engine();
+    console(&mut e, "user Alex permission set pumbo.perms.*");
+    let alex = Who::player("Alex", ALEX, 0, "world");
+    let help = command::run(&mut e, &alex, &split_args("help"), &env(0)).reply;
+    // The name sits in the top bar after the `[PP] ` tag; command lines have `> `.
+    let header = &help.lines[0];
+    let at = header.segments.iter().position(|s| s.text == "Pumbo").expect("name in the top bar");
+    assert_eq!(header.segments[at].style.color, Some(style::BRAND));
+    assert_eq!(
+        (header.segments[at + 1].text.as_str(), header.segments[at + 1].style.color),
+        ("Perms", Some(style::accent::PERMS))
+    );
+    assert_eq!(color_of(&help, "/pp"), Some(style::accent::PERMS), "root command");
+    let user = &help.lines[1].segments[5..];
+    assert_eq!((user[0].text.as_str(), user[0].style.color), ("user ", Some(style::accent::PERMS)));
+    assert_eq!(user[1].style.color, Some(style::ARGUMENT));
+    assert_eq!(color_of(&help, "[page]"), Some(style::OPTIONAL));
+    let usage = command::run(&mut e, &Who::console(), &split_args("user"), &env(0)).reply;
+    assert_eq!(color_of(&usage, "/pp user"), Some(style::accent::PERMS), "{:?}", usage.lines[0].segments);
+    let unknown = command::run(&mut e, &Who::console(), &split_args("foo"), &env(0)).reply;
+    assert_eq!(color_of(&unknown, "/pp help"), Some(style::accent::PERMS), "{:?}", unknown.lines[0].segments);
+}
+
+#[test]
+fn chat_lines_start_with_the_tag() {
+    let mut e = engine();
+    console(&mut e, "creategroup vip");
+    console(&mut e, "group vip permission set essentials:home");
+    console(&mut e, "user Steve parent add vip");
+    let op = Who::player("Steve", STEVE, 4, "world");
+    let tag = [
+        ("[", Some(style::MUTED)),
+        ("P", Some(style::BRAND)),
+        ("P", Some(style::accent::PERMS)),
+        ("] ", Some(style::MUTED)),
+    ];
+    for line in [
+        "help",
+        "user Steve",
+        "group vip info",
+        "user Steve info",
+        "groups",
+        "log",
+        "creategroup vip",
+        "nonsense",
+        "user",
+    ] {
+        let reply = command::run(&mut e, &op, &split_args(line), &env(0)).reply;
+        assert!(!reply.lines.is_empty(), "/pp {line}");
+        for l in &reply.lines {
+            let got: Vec<_> = l.segments.iter().take(4).map(|s| (s.text.as_str(), s.style.color)).collect();
+            assert_eq!(got, tag, "/pp {line}: {}", l.plain());
+            let bold: Vec<bool> = l.segments.iter().take(4).map(|s| s.style.bold).collect();
+            assert_eq!(bold, [false, true, true, false], "/pp {line}: bold letters, plain brackets");
+        }
+    }
+    // Command lines in the help: `[PP] > user <player> ...`; the header has no `> `.
+    let help = command::run(&mut e, &op, &split_args("help"), &env(0)).reply;
+    assert_ne!(help.lines[0].segments[4].text, "> ");
+    for l in &help.lines[1..6] {
+        assert_eq!(
+            (l.segments[4].text.as_str(), l.segments[4].style.color),
+            ("> ", Some(style::MUTED)),
+            "{}",
+            l.plain()
+        );
+    }
+    for l in &help.lines {
+        assert!(l.width() <= pumbo_common::rich::CHAT_WIDTH, "{} px: {}", l.width(), l.plain());
+    }
+    // The console gets the prefix once, at the start, as before.
+    let view = console(&mut e, "group vip info");
+    let lines: Vec<&str> = view.lines().collect();
+    assert!(lines[0].starts_with("[PP] ") && lines.len() > 3, "{view}");
+    assert!(lines[1..].iter().all(|l| !l.contains("[PP]")), "{view}");
+    assert!(!console(&mut e, "help").contains("[PP]"));
+}
+
+#[test]
+fn player_help_is_grouped() {
+    let mut e = engine();
+    let op = Who::player("Steve", STEVE, 4, "world");
+    let show = |e: &mut Engine, who: &Who, line: &str| command::run(e, who, &split_args(line), &env(0)).reply;
+    let user = show(&mut e, &op, "user Steve");
+    let plain = user.plain();
+    for part in ["info [page]", "permission ...", "parent ...", "meta ...", "promote <track>"] {
+        assert!(plain.contains(part), "{part}: {plain}");
+    }
+    assert!(!plain.contains("permission set") && !plain.contains("meta setprefix"), "{plain}");
+    // `/pp user Steve permission` lists its commands without the word again.
+    let perm = show(&mut e, &op, "user Steve permission");
+    let rows: Vec<String> = perm.lines.iter().skip(1).map(|l| l.plain()).collect();
+    assert!(rows.iter().any(|l| l.starts_with("[PP] > set <node>")), "{rows:?}");
+    assert!(rows.iter().all(|l| !l.contains("> permission ")), "{rows:?}");
+    // A description is there whole or not at all, and no line is cut.
+    let meta = show(&mut e, &op, "group default meta");
+    let general = show(&mut e, &op, "help");
+    for t in [&user, &perm, &meta, &general] {
+        for l in &t.lines {
+            assert!(l.width() <= pumbo_common::rich::CHAT_WIDTH, "{} px: {}", l.width(), l.plain());
+            assert!(!l.plain().ends_with("..."), "cut: {}", l.plain());
+        }
+    }
+    // Only the groups of commands the player may use.
+    console(&mut e, "user Alex permission set pumbo.perms.user.permission.info");
+    let alex = Who::player("Alex", ALEX, 0, "world");
+    let limited = show(&mut e, &alex, "user Alex").plain();
+    assert!(limited.contains("permission ...") && !limited.contains("meta ...") && !limited.contains("parent ..."));
+}
+
+#[test]
+fn help_and_pages_are_framed() {
+    let mut e = engine();
+    let op = Who::player("Steve", STEVE, 4, "world");
+    let show = |e: &mut Engine, line: &str| command::run(e, &op, &split_args(line), &env(0)).reply;
+    let ruled = |l: &pumbo_common::rich::Line| {
+        let rules: Vec<_> = l.segments.iter().filter(|s| s.style.strikethrough).map(|s| s.style.color).collect();
+        rules.first() == Some(&Some(style::BRAND)) && rules.last() == Some(&Some(style::accent::PERMS))
+    };
+    for line in ["help", "user Steve", "user Steve permission"] {
+        let help = show(&mut e, line);
+        let (top, bottom) = (&help.lines[0], help.lines.last().unwrap());
+        assert!(ruled(top) && ruled(bottom), "/pp {line}: {} / {}", top.plain(), bottom.plain());
+        assert!(top.plain().contains("PumboPerms"), "{}", top.plain());
+        // The hint is the tooltip of the name, not a line of its own.
+        assert!(!help.plain().contains("Hover a command"), "{}", help.plain());
+        let name = top.segments.iter().find(|s| s.text == "Pumbo").unwrap();
+        assert!(name.hover.as_ref().is_some_and(|h| h.plain().contains("Hover a command")));
+        for l in &help.lines {
+            assert!(l.width() <= pumbo_common::rich::CHAT_WIDTH, "{} px: {}", l.width(), l.plain());
+        }
+    }
+    // A paged view ends with a bar whose arrows turn the page.
+    console(&mut e, "creategroup big");
+    for n in 0..45 {
+        console(&mut e, &format!("group big permission set big.node{n:02}"));
+    }
+    let view = show(&mut e, "group big permission info 2");
+    let bar = view.lines.last().unwrap();
+    assert!(ruled(bar) && bar.plain().contains("2/3"), "{}", bar.plain());
+    let runs: Vec<String> = bar
+        .segments
+        .iter()
+        .filter_map(|s| match &s.click {
+            Some(Click::Run(c)) => Some(c.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(runs, ["/pp group big permission info 1", "/pp group big permission info 3"]);
+    assert!(bar.width() <= pumbo_common::rich::CHAT_WIDTH);
+}
+
+#[test]
+fn views_sit_between_bars_in_chat() {
+    let mut e = engine();
+    let op = Who::player("Steve", STEVE, 4, "world");
+    let show = |e: &mut Engine, line: &str| command::run(e, &op, &split_args(line), &env(0)).reply;
+    let ruled = |l: &pumbo_common::rich::Line| l.segments.iter().any(|s| s.style.strikethrough);
+    console(&mut e, "creategroup vip");
+    console(&mut e, "user Steve permission set fly");
+    for line in ["user Steve info", "group vip info", "groups", "log", "user Steve permission check fly", "version"] {
+        let view = show(&mut e, line);
+        let (top, bottom) = (&view.lines[0], view.lines.last().unwrap());
+        assert!(ruled(top) && ruled(bottom), "/pp {line}: {}", view.plain());
+        assert_eq!(view.lines.iter().filter(|l| ruled(l)).count(), 2, "/pp {line}: two bars");
+        for l in &view.lines {
+            assert!(l.width() <= pumbo_common::rich::CHAT_WIDTH, "{} px: {}", l.width(), l.plain());
+        }
+    }
+    let top = show(&mut e, "user Steve info").lines[0].plain();
+    assert!(top.contains(" Player Steve "), "the title sits in the top bar: {top}");
+    // A page bar at the end is the bottom bar.
+    for n in 0..45 {
+        console(&mut e, &format!("group vip permission set vip.node{n:02}"));
+    }
+    let paged = show(&mut e, "group vip permission info");
+    assert!(paged.lines.last().unwrap().plain().contains("1/3"));
+    assert_eq!(paged.lines.iter().filter(|l| ruled(l)).count(), 2);
+    // One line stays one line; the console keeps its plain text.
+    assert_eq!(show(&mut e, "creategroup other").lines.len(), 1);
+    assert!(!console(&mut e, "user Steve info").lines().next().unwrap().contains("  "));
+}
+
+#[test]
+fn chat_shows_codes_of_prefixes_in_a_tooltip() {
+    let mut e = engine();
+    for c in [
+        "creategroup vip",
+        "group vip meta setprefix 10 \"&6[VIP] \"",
+        "group vip setdisplayname \"&6VIP\"",
+        "user Steve parent add vip",
+    ] {
+        console(&mut e, c);
+    }
+    let op = Who::player("Steve", STEVE, 4, "world");
+    let show = |e: &mut Engine, line: &str| command::run(e, &op, &split_args(line), &env(0)).reply;
+    let tooltip = |t: &Text, part: &str| {
+        t.lines
+            .iter()
+            .flat_map(|l| &l.segments)
+            .find(|s| s.text.contains(part))
+            .and_then(|s| s.hover.as_ref())
+            .map(|h| h.plain())
+    };
+    for line in ["user Steve info", "group vip info", "user Steve parent info", "group vip meta info"] {
+        let plain = show(&mut e, line).plain();
+        assert!(!plain.contains("&6"), "/pp {line}: the code is in the tooltip, not the line: {plain}");
+    }
+    let user = show(&mut e, "user Steve info");
+    assert_eq!(tooltip(&user, "[VIP]").as_deref(), Some("\"&6[VIP] \""));
+    let group = show(&mut e, "group vip info");
+    assert_eq!(tooltip(&group, "VIP").as_deref(), Some("\"&6VIP\""), "shown as");
+    let parents = show(&mut e, "user Steve parent info");
+    assert_eq!(tooltip(&parents, "VIP").as_deref(), Some("\"&6VIP\""), "display name of a parent");
+    // The console has no tooltips: it keeps the text as typed.
+    assert!(console(&mut e, "user Steve info").contains("[VIP]  \"&6[VIP] \""));
+    assert!(console(&mut e, "user Steve parent info").contains("vip (&6VIP)"));
 }

@@ -26,6 +26,9 @@ pub struct Engine {
     /// Server groups of each server the platform knows (PumboProx
     /// `server-group`); empty on a single server, where `context` says it.
     pub server_groups: BTreeMap<String, Vec<String>>,
+    /// The command in help, usage lines and clicks: [`crate::command::ROOT`],
+    /// or what the platform registered instead.
+    pub root: String,
     /// The data before the change in progress ([`Engine::begin`]): a change
     /// that cannot be saved is undone from it, without reading the disk.
     before: Option<Saved>,
@@ -56,6 +59,7 @@ impl Engine {
             lang,
             broken: None,
             server_groups: BTreeMap::new(),
+            root: crate::command::ROOT.to_string(),
             before: None,
             ledgers: Err("no database".into()),
             reported: BTreeSet::new(),
