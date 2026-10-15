@@ -21,7 +21,7 @@ pub fn skipped() -> u64 {
 }
 
 /// Starts tracking a player and sets its permissions.
-pub fn track(player: &Player) {
+pub fn track(server: &Server, player: &Player) {
     let uuid = api::uuid_string(&player.get_id());
     let online = Online {
         name: player.get_name(),
@@ -29,24 +29,18 @@ pub fn track(player: &Player) {
         op_level: api::level_of(player.get_permission_level()),
     };
     let now = now_ms();
-    let result = state::with(|rt| {
-        if let Err(e) = rt.engine.seen(&uuid, &online.name) {
-            rt.warn(format!("PumboPerms: cannot save the name of {}: {e}", online.name));
-        }
-        rt.online.insert(uuid.clone(), online);
-        (rt.plan_player(&uuid, now), rt.resend())
-    });
+    let result = state::with(|rt| (rt.join(&uuid, online, now), rt.resend()));
     state::flush_logs();
-    if let Some((ops, resend)) = result {
-        push::apply(player, &ops, resend);
+    if let Some((plans, resend)) = result {
+        push::apply_plans(server, Some(player), plans, resend);
     }
 }
 
 pub struct Join;
 
 impl EventHandler<PlayerJoinEvent> for Join {
-    fn handle(&self, _server: Server, e: EventData<PlayerJoinEvent>) -> EventData<PlayerJoinEvent> {
-        track(&e.player);
+    fn handle(&self, server: Server, e: EventData<PlayerJoinEvent>) -> EventData<PlayerJoinEvent> {
+        track(&server, &e.player);
         e
     }
 }
@@ -54,9 +48,16 @@ impl EventHandler<PlayerJoinEvent> for Join {
 pub struct Leave;
 
 impl EventHandler<PlayerLeaveEvent> for Leave {
-    fn handle(&self, _server: Server, e: EventData<PlayerLeaveEvent>) -> EventData<PlayerLeaveEvent> {
+    fn handle(&self, server: Server, e: EventData<PlayerLeaveEvent>) -> EventData<PlayerLeaveEvent> {
         let uuid = api::uuid_string(&e.player.get_id());
-        state::with(|rt| rt.online.remove(&uuid));
+        let now = now_ms();
+        let result = state::with(|rt| (rt.leave(&uuid, now), rt.resend()));
+        state::flush_logs();
+        if let Some(((ops, plans), resend)) = result {
+            // No command list for a player who is leaving.
+            push::apply(&e.player, &ops);
+            push::apply_plans(&server, None, plans, resend);
+        }
         e
     }
 }
@@ -64,58 +65,32 @@ impl EventHandler<PlayerLeaveEvent> for Leave {
 pub struct ChangeWorld;
 
 impl EventHandler<PlayerChangeWorldEvent> for ChangeWorld {
-    fn handle(&self, _server: Server, e: EventData<PlayerChangeWorldEvent>) -> EventData<PlayerChangeWorldEvent> {
+    fn handle(&self, server: Server, e: EventData<PlayerChangeWorldEvent>) -> EventData<PlayerChangeWorldEvent> {
         let uuid = api::uuid_string(&e.player.get_id());
         let world = e.new_world.get_name();
         let now = now_ms();
-        let result = state::with(|rt| {
-            let o = rt.online.get_mut(&uuid)?;
-            o.world = world;
-            rt.engine.perms.uses_context("world").then(|| (rt.plan_player(&uuid, now), rt.resend()))
-        });
-        if let Some(Some((ops, resend))) = result {
-            push::apply(&e.player, &ops, resend);
+        let cancelled = e.cancelled;
+        let result = state::with(|rt| (rt.change_world(&uuid, world, cancelled, now), rt.resend()));
+        state::flush_logs();
+        if let Some((plans, resend)) = result {
+            push::apply_plans(&server, Some(&e.player), plans, resend);
         }
         e
     }
 }
 
-/// Every `refresh-seconds`: expired nodes and changed operator levels.
+/// Every `refresh-seconds`: expired nodes, changed operator levels and worlds.
 pub fn tick(server: &Server) {
-    let levels: Vec<(String, u8)> = server
+    let players: Vec<(String, u8, String)> = server
         .get_all_players()
         .iter()
-        .map(|p| (api::uuid_string(&p.get_id()), api::level_of(p.get_permission_level())))
+        .map(|p| (api::uuid_string(&p.get_id()), api::level_of(p.get_permission_level()), p.get_world().get_name()))
         .collect();
     let now = now_ms();
-    let result = state::with(|rt| {
-        let mut changed = Vec::new();
-        for (uuid, level) in &levels {
-            if let Some(o) = rt.online.get_mut(uuid)
-                && o.op_level != *level
-            {
-                o.op_level = *level;
-                changed.push(uuid.clone());
-            }
-        }
-        let expired = match rt.engine.expire(now) {
-            Ok(e) => e,
-            Err(e) => {
-                rt.warn(format!("PumboPerms: cannot save expired permissions: {e}"));
-                false
-            }
-        };
-        let plans = if expired {
-            rt.refresh_catalog();
-            rt.plan_all(now)
-        } else {
-            changed.into_iter().map(|u| (u.clone(), rt.plan_player(&u, now))).filter(|(_, o)| !o.is_empty()).collect()
-        };
-        (plans, rt.resend())
-    });
+    let result = state::with(|rt| (rt.refresh(&players, now), rt.resend()));
     state::flush_logs();
     if let Some((plans, resend)) = result {
-        push::apply_all(server, plans, resend);
+        push::apply_plans(server, None, plans, resend);
     }
 }
 
@@ -142,7 +117,7 @@ impl EventHandler<PlayerPermissionCheckEvent> for Check {
             rt.answered += 1;
             let (name, world, op) =
                 rt.online.get(&uuid).map(|o| (o.name.clone(), o.world.clone(), o.op_level)).unwrap_or_default();
-            if node == crate::COMMAND_NODE {
+            if node == pumbo_perms_core::host::command_node() {
                 return Some(command::allowed_any(&mut rt.engine, &Who::player(&name, &uuid, op, &world), now));
             }
             let canonical = pumbo_perms_core::node::normalize(&node).ok()?;
@@ -159,21 +134,45 @@ impl EventHandler<PlayerPermissionCheckEvent> for Check {
     }
 }
 
-/// `/tp`, `/xp`, `/banip`, `/pardonip` with the permission of their command,
-/// which Pumpkin does not check (`pumbo_common::pumpkin::UNGUARDED_ALIASES`).
-/// Not in check-event mode: `has-permission` would call back into this plugin.
-pub struct AliasGuard;
+/// `/tp`, `/xp`, `/banip`, `/pardonip` (also after `execute ... run`) with the
+/// permission of their command, which Pumpkin does not check
+/// (`pumbo_common::pumpkin::UNGUARDED_ALIASES`). In check-event mode the answer
+/// comes from memory: `has-permission` would call back into this plugin.
+pub struct AliasGuard {
+    pub check_event: bool,
+}
 
 impl EventHandler<PlayerCommandSendEvent> for AliasGuard {
-    fn handle(&self, _server: Server, mut e: EventData<PlayerCommandSendEvent>) -> EventData<PlayerCommandSendEvent> {
+    fn handle(&self, server: Server, mut e: EventData<PlayerCommandSendEvent>) -> EventData<PlayerCommandSendEvent> {
+        // Before Pumpkin checks the command: an expired node is gone even
+        // while the periodic task stands (`/tick freeze`). The command list
+        // follows at the next change, not from inside this event.
+        let now = now_ms();
+        if let Some(plans) = state::with(|rt| rt.due_expiry(now)) {
+            state::flush_logs();
+            push::apply_plans(&server, None, plans, false);
+        }
         if !e.cancelled
             && let Some(node) = pumbo_common::pumpkin::unguarded_alias(&e.command)
-            && !e.player.has_permission(node)
+            && !self.allowed(&e.player, node)
         {
             e.cancelled = true;
             let t = TextComponent::translate("command.unknown.command", Vec::new()).color_named(NamedColor::Red);
             e.player.send_system_message(t, false);
         }
         e
+    }
+}
+
+impl AliasGuard {
+    fn allowed(&self, player: &Player, node: &str) -> bool {
+        // Passive: the Check handler stays out, PumboBridge's attachments decide.
+        if !self.check_event || state::passive() {
+            return player.has_permission(node);
+        }
+        let uuid = api::uuid_string(&player.get_id());
+        let now = now_ms();
+        // Busy (a nested call): refuse, the player can try again.
+        state::with(|rt| rt.alias_allowed(&uuid, node, now)).unwrap_or(false)
     }
 }

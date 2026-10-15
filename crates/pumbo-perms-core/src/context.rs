@@ -118,6 +118,16 @@ impl Contexts {
         Ok(())
     }
 
+    /// The same contexts checked again key by key, as [`Contexts::insert`] does
+    /// (for data that did not come from a command, such as an import).
+    pub fn canonical(&self) -> Result<Self, ContextError> {
+        let mut out = Self::default();
+        for (k, v) in &self.0 {
+            out.insert(k, v)?;
+        }
+        Ok(out)
+    }
+
     /// Builds contexts from the trailing `key=value` arguments of a command.
     pub fn parse(args: &[String]) -> Result<Self, ContextError> {
         let mut out = Self::default();

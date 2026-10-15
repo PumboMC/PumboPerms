@@ -79,6 +79,7 @@ desc-parent-add: Dodaje dziedziczenie grupy
 desc-parent-add-details: "Przykład: parent add vip server=survival"
 desc-parent-addtemp: Grupa nadrzędna na czas
 desc-parent-remove: Usuwa dziedziczenie grupy
+desc-parent-removetemp: Usuwa tylko czasową grupę nadrzędną
 desc-parent-set: Jedyna grupa nadrzędna
 desc-parent-set-details: Usuwa inne grupy nadrzędne w tych kontekstach.
 desc-meta-info: Prefiksy, sufiksy i meta
@@ -89,10 +90,12 @@ desc-meta-setprefix-details: "Zastępuje inne prefiksy. Przykład: meta setprefi
 desc-meta-addprefix: Dodaje prefiks
 desc-meta-addtempprefix: Prefiks na czas
 desc-meta-removeprefix: Usuwa prefiksy
+desc-meta-removetempprefix: Usuwa tylko czasowe prefiksy
 desc-meta-setsuffix: Ustawia sufiks
 desc-meta-addsuffix: Dodaje sufiks
 desc-meta-addtempsuffix: Sufiks na czas
 desc-meta-removesuffix: Usuwa sufiksy
+desc-meta-removetempsuffix: Usuwa tylko czasowe sufiksy
 desc-user-promote: Awans o grupę na ścieżce
 desc-user-demote: Obniżenie o grupę na ścieżce
 desc-user-clear: Usuwa graczowi wszystko
@@ -128,11 +131,14 @@ bad-node-wildcard: "{0} to nie jest poprawne uprawnienie: * może być tylko ost
 bad-value: "{0} to nie jest true ani false."
 bad-number: "{0} to nie jest liczba całkowita."
 bad-context: "Zły kontekst: {0}. Użyj server=, group= albo world=."
+no-worlds: "Proxy nie widzi światów, więc world= nie działa tutaj."
+bad-text: Tekst jest za długi albo ma znaki sterujące (najwyżej 256 bajtów, bez łamania linii).
+import-file-console: "Cały plik importuje tylko konsola: import podmienia wszystkie grupy i graczy."
 editor-later: Edytora w przeglądarce jeszcze nie ma. Na razie użyj export i import (JSON).
 
 # części komunikatów
 in-context: " w {0}"
-target-user: "{0}"
+target-user: "{0} &8({1})&r"
 target-group: grupa {0}
 expires-in: wygasa za {0}
 time-ago: "{0} temu"
@@ -148,6 +154,9 @@ perm-clear: "Usunięto uprawnienia ({count}) dla: {target}{context}."
 perm-check: "{node} dla: {target}: {value}"
 perm-check-source: "decyduje {source}: {node}{context} "
 perm-check-undecided: "{node} dla: {target}: nie ustawiono, decyduje domyślne zachowanie serwera."
+perm-check-no-worlds: "Proxy nie widzi światów: wpisy z world= nie działają nigdzie w tej sieci."
+perm-hidden: "nie trafia do Pumpkina: {0} zasłania {1}"
+perm-group-node: "{node} to grupa, nie uprawnienie. Użyj {command} parent add {group}."
 parent-add: "{target} dziedziczy teraz {group}{context}."
 parent-addtemp: "{target} dziedziczy teraz {group}{context}, przez {duration}."
 parent-already: "{target} już dziedziczy {group}{context}."
@@ -180,20 +189,28 @@ track-end: "{target} jest już na najwyższej grupie ścieżki {track} ({group})
 track-start: "{target} jest już na najniższej grupie ścieżki {track} ({group})."
 track-ambiguous: "{target} jest na kilku grupach ścieżki {track}: {groups}. Usuń nadmiarowe przez parent remove."
 not-on-track: "{target} nie jest na ścieżce {track}{context}."
-promoted: "Awans {target} na ścieżce {track}: {from} → {to}{context}."
-promoted-first: "{target} ma teraz {to}, pierwszą grupę ścieżki {track}{context}."
-demoted: "Obniżono {target} na ścieżce {track}: {from} → {to}{context}."
+promoted: "Awans {target} na ścieżce {track}: {from} → {to}{context}{until}."
+promoted-first: "{target} ma teraz {to}, pierwszą grupę ścieżki {track}{context}{until}."
+demoted: "Obniżono {target} na ścieżce {track}: {from} → {to}{context}{until}."
 exported: Wyeksportowano do {0}.
 export-failed: "Eksport nie powiódł się: {0}"
+export-exists: "{0} już istnieje, wybierz inną nazwę."
 imported: Zaimportowano grupy ({0}), graczy ({1}) i ścieżki ({2}) z {3}. Poprzednie dane zapisano jako {4}.
 import-failed: "Import nie powiódł się: {0}"
-import-source-done: "Zaimportowano {0}: dodano wpisów: {1}, konflikty pozostawione bez zmian: {2} (zob. /pp log)."
+import-source-done: "Zaimportowano {0}: dodano wpisów: {1}, konflikty pozostawione bez zmian: {2} (zob. /pp log). Zaimportowane wpisy usunięte tutaj nie wracają."
+import-source-removed: "Cofnięto wpisy, których źródło już nie ma: {0}."
+import-source-resolved: "Gracze z samym nickiem idą do UUID przypisanego temu nickowi ({0}): {1}"
 import-source-same: "{0} nie zmieniło się od ostatniego importu."
 import-source-preview: "Import {0} doda wpisów: {1} (konflikty pozostawione bez zmian: {2}):"
 import-source-undone: "Usunięto wpisy zaimportowane z {0}: {1}."
 import-source-failed: "Nie można zaimportować {0}: {1}"
-import-source-pending: "Gracze znani tylko z nicku ({0}) dostaną swoje wpisy przy pierwszym wejściu: {1}"
+import-source-pending: "Gracze znani tylko z nicku ({0}) dostaną swoje wpisy, gdy wejdą z kontem online (premium): {1}"
 import-source-joined: "{0}: {1} wszedł pierwszy raz, dodano wpisów: {2}."
+import-source-name-only: "Gracze znani tylko z nicku ({0}) nic tu nie dostają; nadaj im rangi przez /pp: {1}"
+import-source-joined-name-only: "{0}: {1} wszedł i nic nie dostał: gracze znani tylko z nicku nic tu nie dostają; nadaj im rangi przez /pp."
+import-source-offline: "{0}: {1} wszedł z kontem offline i nic nie dostał; wpisy dla tego nicku czekają na konto online (premium)."
+import-fixed: "Poprawione albo pominięte wpisy z pliku: {0}"
+import-worlds: "Zachowano wpisy z world= ({0}): proxy nie widzi światów, więc nigdzie nie działają."
 import-missing: Nie ma pliku {0}.
 notify: "{0} zmienia {1}: {2}"
 log-empty: Na razie bez zmian.

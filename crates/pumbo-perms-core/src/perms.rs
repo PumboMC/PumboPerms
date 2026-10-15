@@ -4,9 +4,11 @@
 //!
 //! 1. **Holders.** A user inherits the groups of its parent nodes that apply
 //!    where the player is (contexts) and have not expired, and their parents in
-//!    turn. A user without any such parent is in the default group. The order of
-//!    importance is: the user itself, then the groups by weight (highest first),
-//!    then by distance (direct parents before their parents), then by name.
+//!    turn. A user without an active parent that has no context is also in the
+//!    default group, the same everywhere, so every host computes it alike. The
+//!    order of importance is: the user itself, then the groups by weight
+//!    (highest first), then by distance (direct parents before their parents),
+//!    then by name.
 //! 2. **Specific beats general.** For a checked node, the exact node wins over
 //!    any wildcard, and a longer wildcard over a shorter one
 //!    (`pumbo.bans.ban` > `pumbo.bans.*` > `pumbo.*` > `*`), no matter which
@@ -18,13 +20,15 @@
 //! 5. Nothing set: undecided (`None`); the platform falls back to its defaults
 //!    (operator levels on Pumpkin).
 //!
-//! Every inherited group also answers its `group.<name>` node with `true`.
+//! Every inherited group answers its `group.<name>` node with `true`, before
+//! any node set by hand, so `group.<name>` always tells the real membership.
 //!
 //! Prefix and suffix: the highest priority among all holders wins; on a tie the
 //! more important holder, then the more specific context. Meta keys: the first
 //! holder (in the order of rule 1) that has the key; on that holder the most
 //! specific context.
 
+use std::cell::{Cell, OnceCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
@@ -72,7 +76,6 @@ pub struct Decision {
 /// or a node in it expires.
 #[derive(Debug, Clone, Default)]
 pub struct Effective {
-    generation: u64,
     /// The first end time of a node that was used (`u64::MAX` if none).
     valid_until: u64,
     exact: HashMap<String, Decision>,
@@ -91,7 +94,22 @@ impl Effective {
         if let Some(d) = self.exact.get(node) {
             return Some(d);
         }
-        node::parents(node).iter().find_map(|w| self.exact.get(w))
+        // The wildcards of `node::parents`, most specific first, in one buffer.
+        let base = node.strip_suffix(".*").or_else(|| node.strip_suffix(":*")).unwrap_or(node);
+        let mut wildcard = String::with_capacity(base.len().saturating_add(1));
+        for (i, c) in base.char_indices().rev() {
+            if (c == '.' || c == ':')
+                && let Some(head) = base.get(..=i)
+            {
+                wildcard.clear();
+                wildcard.push_str(head);
+                wildcard.push('*');
+                if let Some(d) = self.exact.get(&wildcard) {
+                    return Some(d);
+                }
+            }
+        }
+        self.exact.get("*")
     }
 
     pub fn check(&self, node: &str) -> Option<bool> {
@@ -154,10 +172,13 @@ impl fmt::Display for PermsError {
 impl std::error::Error for PermsError {}
 
 /// A user by name, as known from earlier joins.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KnownName {
     pub uuid: String,
     pub name: String,
+    /// The last join was with an account the host checked with Mojang: only
+    /// such a name may stand for a UUID in an import.
+    pub online: bool,
 }
 
 /// The result of a promotion or demotion.
@@ -165,6 +186,8 @@ pub struct KnownName {
 pub struct Step {
     pub from: Option<String>,
     pub to: Option<String>,
+    /// End time of the new rung (`None`: permanent).
+    pub expiry: Option<u64>,
 }
 
 /// What a change touched, so that exactly that is saved.
@@ -195,16 +218,50 @@ impl Dirty {
     }
 }
 
+/// A copy of [`Perms`] without the name index ([`Perms::saved`]).
+#[derive(Debug, Clone)]
+pub struct Saved {
+    groups: BTreeMap<String, Group>,
+    users: HashMap<String, User>,
+    tracks: BTreeMap<String, Track>,
+}
+
 /// The whole permission database, in memory.
 #[derive(Debug, Clone)]
 pub struct Perms {
     groups: BTreeMap<String, Group>,
     users: HashMap<String, User>,
     names: HashMap<String, KnownName>,
+    /// UUID -> its key in `names`.
+    name_of: HashMap<String, String>,
     tracks: BTreeMap<String, Track>,
     default_group: String,
     generation: u64,
-    cache: HashMap<(String, Query), Effective>,
+    memo: Memo,
+}
+
+/// What is computed from the data and kept until the data changes. A copy of
+/// [`Perms`] starts without it.
+#[derive(Debug, Default)]
+struct Memo {
+    /// Decisions per user and place.
+    cache: HashMap<String, HashMap<Query, Effective>>,
+    /// Entries in `cache`.
+    cached: usize,
+    /// [`Perms::all_nodes`].
+    nodes: OnceCell<BTreeSet<String>>,
+    /// [`Perms::next_expiry`].
+    next_expiry: Cell<Option<Option<u64>>>,
+    /// [`Perms::uses_context`] of `world`.
+    worlds: Cell<Option<bool>>,
+    /// What a user with nothing gets (never handed out: every lookup follows a computation).
+    nothing: Effective,
+}
+
+impl Clone for Memo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
 impl Default for Perms {
@@ -222,10 +279,11 @@ impl Perms {
             groups,
             users: HashMap::new(),
             names: HashMap::new(),
+            name_of: HashMap::new(),
             tracks: BTreeMap::new(),
             default_group: DEFAULT_GROUP.to_string(),
             generation: 1,
-            cache: HashMap::new(),
+            memo: Memo::default(),
         }
     }
 
@@ -246,7 +304,9 @@ impl Perms {
             p.users.insert(u.uuid.clone(), u);
         }
         for n in names {
-            p.names.insert(pumbo_common::id::name_key(&n.name), n);
+            let key = pumbo_common::id::name_key(&n.name);
+            p.name_of.insert(n.uuid.clone(), key.clone());
+            p.names.insert(key, n);
         }
         for t in tracks {
             p.tracks.insert(t.name.clone(), t);
@@ -259,10 +319,106 @@ impl Perms {
         (p, dirty)
     }
 
-    /// Counts the change; cached decisions are rebuilt.
-    fn touch(&mut self) {
+    /// Groups, users and tracks as they are now, to [`Perms::restore`] after a
+    /// change that could not be saved (names are not changed by commands).
+    pub fn saved(&self) -> Saved {
+        Saved { groups: self.groups.clone(), users: self.users.clone(), tracks: self.tracks.clone() }
+    }
+
+    pub fn restore(&mut self, saved: Saved) {
+        self.groups = saved.groups;
+        self.users = saved.users;
+        self.tracks = saved.tracks;
         self.generation = self.generation.wrapping_add(1);
-        self.cache.clear();
+        self.memo = Memo::default();
+    }
+
+    /// Counts the change and forgets what was computed from the data it
+    /// touched: the decisions of its users and of everyone who can inherit
+    /// one of its groups.
+    fn touch(&mut self, dirty: &Dirty) {
+        self.generation = self.generation.wrapping_add(1);
+        let groups: Vec<&str> = dirty.groups.iter().chain(&dirty.deleted_groups).map(String::as_str).collect();
+        if groups.is_empty() && dirty.users.is_empty() {
+            return;
+        }
+        (self.memo.nodes, self.memo.next_expiry, self.memo.worlds) =
+            (OnceCell::new(), Cell::new(None), Cell::new(None));
+        if self.reaches_everyone(&groups) {
+            (self.memo.cache, self.memo.cached) = (HashMap::new(), 0);
+            return;
+        }
+        let gone: Vec<String> = self
+            .memo
+            .cache
+            .keys()
+            .filter(|u| dirty.users.contains(*u) || (!groups.is_empty() && self.reaches(u, &groups)))
+            .cloned()
+            .collect();
+        for u in gone {
+            if let Some(places) = self.memo.cache.remove(&u) {
+                self.memo.cached = self.memo.cached.saturating_sub(places.len());
+            }
+        }
+    }
+
+    /// Every `server=` and `group=` value in what the user has or can inherit:
+    /// on a server named nowhere there, directly or by a server group, the
+    /// decisions are the global ones.
+    pub fn places(&self, uuid: &str) -> BTreeSet<(&str, &str)> {
+        let mut out = BTreeSet::new();
+        fn note<'a>(out: &mut BTreeSet<(&'a str, &'a str)>, data: &'a Data) {
+            let contexts = data.permissions.iter().map(|p| &p.context);
+            let contexts = contexts.chain(data.parents.iter().map(|p| &p.context));
+            for c in contexts.chain(data.meta.iter().map(|m| &m.context)) {
+                out.extend(c.iter().filter(|(k, _)| *k != crate::context::WORLD));
+            }
+        }
+        let mut stack: Vec<&str> = vec![&self.default_group];
+        if let Some(user) = self.users.get(uuid) {
+            note(&mut out, &user.data);
+            stack.extend(user.data.parents.iter().map(|p| p.group.as_str()));
+        }
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(g) = stack.pop() {
+            if seen.len() >= MAX_GROUPS || !seen.insert(g) {
+                continue;
+            }
+            if let Some(group) = self.groups.get(g) {
+                note(&mut out, &group.data);
+                stack.extend(group.data.parents.iter().map(|p| p.group.as_str()));
+            }
+        }
+        out
+    }
+
+    /// Whether the user can inherit one of `groups` anywhere, at any time
+    /// (also through a parent that names a group not created yet).
+    pub fn reaches(&self, uuid: &str, groups: &[&str]) -> bool {
+        let Some(user) = self.users.get(uuid) else { return false };
+        self.inherits(user.data.parents.iter().map(|p| p.group.as_str()).collect(), groups)
+    }
+
+    /// Whether one of `groups` is the default group or one it can inherit:
+    /// a change there can reach every user.
+    pub fn reaches_everyone(&self, groups: &[&str]) -> bool {
+        !groups.is_empty() && self.inherits(vec![&self.default_group], groups)
+    }
+
+    fn inherits<'a>(&'a self, mut stack: Vec<&'a str>, groups: &[&str]) -> bool {
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(g) = stack.pop() {
+            if groups.contains(&g) {
+                return true;
+            }
+            if seen.len() >= MAX_GROUPS || !seen.insert(g) {
+                continue;
+            }
+            if let Some(group) = self.groups.get(g) {
+                stack.extend(group.data.parents.iter().map(|p| p.group.as_str()));
+            }
+        }
+        false
     }
 
     pub fn generation(&self) -> u64 {
@@ -307,36 +463,47 @@ impl Perms {
     pub fn find_user(&self, name_or_uuid: &str) -> Option<KnownName> {
         if let Some(uuid) = pumbo_common::id::Uuid::parse(name_or_uuid) {
             let uuid = uuid.to_string();
-            let name = self
-                .users
-                .get(&uuid)
-                .map(|u| u.name.clone())
-                .filter(|n| !n.is_empty())
-                .or_else(|| self.names.values().find(|n| n.uuid == uuid).map(|n| n.name.clone()))
-                .unwrap_or_else(|| uuid.clone());
-            return Some(KnownName { uuid, name });
+            let name = self.users.get(&uuid).map(|u| u.name.clone()).filter(|n| !n.is_empty());
+            let known = self.name_key_of(&uuid).and_then(|k| self.names.get(k));
+            let online = known.is_some_and(|n| n.online);
+            let name = name.or_else(|| known.map(|n| n.name.clone())).unwrap_or_else(|| uuid.clone());
+            return Some(KnownName { uuid, name, online });
         }
         self.names.get(&pumbo_common::id::name_key(name_or_uuid)).cloned()
     }
 
-    /// Records a nickname seen at join. Returns true when the stored name index
-    /// changed (and should be saved).
-    pub fn seen(&mut self, uuid: &str, name: &str) -> bool {
+    /// The key in the name table of the name a UUID joined with last.
+    pub fn name_key_of(&self, uuid: &str) -> Option<&str> {
+        self.name_of.get(uuid).map(String::as_str).filter(|k| self.names.get(*k).is_some_and(|n| n.uuid == uuid))
+    }
+
+    /// Records a nickname seen at join (`online`: an account the host checked
+    /// with Mojang). Returns whether the stored name index changed (and should
+    /// be saved), and the UUID that had the name before when it holds data:
+    /// its groups and permissions stay there, which the platform logs.
+    pub fn seen(&mut self, uuid: &str, name: &str, online: bool) -> (bool, Option<String>) {
         let key = pumbo_common::id::name_key(name);
-        let entry = KnownName { uuid: uuid.to_string(), name: name.to_string() };
+        let entry = KnownName { uuid: uuid.to_string(), name: name.to_string(), online };
+        let previous = self.names.get(&key).map(|n| n.uuid.clone());
         let changed = self.names.get(&key) != Some(&entry);
         if changed {
             // a name now belongs to another account: drop the old mapping of this uuid
-            self.names.retain(|_, n| n.uuid != uuid);
+            if let Some(old) = self.name_of.remove(uuid)
+                && self.names.get(&old).is_some_and(|n| n.uuid == uuid)
+            {
+                self.names.remove(&old);
+            }
+            self.name_of.insert(uuid.to_string(), key.clone());
             self.names.insert(key, entry);
         }
+        let left = previous.filter(|p| p != uuid && self.users.get(p).is_some_and(|u| !u.data.is_empty()));
         if let Some(u) = self.users.get_mut(uuid)
             && u.name != name
         {
             u.name = name.to_string();
-            return true;
+            return (true, left);
         }
-        changed
+        (changed, left)
     }
 
     /// Users that have `group` as a direct parent (in any context).
@@ -357,42 +524,68 @@ impl Perms {
         self.tracks.values().filter(|t| t.groups.iter().any(|g| g == group)).collect()
     }
 
-    /// The earliest end time of any temporary node.
+    /// The earliest end time of any temporary node, kept until the data changes.
     pub fn next_expiry(&self) -> Option<u64> {
+        if let Some(kept) = self.memo.next_expiry.get() {
+            return kept;
+        }
         let g = self.groups.values().filter_map(|g| g.data.next_expiry());
         let u = self.users.values().filter_map(|u| u.data.next_expiry());
-        g.chain(u).min()
+        let next = g.chain(u).min();
+        self.memo.next_expiry.set(Some(next));
+        next
     }
 
     /// Whether any node uses the context key (`world`): if none does, a player
     /// changing worlds changes nothing.
     pub fn uses_context(&self, key: &str) -> bool {
-        self.groups.values().any(|g| g.data.uses_context(key)) || self.users.values().any(|u| u.data.uses_context(key))
+        let scan = || {
+            self.groups.values().any(|g| g.data.uses_context(key))
+                || self.users.values().any(|u| u.data.uses_context(key))
+        };
+        if key != crate::context::WORLD {
+            return scan();
+        }
+        let worlds = self.memo.worlds.get().unwrap_or_else(scan);
+        self.memo.worlds.set(Some(worlds));
+        worlds
     }
 
     /// Every permission node written anywhere (for platforms that have to set
-    /// nodes one by one).
-    pub fn all_nodes(&self) -> BTreeSet<String> {
-        let g = self.groups.values().flat_map(|g| g.data.permissions.iter());
-        let u = self.users.values().flat_map(|u| u.data.permissions.iter());
-        g.chain(u).map(|p| p.node.clone()).collect()
+    /// nodes one by one), kept until the data changes.
+    pub fn all_nodes(&self) -> &BTreeSet<String> {
+        self.memo.nodes.get_or_init(|| {
+            let g = self.groups.values().flat_map(|g| g.data.permissions.iter());
+            let u = self.users.values().flat_map(|u| u.data.permissions.iter());
+            g.chain(u).map(|p| p.node.clone()).collect()
+        })
     }
 
     // ----- deciding -----
 
     /// The cached decisions for a user at a place.
     pub fn effective(&mut self, uuid: &str, query: &Query, now: u64) -> &Effective {
-        let key = (uuid.to_string(), query.clone());
-        let generation = self.generation;
-        let stale = self.cache.get(&key).is_none_or(|e| e.generation != generation || now >= e.valid_until);
-        if stale {
-            if self.cache.len() >= MAX_CACHE {
-                self.cache.clear();
+        let fresh = self.memo.cache.get(uuid).and_then(|m| m.get(query)).is_some_and(|e| now < e.valid_until);
+        if !fresh {
+            if self.memo.cached >= MAX_CACHE {
+                (self.memo.cache, self.memo.cached) = (HashMap::new(), 0);
             }
             let e = self.compute(uuid, query, now);
-            self.cache.insert(key.clone(), e);
+            if self.memo.cache.entry(uuid.to_string()).or_default().insert(query.clone(), e).is_none() {
+                self.memo.cached = self.memo.cached.saturating_add(1);
+            }
         }
-        self.cache.entry(key).or_default()
+        self.cached(uuid, query)
+    }
+
+    /// [`Perms::effective`] and [`Perms::all_nodes`] at once.
+    pub fn effective_and_nodes(&mut self, uuid: &str, query: &Query, now: u64) -> (&Effective, &BTreeSet<String>) {
+        self.effective(uuid, query, now);
+        (self.cached(uuid, query), self.all_nodes())
+    }
+
+    fn cached(&self, uuid: &str, query: &Query) -> &Effective {
+        self.memo.cache.get(uuid).and_then(|m| m.get(query)).unwrap_or(&self.memo.nothing)
     }
 
     /// Decides a node for a user: `Some(value)` or undecided.
@@ -414,11 +607,11 @@ impl Perms {
     }
 
     fn inheritance_of(&self, data: &Data, query: &Query, now: u64) -> Vec<(String, usize)> {
-        let mut direct: Vec<&str> = applicable_parents(data, query, now)
-            .filter(|p| self.groups.contains_key(&p.group))
-            .map(|p| p.group.as_str())
-            .collect();
-        if direct.is_empty() && self.groups.contains_key(&self.default_group) {
+        let active = |p: &&ParentNode| self.groups.contains_key(&p.group);
+        let mut direct: Vec<&str> =
+            applicable_parents(data, query, now).filter(active).map(|p| p.group.as_str()).collect();
+        let global_parent = applicable_parents(data, query, now).filter(active).any(|p| p.context.is_global());
+        if !global_parent && self.groups.contains_key(&self.default_group) {
             direct.push(&self.default_group);
         }
         self.closure(&direct, query, now)
@@ -482,8 +675,22 @@ impl Perms {
             }
         }
 
-        // permissions: holders in order, on each holder the best node first
         let mut exact: HashMap<String, Decision> = HashMap::new();
+        // membership first: a `group.<name>` set by hand never hides it
+        for (g, _) in &groups {
+            let n = node::group_node(g);
+            exact.insert(
+                n.clone(),
+                Decision {
+                    value: true,
+                    node: n,
+                    source: Source::Group(g.clone()),
+                    context: Contexts::global(),
+                    expiry: None,
+                },
+            );
+        }
+        // permissions: holders in order, on each holder the best node first
         for (source, data) in &holders {
             let mut nodes: Vec<_> =
                 data.permissions.iter().filter(|p| alive(p.expiry, now) && p.context.applies(query)).collect();
@@ -504,16 +711,6 @@ impl Perms {
                     expiry: p.expiry,
                 });
             }
-        }
-        for (g, _) in &groups {
-            let n = node::group_node(g);
-            exact.entry(n.clone()).or_insert_with(|| Decision {
-                value: true,
-                node: n,
-                source: Source::Group(g.clone()),
-                context: Contexts::global(),
-                expiry: None,
-            });
         }
 
         // prefix and suffix: highest priority, then holder order, then context
@@ -553,7 +750,6 @@ impl Perms {
 
         let primary = self.primary_of(user_data, query, now);
         Effective {
-            generation: self.generation,
             valid_until,
             exact,
             groups: groups.into_iter().map(|(g, _)| g).collect(),
@@ -589,8 +785,9 @@ impl Perms {
             return Err(PermsError::GroupExists(name.to_string()));
         }
         self.groups.insert(name.to_string(), Group::new(name));
-        self.touch();
-        Ok(Dirty { groups: [name.to_string()].into(), ..Dirty::default() })
+        let dirty = Dirty { groups: [name.to_string()].into(), ..Dirty::default() };
+        self.touch(&dirty);
+        Ok(dirty)
     }
 
     /// Deletes a group and every reference to it (parents, tracks).
@@ -619,7 +816,7 @@ impl Perms {
                 dirty.tracks.insert(t.name.clone());
             }
         }
-        self.touch();
+        self.touch(&dirty);
         Ok(dirty)
     }
 
@@ -627,8 +824,9 @@ impl Perms {
     pub fn edit_group<R>(&mut self, name: &str, f: impl FnOnce(&mut Group) -> R) -> Result<(R, Dirty), PermsError> {
         let group = self.groups.get_mut(name).ok_or_else(|| PermsError::NoGroup(name.to_string()))?;
         let r = f(group);
-        self.touch();
-        Ok((r, Dirty { groups: [name.to_string()].into(), ..Dirty::default() }))
+        let dirty = Dirty { groups: [name.to_string()].into(), ..Dirty::default() };
+        self.touch(&dirty);
+        Ok((r, dirty))
     }
 
     /// Changes a user's data with `f`, creating the record when needed.
@@ -642,8 +840,9 @@ impl Perms {
             user.name = name.to_string();
         }
         let r = f(&mut user.data);
-        self.touch();
-        (r, Dirty { users: [uuid.to_string()].into(), ..Dirty::default() })
+        let dirty = Dirty { users: [uuid.to_string()].into(), ..Dirty::default() };
+        self.touch(&dirty);
+        (r, dirty)
     }
 
     /// Whether making `parent` a parent of `group` would close a loop.
@@ -717,7 +916,7 @@ impl Perms {
                 dirty.tracks.insert(t.name.clone());
             }
         }
-        self.touch();
+        self.touch(&dirty);
         Ok(dirty)
     }
 
@@ -729,14 +928,16 @@ impl Perms {
             return Err(PermsError::TrackExists(name.to_string()));
         }
         self.tracks.insert(name.to_string(), Track { name: name.to_string(), groups: Vec::new() });
-        self.touch();
-        Ok(Dirty { tracks: [name.to_string()].into(), ..Dirty::default() })
+        let dirty = Dirty { tracks: [name.to_string()].into(), ..Dirty::default() };
+        self.touch(&dirty);
+        Ok(dirty)
     }
 
     pub fn delete_track(&mut self, name: &str) -> Result<Dirty, PermsError> {
         self.tracks.remove(name).ok_or_else(|| PermsError::NoTrack(name.to_string()))?;
-        self.touch();
-        Ok(Dirty { deleted_tracks: [name.to_string()].into(), ..Dirty::default() })
+        let dirty = Dirty { deleted_tracks: [name.to_string()].into(), ..Dirty::default() };
+        self.touch(&dirty);
+        Ok(dirty)
     }
 
     /// Puts a group on a track at `position` (0-based; past the end appends).
@@ -750,8 +951,9 @@ impl Perms {
         }
         let at = position.unwrap_or(t.groups.len()).min(t.groups.len());
         t.groups.insert(at, group.to_string());
-        self.touch();
-        Ok(Dirty { tracks: [track.to_string()].into(), ..Dirty::default() })
+        let dirty = Dirty { tracks: [track.to_string()].into(), ..Dirty::default() };
+        self.touch(&dirty);
+        Ok(dirty)
     }
 
     pub fn track_remove(&mut self, track: &str, group: &str) -> Result<Dirty, PermsError> {
@@ -761,27 +963,31 @@ impl Perms {
         if t.groups.len() == before {
             return Err(PermsError::NoGroup(group.to_string()));
         }
-        self.touch();
-        Ok(Dirty { tracks: [track.to_string()].into(), ..Dirty::default() })
+        let dirty = Dirty { tracks: [track.to_string()].into(), ..Dirty::default() };
+        self.touch(&dirty);
+        Ok(dirty)
     }
 
     pub fn track_clear(&mut self, track: &str) -> Result<Dirty, PermsError> {
         let t = self.tracks.get_mut(track).ok_or_else(|| PermsError::NoTrack(track.to_string()))?;
         t.groups.clear();
-        self.touch();
-        Ok(Dirty { tracks: [track.to_string()].into(), ..Dirty::default() })
+        let dirty = Dirty { tracks: [track.to_string()].into(), ..Dirty::default() };
+        self.touch(&dirty);
+        Ok(dirty)
     }
 
     /// Moves a user one group up a track (in exactly these contexts). A user
-    /// not on the track gets its first group.
+    /// not on the track gets its first group, or the second one when the
+    /// first is the default group the user is already in.
     pub fn promote(
         &mut self,
         uuid: &str,
         name: &str,
         track: &str,
         context: &Contexts,
+        now: u64,
     ) -> Result<(Step, Dirty), PermsError> {
-        self.step(uuid, name, track, context, true)
+        self.step(uuid, name, track, context, true, now)
     }
 
     /// Moves a user one group down a track. The first group is the bottom: a
@@ -792,10 +998,13 @@ impl Perms {
         name: &str,
         track: &str,
         context: &Contexts,
+        now: u64,
     ) -> Result<(Step, Dirty), PermsError> {
-        self.step(uuid, name, track, context, false)
+        self.step(uuid, name, track, context, false, now)
     }
 
+    /// One rung along a track among the live parents; the new rung keeps the
+    /// end time of the old one (a 30-day `vip` gives a 30-day `mvp`).
     fn step(
         &mut self,
         uuid: &str,
@@ -803,16 +1012,33 @@ impl Perms {
         track: &str,
         context: &Contexts,
         up: bool,
+        now: u64,
     ) -> Result<(Step, Dirty), PermsError> {
         let t = self.tracks.get(track).ok_or_else(|| PermsError::NoTrack(track.to_string()))?;
         let ladder = t.groups.clone();
         let first = ladder.first().cloned().ok_or_else(|| PermsError::EmptyTrack(track.to_string()))?;
         let empty = Data::default();
         let data = self.users.get(uuid).map(|u| &u.data).unwrap_or(&empty);
-        let mut on: Vec<&String> =
-            ladder.iter().filter(|g| data.parents.iter().any(|p| &p.group == *g && &p.context == context)).collect();
+        let ends = |g: &str| -> Vec<Option<u64>> {
+            let live = data.parents.iter().filter(|p| p.group == g && &p.context == context && alive(p.expiry, now));
+            live.map(|p| p.expiry).collect()
+        };
+        let mut on: Vec<&String> = ladder.iter().filter(|g| !ends(g).is_empty()).collect();
         on.dedup();
+        // A permanent parent wins over a temporary one; of two temporary ones the later end.
+        let expiry = on.first().and_then(|g| {
+            let ends = ends(g);
+            if ends.contains(&None) { None } else { ends.into_iter().flatten().max() }
+        });
+        // The default group counts as the first rung for a user without an
+        // active parent that has no context (the rule of `default`).
+        let in_default =
+            first == self.default_group && !data.parents.iter().any(|p| alive(p.expiry, now) && p.context.is_global());
         let (from, to) = match on.as_slice() {
+            [] if up && in_default => match ladder.get(1) {
+                Some(next) => (Some(first), next.clone()),
+                None => return Err(PermsError::TrackEnd(first)),
+            },
             [] if up => (None, first),
             [] => return Err(PermsError::NotOnTrack),
             [current] => {
@@ -833,11 +1059,11 @@ impl Perms {
         let to_c = to.clone();
         let ((), dirty) = self.edit_user(uuid, name, |d| {
             if let Some(f) = &from_c {
-                d.remove_parent(f, context);
+                d.remove_parent(f, context, false);
             }
-            d.add_parent(ParentNode { group: to_c, context: context.clone(), expiry: None });
+            d.add_parent(ParentNode { group: to_c, context: context.clone(), expiry });
         });
-        Ok((Step { from, to: Some(to) }, dirty))
+        Ok((Step { from, to: Some(to), expiry }, dirty))
     }
 
     /// Removes expired nodes everywhere. Returns what changed.
@@ -854,7 +1080,7 @@ impl Perms {
             }
         }
         if !dirty.is_empty() {
-            self.touch();
+            self.touch(&dirty);
         }
         dirty
     }
@@ -870,4 +1096,29 @@ impl Perms {
 
 fn applicable_parents<'a>(data: &'a Data, query: &'a Query, now: u64) -> impl Iterator<Item = &'a ParentNode> + 'a {
     data.parents.iter().filter(move |p| alive(p.expiry, now) && p.context.applies(query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::PermNode;
+
+    const A: &str = "00000000-0000-0000-0000-0000000000a1";
+    const B: &str = "00000000-0000-0000-0000-0000000000b2";
+
+    #[test]
+    fn seen_warns_when_name_leaves_uuid_with_data() {
+        let mut p = Perms::new();
+        assert_eq!(p.seen(A, "Steve", true), (true, None));
+        // Without data nothing is left behind.
+        assert_eq!(p.seen(B, "Steve", false), (true, None));
+        assert_eq!(p.seen(A, "Steve", true), (true, None));
+        p.edit_user(A, "Steve", |d| {
+            d.set_permission(PermNode { node: "fly".into(), value: true, context: Contexts::global(), expiry: None })
+        });
+        assert_eq!(p.seen(B, "Steve", false), (true, Some(A.to_string())));
+        assert_eq!(p.find_user("steve").map(|k| (k.uuid, k.online)), Some((B.to_string(), false)));
+        // The same account again: no warning.
+        assert_eq!(p.seen(B, "Steve", false), (false, None));
+    }
 }

@@ -3,7 +3,7 @@
 
 use pumbo_common::config::{self, Check, Settings, Warning};
 use pumbo_common::lang::{Bundle, COMMON, Lang};
-use pumbo_perms_core::config::{CoreCfg, DefaultsCfg, LogCfg};
+use pumbo_perms_core::config::{CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
 use pumbo_perms_core::engine::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -30,22 +30,6 @@ pub struct Config {
     pub import: ImportCfg,
 }
 
-/// Taking over the proxy's `permissions.yml`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct ImportCfg {
-    /// Import `permissions.yml` at the first start.
-    pub enabled: bool,
-    /// Import it again whenever it changes (otherwise once).
-    pub follow: bool,
-}
-
-impl Default for ImportCfg {
-    fn default() -> Self {
-        Self { enabled: true, follow: false }
-    }
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self { language: "en".into(), log: LogCfg::default(), import: ImportCfg::default() }
@@ -53,10 +37,10 @@ impl Default for Config {
 }
 
 impl Config {
-    /// The core sections: places come from the player's server and the proxy
-    /// has no operator levels.
+    /// The core sections: places come from the player's server, and the proxy
+    /// has no operator levels and does not see worlds.
     pub fn core(&self) -> CoreCfg {
-        CoreCfg { defaults: DefaultsCfg { op_level: 0 }, log: self.log.clone(), ..CoreCfg::default() }
+        CoreCfg { defaults: DefaultsCfg { op_level: 0 }, log: self.log.clone(), worlds: false, ..CoreCfg::default() }
     }
 }
 
@@ -83,6 +67,14 @@ pub fn load_config(dir: &str) -> (Config, Vec<Warning>) {
     (cfg, w)
 }
 
+/// [`load_config`] at start: a `config.yml` that is not valid YAML gives way to
+/// the last good copy in the data folder; without one the plugin does not start.
+pub fn load_config_at_start(config_dir: &str, data_dir: &str) -> Result<(Config, Vec<Warning>), String> {
+    let (cfg, mut w) = config::load_with_last_good::<Config>(config_dir, data_dir)?;
+    w.extend(config::old_files(config_dir));
+    Ok((cfg, w))
+}
+
 /// The messages in `code`, with `lang/<code>.yml` from the config folder over
 /// the built-in ones.
 pub fn load_lang(dir: &str, code: &str) -> (Lang, Vec<Warning>) {
@@ -97,7 +89,13 @@ pub fn load_lang(dir: &str, code: &str) -> (Lang, Vec<Warning>) {
 /// `engine.server_groups`.
 pub fn provider_set(e: &mut Engine, uuid: &str, now: u64) -> Vec<(Option<String>, String, bool)> {
     let global = pumbo_perms_core::host::decisions(e, uuid, "", now);
-    let servers: Vec<String> = e.server_groups.keys().cloned().collect();
+    let servers: Vec<String> = {
+        let named = e.perms.places(uuid);
+        let here = |server: &str, groups: &[String]| {
+            named.contains(&("server", server)) || groups.iter().any(|g| named.contains(&("group", g.as_str())))
+        };
+        e.server_groups.iter().filter(|(s, g)| here(s, g)).map(|(s, _)| s.clone()).collect()
+    };
     let mut out: Vec<(Option<String>, String, bool)> = Vec::new();
     for server in servers {
         let here = pumbo_perms_core::host::decisions(e, uuid, &server, now);

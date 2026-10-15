@@ -5,56 +5,51 @@
 //! the first pass it asks the bridge to release the attachments and writes
 //! them alone.
 //!
-//! When the proxy's PumboPerms rules the network (the bridge's copy of its
-//! export says `proxy-rules`), this plugin steps back instead: it hands its
-//! attachments to PumboBridge (`take-permissions`), which writes the proxy's
-//! decisions, and takes over again when the proxy has no PumboPerms any more
-//! (PumboPerms spec §16).
+//! When the proxy's PumboPerms rules the network (PumboBridge's `perms-mode`
+//! says `proxy-rules` for the export of its current session), this plugin
+//! steps back instead: it hands its attachments to PumboBridge
+//! (`take-permissions`), which writes the proxy's decisions, and takes over
+//! again when the proxy has no PumboPerms any more (PumboPerms spec §16). An
+//! export from disk or from before a reconnect decides nothing; while a
+//! connected bridge has none of this session, the first pass waits
+//! ([`Rt::hold`]).
 //!
-//! What each source added is kept in `imports/<source>.json` (its ledger),
-//! so a later import replaces only that and `/pp import undo` takes it back.
+//! What each source added is kept in the database (its ledger), so a later
+//! import changes only that and `/pp import undo` takes it back.
 //! Every call to another plugin happens outside the state (`ipc` may run
 //! that plugin's handler inside it).
 
 use pumbo_common::clock::now_ms;
+use pumbo_common::text::Args;
 use pumbo_perms_core::command::{self, Outcome, SourceMode, Who};
 use pumbo_perms_core::export::{self, Snapshot};
-use pumbo_perms_core::merge::{self, Ledger};
+use pumbo_perms_core::{merge, ui};
 
 use super::api::{self, Server};
 use super::push;
-use super::state::{self, Rt};
+use super::state::{self, Answer, Bridge, Rt, Step};
 
 /// The bridge plugin on Pumpkin.
-const BRIDGE: &str = "pumbobridge";
-/// How long a "pending" source is asked again after the start.
-const WAIT_MS: u64 = 120_000;
+pub const BRIDGE: &str = "pumbobridge";
 
-/// One source's answer to `{"op":"export-permissions"}`.
-enum Answer {
-    Data(String, Snapshot),
-    Pending,
-    /// No such plugin (or it does not export).
-    Absent,
-    Bad(String),
+/// The answer of another plugin, `None` when it is not there or failed.
+pub fn send(plugin: &str, msg: &[u8]) -> Option<Vec<u8>> {
+    crate::papi::ipc::send_ipc_message(plugin, msg).ok()?.ok()
 }
 
 fn ask(plugin: &str) -> Answer {
-    let Ok(reply) = crate::papi::ipc::send_ipc_message(plugin, br#"{"op":"export-permissions"}"#) else {
-        return Answer::Absent;
-    };
-    let Ok(bytes) = reply else { return Answer::Absent };
-    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return Answer::Bad("not JSON".into());
-    };
-    if v.get("ok") != Some(&serde_json::Value::Bool(true)) {
-        return if v.get("pending") == Some(&serde_json::Value::Bool(true)) { Answer::Pending } else { Answer::Absent };
-    }
-    let fingerprint = v.get("fingerprint").and_then(|f| f.as_str()).unwrap_or_default().to_string();
-    let data = v.get("data").map(|d| d.to_string()).unwrap_or_default();
-    match export::parse(&data) {
-        Ok(snap) => Answer::Data(fingerprint, snap),
-        Err(e) => Answer::Bad(e),
+    state::export_answer(send(plugin, br#"{"op":"export-permissions"}"#).as_deref()).1
+}
+
+/// PumboBridge's `perms-mode`, or what an older one exports.
+fn bridge() -> Bridge {
+    let Some(reply) = send(BRIDGE, br#"{"op":"perms-mode"}"#) else { return Bridge::Absent };
+    match state::perms_mode(&reply) {
+        Some(m) => Bridge::Mode(m),
+        None => {
+            let (flag, answer) = state::export_answer(send(BRIDGE, br#"{"op":"export-permissions"}"#).as_deref());
+            Bridge::Old(flag, answer)
+        }
     }
 }
 
@@ -94,33 +89,10 @@ fn attachments(server: &Server) -> Option<(String, Snapshot)> {
         tracks: Vec::new(),
         by_name: Vec::new(),
         proxy_rules: false,
+        fixed: Vec::new(),
     };
     let text = serde_json::to_string(&snap).unwrap_or_default();
     Some((merge::fingerprint(&text), snap))
-}
-
-fn ledger_path(dir: &str, source: &str) -> String {
-    format!("{dir}/imports/{source}.json")
-}
-
-fn load_ledger(dir: &str, source: &str) -> Ledger {
-    std::fs::read_to_string(ledger_path(dir, source))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
-}
-
-fn save_ledger(rt: &mut Rt, source: &str, ledger: &Ledger) {
-    let path = ledger_path(&rt.dir, source);
-    let result = if ledger.entries.is_empty() && ledger.fingerprint.is_empty() {
-        std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
-    } else {
-        let _ = std::fs::create_dir_all(format!("{}/imports", rt.dir));
-        std::fs::write(&path, serde_json::to_string_pretty(ledger).unwrap_or_default())
-    };
-    if let Err(e) = result {
-        rt.warn(format!("PumboPerms: cannot save {path}: {e}"));
-    }
 }
 
 /// The plugin asked for a source name (`proxy` = PumboBridge).
@@ -143,13 +115,12 @@ fn fetch(server: &Server, source: &str) -> Result<(String, Snapshot), String> {
 /// `/pp import run|preview|undo <source>` (runs inside the state: `ipc`
 /// into another plugin cannot come back here, the state is busy then).
 pub fn command(rt: &mut Rt, server: &Server, who: &Who, source: &str, mode: SourceMode, now: u64) -> Outcome {
-    let data = if mode == SourceMode::Undo { Err(String::new()) } else { fetch(server, source) };
-    let ledger = load_ledger(&rt.dir, source);
-    let (out, new) = command::import_source(&mut rt.engine, who, source, data, &ledger, mode, now);
-    if let Some(l) = new {
-        save_ledger(rt, source, &l);
+    if source == "proxy" && mode != SourceMode::Undo && state::passive() {
+        // The bridge holds only the flag that the proxy rules: nothing to import.
+        return Outcome { reply: ui::warn(rt.lang(), "import-proxy-rules", &Args::new()), ..Outcome::default() };
     }
-    out
+    let data = if mode == SourceMode::Undo { Err(String::new()) } else { fetch(server, source) };
+    command::import_source(&mut rt.engine, who, source, data, mode, now)
 }
 
 /// The proxy's PumboPerms rules (`on`) or not any more: steps back or takes
@@ -161,11 +132,7 @@ fn proxy_rules(on: bool) {
     if on {
         // Everything this plugin set goes to the bridge, which unsets it
         // (offline players at their join) and writes the proxy's decisions.
-        let nodes: std::collections::BTreeMap<String, Vec<String>> =
-            state::with(|rt| rt.pushed.drain().map(|(uuid, nodes)| (uuid, nodes.into_keys().collect())).collect())
-                .unwrap_or_default();
-        let msg = serde_json::json!({"op": "take-permissions", "nodes": nodes}).to_string();
-        let taken = crate::papi::ipc::send_ipc_message(BRIDGE, msg.as_bytes()).is_ok();
+        let taken = take();
         api::info(&format!(
             "PumboPerms: the proxy's PumboPerms rules this network: this plugin stepped back{}; set ranks with /pp on the proxy",
             if taken { ", PumboBridge writes the permissions" } else { "" }
@@ -179,41 +146,79 @@ fn proxy_rules(on: bool) {
     }
 }
 
-/// Every 10 s from the first tick: whether the proxy's PumboPerms rules, the
-/// first import pass, then (with `import.follow`) new versions of the sources.
+/// Hands what this plugin set to PumboBridge, which takes it off; whether the
+/// bridge took it.
+fn take() -> bool {
+    let nodes = state::with(Rt::hand_over).unwrap_or_default();
+    let msg = serde_json::json!({"op": "take-permissions", "nodes": nodes}).to_string();
+    send(BRIDGE, msg.as_bytes()).is_some_and(|r| {
+        serde_json::from_slice::<serde_json::Value>(&r).ok().and_then(|v| v.get("ok")?.as_bool()) == Some(true)
+    })
+}
+
+/// Every [`state::PASS_MS`] from the first tick (every run while the first
+/// pass waits for the proxy): whether the proxy's PumboPerms rules, the first
+/// import pass, then (with `import.follow`) new versions of the sources.
 pub fn tick(server: &Server) {
     let now = now_ms();
-    let mut bridge = Some(ask(BRIDGE));
-    if let Some(Answer::Data(_, snap)) = &bridge {
-        proxy_rules(snap.proxy_rules);
-    }
-    if state::passive() {
+    let due = state::with(|rt| {
+        rt.refresh_lock(now);
+        let dir = rt.dir.clone();
+        let plans = rt.retry_database(now, |e| super::open_database(&dir, e.cfg.clone(), e.lang.clone(), now));
+        (plans, rt.resend(), rt.pass_due(now))
+    });
+    state::flush_logs();
+    let Some((plans, resend, due)) = due else { return };
+    push::apply_plans(server, None, plans, resend);
+    push::resend_due(server);
+    if !due {
         return;
     }
-    let Some((cfg, dir, ready, waiting_until)) =
-        state::with(|rt| (rt.cfg.import.clone(), rt.dir.clone(), rt.ready, rt.waiting_until))
-    else {
+    let bridge = bridge();
+    // The mode in this answer is from before a switch below.
+    let was_passive = state::passive();
+    if let Some(on) = bridge.proxy_rules() {
+        proxy_rules(on);
+    }
+    if let Bridge::Mode(m) = &bridge
+        && m.mode == "local"
+        && was_passive
+        && state::passive()
+        && take()
+    {
+        api::info("PumboPerms: PumboBridge had stopped writing the permissions; it writes them again");
+    }
+    let Some((cfg, attachments_imported, ready, step, ledger)) = state::with(|rt| {
+        let follow = rt.cfg.import.follow;
+        let step = if rt.hold(&bridge, now) {
+            Step::Wait
+        } else {
+            state::decide_import(state::passive(), rt.ready, follow, rt.waiting_until, now)
+        };
+        let ledger = |s: &str| rt.engine.ledger(s).unwrap_or_default();
+        let attachments_imported = ledger("attachments").at != 0;
+        (rt.cfg.import.clone(), attachments_imported, rt.ready, step, ledger("proxy").fingerprint)
+    }) else {
         return;
     };
-    if ready && !cfg.follow {
-        match waiting_until {
-            Some(t) if now < t => {}
-            Some(_) => {
-                state::with(|rt| {
-                    rt.waiting_until = None;
-                    rt.warn("PumboPerms: the proxy's permission table did not come within 2 minutes; run /pp import run proxy once the proxy is connected".into());
-                });
-                state::flush_logs();
-                return;
-            }
-            None => return,
+    state::flush_logs();
+    match step {
+        Step::Wait => return,
+        Step::GiveUp => {
+            state::with(|rt| {
+                rt.waiting_until = None;
+                rt.warn("PumboPerms: the proxy's permission table did not come within 2 minutes; run /pp import run proxy once the proxy is connected".into());
+            });
+            state::flush_logs();
+            return;
         }
+        Step::Ask => {}
     }
     let mut answers = Vec::new();
     if cfg.enabled {
         let sources = std::iter::once("proxy".to_string()).chain(cfg.plugins.iter().cloned());
         for source in sources {
-            let answer = match bridge.take().filter(|_| source == "proxy") {
+            let answer = match bridge.proxy_source(&ledger).filter(|_| source == "proxy") {
                 Some(a) => a,
                 None => ask(plugin_of(&source)),
             };
@@ -222,67 +227,19 @@ pub fn tick(server: &Server) {
     }
     let pending = answers.iter().any(|(_, a)| matches!(a, Answer::Pending));
     let any_data = answers.iter().any(|(_, a)| matches!(a, Answer::Data(..)));
-    let fallback = if cfg.enabled && !ready && !any_data && !pending && load_ledger(&dir, "attachments").at == 0 {
+    let fallback = if cfg.enabled && !ready && !any_data && !pending && !attachments_imported {
         attachments(server)
     } else {
         None
     };
-    let result = state::with(|rt| {
-        let mut changed = false;
-        let who = Who::console();
-        let mut runs: Vec<(String, String, Snapshot)> = Vec::new();
-        for (source, answer) in answers {
-            match answer {
-                Answer::Data(f, s) => runs.push((source, f, s)),
-                Answer::Bad(e) => rt.warn(format!("PumboPerms: cannot read permissions of {source}: {e}")),
-                Answer::Pending | Answer::Absent => {}
-            }
-        }
-        if let Some((f, s)) = fallback {
-            runs.push(("attachments".into(), f, s));
-        }
-        for (source, fingerprint, snap) in runs {
-            let ledger = load_ledger(&rt.dir, &source);
-            // Once per source unless `follow` (a ledger means it was imported).
-            if ledger.at != 0 && !cfg.follow {
-                continue;
-            }
-            let (out, new) = command::import_source(
-                &mut rt.engine,
-                &who,
-                &source,
-                Ok((fingerprint, snap)),
-                &ledger,
-                SourceMode::Run,
-                now,
-            );
-            if let Some(l) = new {
-                save_ledger(rt, &source, &l);
-                changed = true;
-                rt.logs.push((false, out.reply.plain()));
-            }
-        }
-        if pending && !rt.ready {
-            rt.waiting_until = Some(now + WAIT_MS);
-        } else if !pending {
-            rt.waiting_until = None;
-        }
-        let first = !rt.ready;
-        rt.ready = true;
-        if changed || first {
-            rt.refresh_catalog();
-        }
-        let plans = if changed || first { rt.plan_all(now) } else { Vec::new() };
-        (first, plans, rt.resend())
-    });
+    let result = state::with(|rt| rt.import_pass(answers, fallback, now));
     state::flush_logs();
     let Some((first, plans, resend)) = result else { return };
     if first {
         // The bridge (if any) takes its attachments back before ours go on.
-        let released = crate::papi::ipc::send_ipc_message(BRIDGE, br#"{"op":"release-permissions"}"#).is_ok();
-        if released {
+        if send(BRIDGE, br#"{"op":"release-permissions"}"#).is_some() {
             api::info("PumboPerms: took over the permissions from PumboBridge");
         }
     }
-    push::apply_all(server, plans, resend);
+    push::apply_plans(server, None, plans, resend);
 }

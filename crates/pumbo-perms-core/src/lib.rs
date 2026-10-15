@@ -9,6 +9,7 @@
 //! - [`engine`]: the database, store, config and messages together
 //! - [`command`]: the `/pp` command
 //! - [`export`]: JSON export and import
+//! - [`files`]: export files and the import of one, for every platform
 //! - [`ipc`]: questions from other plugins (JSON)
 //! - [`host`]: setting decisions on a host that only stores exact nodes
 //! - [`config`]: the `context`, `defaults` and `log` sections
@@ -17,11 +18,51 @@
 //! Time comes in as `now_ms` arguments. The platform layer asks [`perms::Perms`]
 //! for decisions and runs the commands; it never decides anything itself.
 
+// Panics trap the host and stdout is lost; these stay errors outside tests.
+#![deny(
+    clippy::string_slice,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::await_holding_lock,
+    clippy::await_holding_refcell_ref,
+    clippy::integer_division,
+    clippy::modulo_arithmetic,
+    clippy::unchecked_time_subtraction,
+    clippy::get_unwrap,
+    clippy::exit,
+    clippy::large_stack_arrays,
+    clippy::large_stack_frames,
+    clippy::unwrap_in_result,
+    clippy::panic_in_result_fn,
+    clippy::significant_drop_in_scrutinee
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::string_slice,
+        clippy::print_stdout,
+        clippy::print_stderr,
+        clippy::await_holding_lock,
+        clippy::await_holding_refcell_ref,
+        clippy::integer_division,
+        clippy::modulo_arithmetic,
+        clippy::unchecked_time_subtraction,
+        clippy::get_unwrap,
+        clippy::exit,
+        clippy::large_stack_arrays,
+        clippy::large_stack_frames,
+        clippy::unwrap_in_result,
+        clippy::panic_in_result_fn,
+        clippy::significant_drop_in_scrutinee
+    )
+)]
+
 pub mod command;
 pub mod config;
 pub mod context;
 pub mod engine;
 pub mod export;
+pub mod files;
 pub mod host;
 pub mod ipc;
 pub mod merge;
@@ -29,6 +70,8 @@ pub mod model;
 pub mod node;
 pub mod perms;
 pub mod store;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod ui;
 
 use pumbo_common::lang::Bundle;
@@ -39,5 +82,7 @@ pub const LANG: Bundle =
 
 #[cfg(test)]
 mod command_tests;
+#[cfg(test)]
+mod properties;
 #[cfg(test)]
 mod tests;
