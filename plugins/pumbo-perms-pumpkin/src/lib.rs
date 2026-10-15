@@ -6,11 +6,52 @@
 //! `/pumboperms` (`/pp`) command and, when enabled, answers Pumpkin's
 //! permission check event directly.
 //!
-//! [`config`] is plain Rust and tested natively (the node catalog is
-//! `pumbo_common::pumpkin`, shared with PumboBridge); the plugin
+//! [`config`] and [`state`] are plain Rust and tested natively (the node
+//! catalog is `pumbo_common::pumpkin`, shared with PumboBridge); the plugin
 //! itself ([`plugin`]) only exists in the WebAssembly build.
 
+// Panics trap the host and stdout is lost; these stay errors outside tests.
+#![deny(
+    clippy::string_slice,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::await_holding_lock,
+    clippy::await_holding_refcell_ref,
+    clippy::integer_division,
+    clippy::modulo_arithmetic,
+    clippy::unchecked_time_subtraction,
+    clippy::get_unwrap,
+    clippy::exit,
+    clippy::large_stack_arrays,
+    clippy::large_stack_frames,
+    clippy::unwrap_in_result,
+    clippy::panic_in_result_fn,
+    clippy::significant_drop_in_scrutinee
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::string_slice,
+        clippy::print_stdout,
+        clippy::print_stderr,
+        clippy::await_holding_lock,
+        clippy::await_holding_refcell_ref,
+        clippy::integer_division,
+        clippy::modulo_arithmetic,
+        clippy::unchecked_time_subtraction,
+        clippy::get_unwrap,
+        clippy::exit,
+        clippy::large_stack_arrays,
+        clippy::large_stack_frames,
+        clippy::unwrap_in_result,
+        clippy::panic_in_result_fn,
+        clippy::significant_drop_in_scrutinee
+    )
+)]
+
 pub mod config;
+pub mod state;
+pub mod suggest;
 
 use pumbo_common::lang::Bundle;
 
@@ -25,9 +66,6 @@ pub const BUNDLES: [Bundle; 3] = [pumbo_common::lang::COMMON, pumbo_perms_core::
 
 /// Name of the plugin on Pumpkin; also the namespace of its permission nodes.
 pub const PLUGIN_NAME: &str = "pumboperms";
-
-/// Host node that decides whether a player sees `/pp` at all.
-pub const COMMAND_NODE: &str = "pumboperms:command";
 
 #[cfg(all(target_arch = "wasm32", feature = "mc263", feature = "mc262"))]
 compile_error!("enable only one of the features `mc263` and `mc262`");

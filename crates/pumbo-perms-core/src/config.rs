@@ -1,4 +1,4 @@
-//! The `context`, `defaults` and `log` sections of `config.yml`.
+//! The `context`, `defaults`, `log` and `import` sections of `config.yml`.
 
 use pumbo_common::config::Check;
 use serde::{Deserialize, Serialize};
@@ -20,9 +20,9 @@ pub struct ContextCfg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct DefaultsCfg {
-    /// Operators with at least this level get every `pumbo.*` node that no
-    /// group or user decides (0: off). Other nodes keep the defaults of the
-    /// platform.
+    /// Operators with at least this level get every `pumbo.perms.*` node that
+    /// no group or user decides (0: off). Other nodes keep the defaults of the
+    /// platform, where each plugin registers its own.
     pub op_level: u8,
 }
 
@@ -47,13 +47,58 @@ impl Default for LogCfg {
     }
 }
 
+/// Taking over other permission sources: PumboProx's `permissions.yml`
+/// (`file`), on Pumpkin the proxy's table through PumboBridge, other plugins
+/// and the attachments of other plugins.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ImportCfg {
+    /// Import the sources at the first start.
+    pub enabled: bool,
+    /// Import a source again whenever it changes (otherwise once).
+    pub follow: bool,
+    /// Other plugins that answer `{"op":"export-permissions"}` (Pumpkin only).
+    pub plugins: Vec<String>,
+}
+
+impl Default for ImportCfg {
+    fn default() -> Self {
+        Self { enabled: true, follow: false, plugins: Vec::new() }
+    }
+}
+
 /// The sections of the core, put into the platform's config struct.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct CoreCfg {
     pub context: ContextCfg,
     pub defaults: DefaultsCfg,
     pub log: LogCfg,
+    /// Whether the platform sees worlds (`world=`); not in the file, the
+    /// proxy sets it to false.
+    #[serde(skip, default = "yes")]
+    pub worlds: bool,
+    /// Whether the platform knows which accounts Mojang checked, so that an
+    /// import may bind a nickname to one (PumboProx); not in the file,
+    /// Pumpkin sets it to false.
+    #[serde(skip, default = "yes")]
+    pub names_checked: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for CoreCfg {
+    fn default() -> Self {
+        Self {
+            context: ContextCfg::default(),
+            defaults: DefaultsCfg::default(),
+            log: LogCfg::default(),
+            worlds: true,
+            names_checked: true,
+        }
+    }
 }
 
 impl CoreCfg {
