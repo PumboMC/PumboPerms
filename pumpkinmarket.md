@@ -4,7 +4,7 @@ Project is 100% open source GPL 3.0  - [PumboPerms](https://github.com/PumboMC/P
 No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but is strongly modeled on, that why we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.  
 
 ### Features?
-I think all whats you are familiar with   
+all whats you are familiar with - rest on gh
 
 ## ***No restart or reload needed in any version***
 
