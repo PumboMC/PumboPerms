@@ -374,6 +374,7 @@ impl Rt {
     /// the whole catalog again.
     pub fn leave(&mut self, uuid: &str, now: u64) -> (Vec<Op>, Vec<Plan>) {
         self.online.remove(uuid);
+        self.engine.gone(uuid);
         self.hidden.remove(uuid);
         self.resent.remove(uuid);
         self.resend_waiting.remove(uuid);
@@ -845,6 +846,8 @@ mod tests {
     use pumbo_perms_core::engine::Engine;
 
     use super::*;
+
+    mod players;
 
     const U: &str = "00000000-0000-0000-0000-000000000001";
 
