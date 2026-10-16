@@ -70,3 +70,63 @@ fn opens_database_from_0_1_2_beta() {
     drop(again);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const STEVE: &str = "11111111-1111-4111-8111-111111111111";
+const ALEX: &str = "22222222-2222-4222-8222-222222222222";
+const NOTCH: &str = "33333333-3333-4333-8333-333333333333";
+const RENAMED: &str = "44444444-4444-4444-8444-444444444444";
+const FIRST: &str = "55555555-5555-4555-8555-555555555555";
+const SECOND: &str = "66666666-6666-4666-8666-666666666666";
+
+/// A database written by PumboPerms 1.0.0 (schema 2, names only in
+/// `perms_names`) opens in this build. `fixtures/perms-1.0.0.redb` was filled
+/// through `Engine::seen` and `/pp` as the console: joins of `Steve` (online
+/// account), `Alex` (offline), `Notch` (online, no data), `OldName` and
+/// `Shared` (offline); groups `vip` (weight 10, prefix `&6[VIP] `) and
+/// `admin` (weight 100, `*`), track `ranks`; `Steve` in `vip` with meta
+/// `color`, `Alex` with `fly`, `OldName` in `admin`, `Shared` in `vip`; then
+/// `OldName` joined as `NewName`, another account took `Shared`, and an
+/// import of `file` left `Pending1` waiting by name.
+#[test]
+fn opens_database_from_1_0_0() {
+    let dir = std::env::temp_dir().join(format!("pumbo-perms-upgrade-1-0-0-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("perms.redb");
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/perms-1.0.0.redb"), &path).unwrap();
+
+    let store = PermsStore::new(Store::open(&path).unwrap()).unwrap();
+    assert_eq!(store.schema().unwrap(), SCHEMA);
+    let mut e = Engine::new(Ok(store), CoreCfg::default(), Lang::load(&[COMMON], "en", None).0);
+    assert_eq!(e.broken, None);
+    assert_eq!(e.migrate_ledgers(&dir.join("imports")), None, "nothing to migrate");
+
+    let p = &mut e.perms;
+    let vip = p.group("vip").expect("vip");
+    assert_eq!(vip.weight, 10);
+    assert!(vip.data.meta.iter().any(|x| x.kind == MetaKind::Prefix && x.priority == 10 && x.value == "&6[VIP] "));
+    assert!(p.group("admin").expect("admin").data.permissions.iter().any(|n| n.node == "*" && n.value));
+    assert_eq!(p.track("ranks").expect("ranks").groups, vec!["vip".to_string(), "admin".to_string()]);
+    let here = Query::default();
+    assert_eq!(p.check(STEVE, "group.vip", &here, 0), Some(true));
+    assert!(p.user(STEVE).unwrap().data.meta.iter().any(|x| x.key == "color" && x.value == "gold"));
+    assert_eq!(p.check(ALEX, "fly", &here, 0), Some(true));
+    assert_eq!(p.check(RENAMED, "anything", &here, 0), Some(true));
+    assert_eq!(p.user(RENAMED).unwrap().name, "OldName", "the record keeps the name of its last change");
+    assert_eq!(p.check(FIRST, "group.vip", &here, 0), Some(true));
+
+    let by_name = |p: &pumbo_perms_core::perms::Perms, name: &str| p.find_user(name).map(|k| (k.uuid, k.online));
+    assert_eq!(by_name(p, "steve"), Some((STEVE.to_string(), true)));
+    assert_eq!(by_name(p, "ALEX"), Some((ALEX.to_string(), false)));
+    assert_eq!(by_name(p, "Notch"), Some((NOTCH.to_string(), true)));
+    assert_eq!(by_name(p, "newname"), Some((RENAMED.to_string(), true)));
+    assert_eq!(by_name(p, "oldname"), None);
+    assert_eq!(by_name(p, "shared"), Some((SECOND.to_string(), true)));
+
+    assert_eq!(e.ledger("file").unwrap().pending.len(), 1);
+    let (log, total) = e.store().unwrap().log_page(1, 20).unwrap();
+    assert_eq!(total, 15, "{log:?}");
+    assert_eq!(log[1].action, "parent add vip");
+    drop(e);
+    let _ = std::fs::remove_dir_all(&dir);
+}
