@@ -74,7 +74,7 @@ pub fn info(e: &mut Engine, uuid: &str, q: &Query, now: u64) -> Option<Info> {
     let (rank, prefix, suffix) = (eff.primary.clone(), eff.prefix.clone(), eff.suffix.clone());
     let (groups, meta) = (eff.groups.clone(), eff.meta.clone());
     Some(Info {
-        name: e.perms.find_user(&uuid).map(|k| k.name).unwrap_or_default(),
+        name: e.find_user(&uuid).map(|k| k.name).unwrap_or_default(),
         rank_display: e.perms.display_name(&rank),
         rank,
         prefix: prefix.unwrap_or_default(),

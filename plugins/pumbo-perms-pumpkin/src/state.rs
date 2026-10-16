@@ -193,6 +193,10 @@ impl Rt {
                 self.lock = Some(lock);
                 self.lock_refreshed = now;
                 self.engine = engine;
+                for (uuid, o) in &self.online {
+                    // As at a join; a name that is not saved is saved at the next one.
+                    let _ = self.engine.seen(uuid, &o.name, false);
+                }
                 self.stored = None;
                 if self.engine.broken.is_none() {
                     self.logs.push((false, "PumboPerms: the database is open now".into()));
@@ -374,6 +378,7 @@ impl Rt {
     /// the whole catalog again.
     pub fn leave(&mut self, uuid: &str, now: u64) -> (Vec<Op>, Vec<Plan>) {
         self.online.remove(uuid);
+        self.engine.gone(uuid);
         self.hidden.remove(uuid);
         self.resent.remove(uuid);
         self.resend_waiting.remove(uuid);
@@ -845,6 +850,8 @@ mod tests {
     use pumbo_perms_core::engine::Engine;
 
     use super::*;
+
+    mod players;
 
     const U: &str = "00000000-0000-0000-0000-000000000001";
 
