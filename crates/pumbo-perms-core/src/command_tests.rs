@@ -1331,8 +1331,8 @@ fn help_and_usage_take_the_perms_yellow() {
     assert_eq!((user[0].text.as_str(), user[0].style.color), ("user ", Some(style::accent::PERMS)));
     assert_eq!(user[1].style.color, Some(style::ARGUMENT));
     assert_eq!(color_of(&help, "[page]"), Some(style::OPTIONAL));
-    let usage = command::run(&mut e, &Who::console(), &split_args("user"), &env(0)).reply;
-    assert_eq!(color_of(&usage, "/pp user"), Some(style::accent::PERMS), "{:?}", usage.lines[0].segments);
+    let usage = command::run(&mut e, &Who::console(), &split_args("creategroup"), &env(0)).reply;
+    assert_eq!(color_of(&usage, "/pp creategroup"), Some(style::accent::PERMS), "{:?}", usage.lines[0].segments);
     let unknown = command::run(&mut e, &Who::console(), &split_args("foo"), &env(0)).reply;
     assert_eq!(color_of(&unknown, "/pp help"), Some(style::accent::PERMS), "{:?}", unknown.lines[0].segments);
 }
@@ -1422,6 +1422,32 @@ fn player_help_is_grouped_like_luckperms() {
     let alex = Who::player("Alex", ALEX, 0, "world");
     let limited = show(&mut e, &alex, "user Alex").plain();
     assert!(limited.contains("permission ...") && !limited.contains("meta ...") && !limited.contains("parent ..."));
+}
+
+#[test]
+fn user_group_and_track_without_a_name_list_their_commands() {
+    let mut e = engine();
+    let op = Who::player("Steve", STEVE, 4, "world");
+    let show = |e: &mut Engine, who: &Who, line: &str| command::run(e, who, &split_args(line), &env(0)).reply;
+    let user = show(&mut e, &op, "user");
+    let plain = user.plain();
+    assert!(plain.contains("/pp user <player>"), "{plain}");
+    for part in ["info [page]", "permission ...", "parent ...", "meta ...", "promote <track>"] {
+        assert!(plain.contains(part), "{part}: {plain}");
+    }
+    // A click on a line types the command up to the player.
+    for row in ["> info [page]", "> permission ..."] {
+        let line = user.lines.iter().find(|l| l.plain().contains(row)).expect(row);
+        assert!(line.segments.iter().any(|s| s.click == Some(Click::Suggest("/pp user ".into()))), "{line:?}");
+    }
+    let group = show(&mut e, &op, "group").plain();
+    assert!(group.contains("/pp group <name>") && group.contains("setweight <weight>"), "{group}");
+    let track = show(&mut e, &op, "track").plain();
+    assert!(track.contains("/pp track <name>") && track.contains("append <group>"), "{track}");
+    // The console gets the plain list, a player without the rights the refusal.
+    assert!(console(&mut e, "user").contains("/pp user <player> info [page]"));
+    let alex = Who::player("Alex", ALEX, 0, "world");
+    assert!(!show(&mut e, &alex, "user").plain().contains("info [page]"));
 }
 
 #[test]

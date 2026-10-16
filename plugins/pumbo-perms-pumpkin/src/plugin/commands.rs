@@ -61,9 +61,10 @@ pub fn node(n: &Node, path: &mut Vec<Word>) -> CommandNode {
     for child in &n.children {
         built = built.then(node(child, path));
     }
-    if n.executes {
-        built = built.execute(Pp { path: path.clone() });
-    }
+    // Every node runs, also before a command is complete: PumboPerms answers
+    // with the usage or the help, as on PumboProx and in LuckPerms, where
+    // Pumpkin would only say the command is unknown or incomplete.
+    built = built.execute(Pp { path: path.clone() });
     path.pop();
     built
 }
