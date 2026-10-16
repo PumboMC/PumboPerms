@@ -67,9 +67,7 @@ jobs:
           # Most Pumpkin builds land in dist/ of the workspace, some in their own folder.
           src=dist
           if [ -d plugins/pumbo-perms-pumpkin/dist ]; then src=plugins/pumbo-perms-pumpkin/dist; fi
-          for mc in 26.3 26.2; do
-            cp "$src/PumboPerms-$mc.wasm" "$out/PumboPerms-Pumpkin-$mc-$v.wasm"
-          done
+          cp "$src/PumboPerms-26.3.wasm" "$out/PumboPerms-Pumpkin-26.3-$v.wasm"
           cd "$out"
           sha256sum -- *.wasm > SHA256SUMS
           cat SHA256SUMS
