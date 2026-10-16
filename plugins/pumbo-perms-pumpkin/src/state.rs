@@ -193,6 +193,10 @@ impl Rt {
                 self.lock = Some(lock);
                 self.lock_refreshed = now;
                 self.engine = engine;
+                for (uuid, o) in &self.online {
+                    // As at a join; a name that is not saved is saved at the next one.
+                    let _ = self.engine.seen(uuid, &o.name, false);
+                }
                 self.stored = None;
                 if self.engine.broken.is_none() {
                     self.logs.push((false, "PumboPerms: the database is open now".into()));
