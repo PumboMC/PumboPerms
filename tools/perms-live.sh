@@ -11,8 +11,10 @@
 #
 # Variables: NETWORK_STEPS (N1 N2 N3 N4 N5 N5b N6 N7 N8 N9 N15 N12; N13 is the hour-long
 # run, only when named; N14 needs a backend that keeps a 35 s configuration phase
-# open, Pumpkin 0.2.0 does not), PERMS_LIVE_N12_SECS (300) and PERMS_LIVE_N13_SECS
-# (3600) shorten the load and the long run, RESTART (1: then
+# open, Pumpkin 0.2.0 does not; N16, only when named, comes after the restarts:
+# the network goes down, PumboPerms on the proxy gets a database of 400000 names
+# and memory-mb: 64, and the network comes up again), PERMS_LIVE_N12_SECS (300)
+# and PERMS_LIVE_N13_SECS (3600) shorten the load and the long run, RESTART (1: then
 # N10 after down and up, N11 after a SIGKILL of the proxy and survival),
 # SOLO_STEPS (J1 J2 J3 J7 J4 J5 J6 J8; J7 before J4, which loads PumboPerms
 # again; J10, only when named, runs before J8 on a lone Pumpkin of its own with
@@ -32,10 +34,13 @@
 #   pumpkin   PumboPerms on a lone Pumpkin (the J phase)
 #   bridge    PumboPerms on the proxy, PumboBridge and a passive PumboPerms on
 #             the servers (the N phase)
-# One step alone, to look at a failure (any J step the same way):
-#   LAYOUT=pumpkin SOLO_STEPS=J10 tools/perms-live.sh
+# One step alone, to look at a failure:
+#   LAYOUT=pumpkin SOLO_STEPS=J10 tools/perms-live.sh   (any J step the same way)
+#   LAYOUT=proxy NETWORK_STEPS=N16 tools/perms-live.sh  (a fresh network and the
+#             N16 block only, without the other steps and the restarts)
 # Every phase starts from a fresh install with default configs; only ports and
-# paths are set, and J10 sets the memory limit and the database of PumboPerms.
+# paths are set, and J10 and N16 set the memory limit and the database of
+# PumboPerms.
 # Processes are stopped by the PIDs this script started.
 set -euo pipefail
 shopt -s nullglob
@@ -84,6 +89,13 @@ case ${LAYOUT:-} in
   *) echo "perms-live: LAYOUT $LAYOUT: proxy, pumpkin or bridge" >&2; exit 1 ;;
 esac
 case ${LAYOUT:-} in proxy | bridge) SOLO_STEPS= ;; esac
+# N16 is a block of its own after the restarts: N10 and N11 read the data of N7.
+N16=0
+steps=
+for s in $NETWORK_STEPS; do
+  case $s in N16) N16=1 ;; *) steps+=" $s" ;; esac
+done
+NETWORK_STEPS=${steps# }
 
 PORT=25700
 SOLO_PORT=25704
@@ -189,10 +201,10 @@ done
 DRIVER=${CARGO_TARGET_DIR:-$P/target}/debug/examples/perms_live
 uuid() { "$DRIVER" --uuid "$1"; }
 solo_uuid() { "$DRIVER" --solo-uuid "$1"; }
-# J10 opens a database with nothing but the names Player0..Player399999 and
-# their UUIDs, as names_fixture of pumbo-perms-core writes them.
+# J10 and N16 open a database with nothing but the names Player0..Player399999
+# and their UUIDs, as names_fixture of pumbo-perms-core writes them.
 NAMES=400000
-if [[ " $SOLO_STEPS " = *" J10 "* ]]; then
+if [ "$N16" = 1 ] || [[ " $SOLO_STEPS " = *" J10 "* ]]; then
   (cd "$L" && cargo build --release -p pumbo-perms-core --example names_fixture)
 fi
 names_db() { # <perms.redb>
@@ -250,7 +262,7 @@ run_network() { # <step>...
   (cd "$NET" && "$DRIVER" network "127.0.0.1:$PORT" "$NET" "$@")
 }
 
-if [ -n "$NETWORK_STEPS" ]; then
+if [ -n "$NETWORK_STEPS" ] || [ "$N16" = 1 ]; then
   echo "== network: fresh install in $NET"
   # The directory is this script's own; dev-network.sh deletes only what it created.
   if [ -f "$NET/.dev-network" ]; then network reset; else rm -rf "$NET"; fi
@@ -279,8 +291,8 @@ if [ -n "$NETWORK_STEPS" ]; then
   grep -q PpPend7x "$NET/proxy/permissions.yml" || die "permissions.yml was overwritten"
   grep -q PpOp7x "$NET/survival/data/ops.json" || die "ops.json was overwritten"
   # shellcheck disable=SC2086
-  run_network $NETWORK_STEPS
-  if [ "$RESTART" = 1 ]; then
+  [ -z "$NETWORK_STEPS" ] || run_network $NETWORK_STEPS
+  if [ "$RESTART" = 1 ] && [ -n "$NETWORK_STEPS" ]; then
     network down
     network up "$PUMPKIN"
     [ -z "$P_PART" ] || half N10
@@ -298,6 +310,17 @@ if [ -n "$NETWORK_STEPS" ]; then
     [ -n "$P_PART" ] || lock_after_kill "$NET/survival/console.log" "$lines" "$(($(date +%s) - killed))" "N11 survival"
     [ -z "$P_PART" ] || half N11
     run_network N11$P_PART
+  fi
+  if [ "$N16" = 1 ]; then
+    echo "== network: N16, $NAMES names and memory-mb: 64 on the proxy"
+    network down
+    names_db "$NET/proxy/plugins/data/pumbo-perms/perms.redb"
+    perl -pi -e '$_ .= "  memory-mb: 64\n" if /^plugins:$/' "$NET/proxy/pumboprox.yml"
+    grep -qx '  memory-mb: 64' "$NET/proxy/pumboprox.yml" || die "N16: no plugins: section in $NET/proxy/pumboprox.yml"
+    # N16 reads fresh logs: the import into the new database, and errors since the start.
+    for s in proxy lobby survival; do mv "$NET/$s/console.log" "$NET/$s/console.before-n16.log"; done
+    network up "$PUMPKIN"
+    run_network N16
   fi
   network down
 fi
