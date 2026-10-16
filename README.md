@@ -169,7 +169,6 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 <details>
 <summary><b>Commands</b></summary>
 
-- ✅ `/pp` laid out like LuckPerms: `[PP]` on every line, help grouped by topic, views between bars
 - ✅ Tab completion for subcommands, players, groups, tracks and permission nodes
 - ✅ Tab offers players, groups and tracks only to staff who may see them
 - ✅ Long lists split into pages with arrows to click
