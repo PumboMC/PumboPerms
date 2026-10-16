@@ -20,7 +20,7 @@
 # build, checks the data and goes back to the old file, which has to refuse the
 # newer database and leave its data as it is (this build reads it again). PUMPKIN_BIN
 # (the Pumpkin binary), PUMBO_PROTOCOL of that Pumpkin (777 for
-# 0.2.0+26.3-26.51, 776 for 0.1.0-dev+26.2-26.45; it picks the plugin builds),
+# 0.2.0+26.3-26.51; PumboPerms is built for Minecraft 26.3 only for now),
 # PUMBO_PROX_DIR (a PumboProx checkout), PUMBO_BRIDGE_DIR and PUMBO_BANS_DIR (checkouts
 # that build PumboBridge and PumboBans; this repository when it has them).
 # LAYOUT runs one setup instead of both phases:
@@ -51,8 +51,7 @@ SMALL=0
 PUMBO_PROTOCOL=${PUMBO_PROTOCOL:-777}
 case $PUMBO_PROTOCOL in
   777) VARIANT=26.3 ;;
-  776) VARIANT=26.2 ;;
-  *) echo "perms-live: PUMBO_PROTOCOL $PUMBO_PROTOCOL: no Pumpkin plugin variant (777 or 776)" >&2; exit 1 ;;
+  *) echo "perms-live: PumboPerms is built for Minecraft 26.3 only for now (PUMBO_PROTOCOL $PUMBO_PROTOCOL is not tested)" >&2; exit 1 ;;
 esac
 OLD_PERMS_WASM=${OLD_PERMS_WASM:-}
 BRIDGE_DIR=${PUMBO_BRIDGE_DIR:-$L}
