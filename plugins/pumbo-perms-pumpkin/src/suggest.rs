@@ -268,7 +268,11 @@ mod tests {
         for args in cut {
             let reply = command::run(&mut e, &Who::console(), &args, &env).reply.plain();
             println!("/pp {} -> {}", args.join(" "), reply.lines().next().unwrap_or_default());
-            assert!(!reply.trim().is_empty() && !reply.contains("Unknown subcommand"), "/pp {}: {reply}", args.join(" "));
+            assert!(
+                !reply.trim().is_empty() && !reply.contains("Unknown subcommand"),
+                "/pp {}: {reply}",
+                args.join(" ")
+            );
         }
     }
 
