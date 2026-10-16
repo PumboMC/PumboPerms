@@ -140,7 +140,7 @@ record() { # <exit code>
     echo "- code: $(basename "$L") $(git -C "$L" rev-parse --short HEAD)$(changed "$L"), $(basename "$P") $(git -C "$P" rev-parse --short HEAD)$(changed "$P")"
     echo "- steps: $(grep -oE '^(PASS|FAIL|SKIP) [A-Za-z0-9]+' "$RUN_LOG" | tr '\n' ' ' || true)"
     echo "- retries: $(grep -c '^RETRY' "$RUN_LOG" || true)"
-    grep -E '^[NJ][0-9]+[a-z]?: .*[0-9]+ ms' "$RUN_LOG" | sed 's/^/- /' || true
+    grep -E '^[NJ][0-9]+[a-z]?: .*[0-9]+ (ms|MB|KB)' "$RUN_LOG" | sed 's/^/- /' || true
     grep -E '^perms-live: ' "$RUN_LOG" | tail -1 | sed 's/^/- /' || true
     echo "- log: logi/$stamp-perms-live.log"
   } >> "$RESULTS/perms-live.md"
