@@ -107,7 +107,7 @@ fn aliases_come_from_config() {
     let (p, dir) = plugin(Some("commands:\n  aliases: [perms, p]\n  disabled: [editor]\n"));
     assert_eq!(registered(), ["perms", "p"]);
     command(&p, "p", &["user"]);
-    assert!(logs().contains("Usage: /perms user <player> <subcommand>"), "{}", logs());
+    assert!(logs().contains("/perms user <player> info [page]"), "{}", logs());
     let umbrella: Vec<String> =
         testing::with(|h| h.commands.iter().filter(|c| c.umbrella).map(|c| c.name.clone()).collect());
     assert!(umbrella.contains(&"user".to_string()) && !umbrella.contains(&"editor".to_string()), "{umbrella:?}");
@@ -120,7 +120,7 @@ fn aliases_come_from_config() {
     assert!(logs().contains("commands.disabled applies to /pumboperms <subcommand> after"), "{}", logs());
     testing::with(|h| h.logs.clear());
     command(&p, "perms", &["user"]);
-    assert!(logs().contains("Usage: /perms user"), "{}", logs());
+    assert!(logs().contains("/perms user <player>"), "{}", logs());
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn cleared_alias_list_registers_only_full_name() {
     let (p, _dir) = plugin(Some("commands:\n  aliases: []\n"));
     assert!(registered().is_empty(), "{:?}", registered());
     command(&p, "user", &[]);
-    assert!(logs().contains("Usage: /pumboperms user <player> <subcommand>"), "{}", logs());
+    assert!(logs().contains("/pumboperms user <player> info [page]"), "{}", logs());
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn taken_alias_is_skipped_with_warning() {
     });
     assert!(logs().contains("/pp not registered, /pumboperms works"), "{}", logs());
     command(&p, "user", &[]);
-    assert!(logs().contains("Usage: /pumboperms user <player> <subcommand>"), "{}", logs());
+    assert!(logs().contains("/pumboperms user <player> info [page]"), "{}", logs());
 }
 
 #[test]

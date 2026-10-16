@@ -564,10 +564,12 @@ fn general_help(e: &mut Engine, who: &Who, page: usize, now: u64) -> Text {
 const SUBGROUPS: &[(&str, &str)] =
     &[("permission", "desc-perm-group"), ("parent", "desc-parent-group"), ("meta", "desc-meta-group")];
 
-fn holder_help(e: &mut Engine, who: &Who, t: &Target, filter: &str, page: usize, now: u64) -> Text {
-    let base = t.command(&e.root);
-    let kind = t.kind();
-    let extra = if t.is_user() { USER_ONLY } else { GROUP_ONLY };
+/// `base` is the command of the player or group: `/pp user Steve`, or
+/// `/pp user <player>` when no name was given.
+fn holder_help(e: &mut Engine, who: &Who, base: &str, user: bool, filter: &str, page: usize, now: u64) -> Text {
+    let base = base.to_string();
+    let kind = if user { "user" } else { "group" };
+    let extra = if user { USER_ONLY } else { GROUP_ONLY };
     let help_command = if filter.is_empty() { format!("{base} help") } else { format!("{base} {filter} help") };
     // The player or group help lists `permission ...`, `parent ...` and
     // `meta ...`; each of those lists its own commands under its root. The
@@ -583,7 +585,10 @@ fn holder_help(e: &mut Engine, who: &Who, t: &Target, filter: &str, page: usize,
                 if !grouped.contains(w) {
                     grouped.push(w);
                     let node = node_of(&format!("{kind}.{w}."));
-                    help.push(Entry::new(format!("{base} {w}"), e.lang.get(desc)).args("...").permission(node));
+                    // Under `/pp user <player>` a click types `/pp user `, as on the other lines.
+                    let (command, args) = split_usage(&format!("{base} {w}"));
+                    let args = if args.is_empty() { "...".to_string() } else { format!("{args} ...") };
+                    help.push(Entry::new(command, e.lang.get(desc)).args(args).permission(node));
                 }
             }
             _ if filter.is_empty() || word == filter => {
@@ -593,6 +598,23 @@ fn holder_help(e: &mut Engine, who: &Who, t: &Target, filter: &str, page: usize,
         }
     }
     show_help(e, who, help, page, now)
+}
+
+/// `/pp user`, `/pp group` or `/pp track` without a name: its commands, with
+/// `<player>` or `<name>` in place of the name.
+fn unnamed_help(e: &mut Engine, who: &Who, kind: &str, now: u64) -> Res {
+    if !allowed_prefix(e, who, &format!("{kind}."), now) {
+        return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
+    }
+    let help = match kind {
+        "track" => track_help(e, who, "<name>", 1, now),
+        _ => {
+            let user = kind == "user";
+            let base = format!("{} {kind} {}", e.root, if user { "<player>" } else { "<name>" });
+            holder_help(e, who, &base, user, "", 1, now)
+        }
+    };
+    Ok(Outcome::reply(help))
 }
 
 fn track_help(e: &mut Engine, who: &Who, track: &str, page: usize, now: u64) -> Text {
@@ -838,10 +860,7 @@ fn left(now: u64, expiry: u64) -> String {
 
 fn user_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
     let Some(name) = args.first() else {
-        if !allowed_prefix(e, who, "user.", env.now) {
-            return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
-        }
-        return Err(ui::usage(&e.lang, &format!("{} user <player> <subcommand>", e.root)));
+        return unnamed_help(e, who, "user", env.now);
     };
     let known = find_user(e, env, name)?;
     let t = Target::User { uuid: known.uuid, name: known.name };
@@ -851,10 +870,7 @@ fn user_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
 fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
     let now = env.now;
     let Some(name) = args.first().map(|n| n.to_lowercase()) else {
-        if !allowed_prefix(e, who, "group.", now) {
-            return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
-        }
-        return Err(ui::usage(&e.lang, &format!("{} group <name> <subcommand>", e.root)));
+        return unnamed_help(e, who, "group", now);
     };
     let sub = lower(args.get(1));
     let t = Target::Group { name: name.clone() };
@@ -938,7 +954,8 @@ fn holder_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], env: &Env)
             if !allowed_prefix(e, who, &format!("{kind}."), now) {
                 return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
             }
-            Ok(Outcome::reply(holder_help(e, who, t, "", page_of(rest), now)))
+            let base = t.command(&e.root);
+            Ok(Outcome::reply(holder_help(e, who, &base, t.is_user(), "", page_of(rest), now)))
         }
         "info" | "i" => {
             need(e, who, &format!("{kind}.info"), now)?;
@@ -979,7 +996,8 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
             if !allowed_prefix(e, who, &format!("{kind}.permission."), now) {
                 return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
             }
-            Ok(Outcome::reply(holder_help(e, who, t, "permission", page_of(&pos), now)))
+            let base = t.command(&e.root);
+            Ok(Outcome::reply(holder_help(e, who, &base, t.is_user(), "permission", page_of(&pos), now)))
         }
         "info" | "list" => {
             need(e, who, &format!("{kind}.permission.info"), now)?;
@@ -1148,7 +1166,8 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
         if !allowed_prefix(e, who, &format!("{kind}.parent."), now) {
             return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
         }
-        return Ok(Outcome::reply(holder_help(e, who, t, "parent", page_of(&pos), now)));
+        let base = t.command(&e.root);
+        return Ok(Outcome::reply(holder_help(e, who, &base, t.is_user(), "parent", page_of(&pos), now)));
     }
     if matches!(sub.as_str(), "info" | "list") {
         need(e, who, &format!("{kind}.parent.info"), now)?;
@@ -1233,7 +1252,8 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
         if !allowed_prefix(e, who, &format!("{kind}.meta."), now) {
             return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
         }
-        return Ok(Outcome::reply(holder_help(e, who, t, "meta", page_of(&pos), now)));
+        let base = t.command(&e.root);
+        return Ok(Outcome::reply(holder_help(e, who, &base, t.is_user(), "meta", page_of(&pos), now)));
     }
     if matches!(sub.as_str(), "info" | "list") {
         need(e, who, &format!("{kind}.meta.info"), now)?;
@@ -1390,10 +1410,7 @@ fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], n
 fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
     let now = env.now;
     let Some(name) = args.first().map(|n| n.to_lowercase()) else {
-        if !allowed_prefix(e, who, "track.", now) {
-            return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
-        }
-        return Err(ui::usage(&e.lang, &format!("{} track <name> <subcommand>", e.root)));
+        return unnamed_help(e, who, "track", now);
     };
     let sub = lower(args.get(1));
     let rest = args.get(2..).unwrap_or(&[]);
