@@ -102,6 +102,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 - ✅ Expired temporary permissions end on the servers even when a database write fails.
 - ✅ A config file with a syntax error keeps the last working settings and shows the line with the error.
 - ✅ Commands that change nothing no longer reload the database.
+- ✅ A damaged player name record no longer blocks the database: PumboPerms skips it and warns once.
 
 </details>
 
@@ -127,6 +128,8 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 - ✅ The table of player names stays small and fast with many players.
 - ✅ Lower cost per permission check and per expiry check.
 - ✅ Lower memory use on the proxy for large networks.
+- ✅ Lower memory use with hundreds of thousands of known players: names stay in the database, and memory keeps only the players online.
+- ✅ `/pp log` reads only the page you open, also with an unlimited log.
 
 </details>
 
@@ -224,8 +227,6 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 ### What next? in - 1.1.0
 
 - Staff limits, with two switches that are off by default: argument permissions, and a rule that staff must be in a group before they change it or give it to players. They decide which players, groups and tracks your staff may change and view.
-- Lower memory use with hundreds of thousands of known players: names stay in the database, and memory keeps only the players online.
-- `/pp log` reads only the page you open, also with an unlimited log.
 - Rank, prefix, suffix and meta as placeholders through PumpkinPIE.
 
 

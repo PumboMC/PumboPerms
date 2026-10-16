@@ -1,6 +1,6 @@
 # Commands and permissions
 
-`/pumboperms`, or the short `/pp`, on PumboProx and on Pumpkin, from players and the console, on Pumpkin also from RCON. `/pp help` lists the commands you may use, with clicks and tooltips. Long lists (`info`, `permission info`, `parent info`, `meta info`, `groups`, `tracks`) show 20 rows per page with arrows to click; the page number goes last (`/pp group admin info 2`), and the console gets the whole list. `/pp log` shows 10 changes per page and `listmembers` 15 players. On PumboProx a reply too long for one chat message comes in several.
+`/pumboperms`, or the short `/pp`, on PumboProx and on Pumpkin, from players and the console, on Pumpkin also from RCON. `/pp help` lists the commands you may use, with clicks and tooltips. Long lists (`info`, `permission info`, `parent info`, `meta info`, `groups`, `tracks`) show 20 rows per page with arrows to click; the page number goes last (`/pp group admin info 2`), and the console gets the whole list. `/pp log` shows 10 changes per page, newest first, and reads the log only back to the end of the page you open, also with `log.max-entries: 0`; `listmembers` shows 15 players. On PumboProx a reply too long for one chat message comes in several.
 
 | Command | What it does | Permission (`pumbo.perms.`...) |
 | --- | --- | --- |
