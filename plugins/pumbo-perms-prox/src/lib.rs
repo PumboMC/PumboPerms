@@ -251,9 +251,13 @@ fn uncbor<T: serde::de::DeserializeOwned>(b: &[u8]) -> Result<T, CallReject> {
 
 impl PumboPerms {
     /// Runs `f` with the state; `None` when it is missing or borrowed. Never
-    /// `.await` inside `f`.
+    /// `.await` inside `f`. Logs the warnings of the engine afterwards.
     fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> Option<R> {
-        self.state.try_borrow_mut().ok().and_then(|mut g| g.as_mut().map(f))
+        let mut state = self.state.try_borrow_mut().ok()?;
+        let s = state.as_mut()?;
+        let out = f(s);
+        s.engine.take_warnings().iter().for_each(|line| log::warn(line));
+        Some(out)
     }
 
     /// Loads config, messages and the database, registers the commands. A
@@ -695,7 +699,11 @@ impl pumbo_sdk::Plugin for PumboPerms {
     }
 
     async fn on_disconnect(&self, p: PlayerId) {
-        self.with(|s| s.loaded.remove(&p));
+        // A reconnect can load the new session before the old one goes.
+        self.with(|s| match s.loaded.remove(&p) {
+            Some((uuid, ..)) if !s.loaded.values().any(|l| l.0 == uuid) => s.engine.gone(&uuid),
+            _ => {}
+        });
     }
 
     async fn on_timer(&self, timer: u64) {

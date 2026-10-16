@@ -11,16 +11,20 @@
 #
 # Variables: NETWORK_STEPS (N1 N2 N3 N4 N5 N5b N6 N7 N8 N9 N15 N12; N13 is the hour-long
 # run, only when named; N14 needs a backend that keeps a 35 s configuration phase
-# open, Pumpkin 0.2.0 does not), PERMS_LIVE_N12_SECS (300) and PERMS_LIVE_N13_SECS
-# (3600) shorten the load and the long run, RESTART (1: then
+# open, Pumpkin 0.2.0 does not; N16, only when named, comes after the restarts:
+# the network goes down, PumboPerms on the proxy gets a database of 400000 names
+# and memory-mb: 64, and the network comes up again), PERMS_LIVE_N12_SECS (300)
+# and PERMS_LIVE_N13_SECS (3600) shorten the load and the long run, RESTART (1: then
 # N10 after down and up, N11 after a SIGKILL of the proxy and survival),
 # SOLO_STEPS (J1 J2 J3 J7 J4 J5 J6 J8; J7 before J4, which loads PumboPerms
-# again); an empty list skips its phase. J8 starts the
+# again; J10, only when named, runs before J8 on a lone Pumpkin of its own with
+# a database of 400000 names and max_memory_mb = 64 for PumboPerms); an empty
+# list skips its phase. J8 starts the
 # released PumboPerms 0.1.2-beta (OLD_PERMS_WASM), makes data, swaps in this
 # build, checks the data and goes back to the old file, which has to refuse the
 # newer database and leave its data as it is (this build reads it again). PUMPKIN_BIN
 # (the Pumpkin binary), PUMBO_PROTOCOL of that Pumpkin (777 for
-# 0.2.0+26.3-26.51, 776 for 0.1.0-dev+26.2-26.45; it picks the plugin builds),
+# 0.2.0+26.3-26.51; PumboPerms is built for Minecraft 26.3 only for now),
 # PUMBO_PROX_DIR (a PumboProx checkout), PUMBO_BRIDGE_DIR and PUMBO_BANS_DIR (checkouts
 # that build PumboBridge and PumboBans; this repository when it has them).
 # LAYOUT runs one setup instead of both phases:
@@ -30,8 +34,14 @@
 #   pumpkin   PumboPerms on a lone Pumpkin (the J phase)
 #   bridge    PumboPerms on the proxy, PumboBridge and a passive PumboPerms on
 #             the servers (the N phase)
+# One step alone, to look at a failure:
+#   LAYOUT=pumpkin SOLO_STEPS=J10 tools/perms-live.sh   (any J step the same way)
+#   LAYOUT=proxy NETWORK_STEPS=N16 tools/perms-live.sh  (a fresh network and the
+#             N16 block only, without the other steps and the restarts)
 # Every phase starts from a fresh install with default configs; only ports and
-# paths are set. Processes are stopped by the PIDs this script started.
+# paths are set, and J10 and N16 set the memory limit and the database of
+# PumboPerms.
+# Processes are stopped by the PIDs this script started.
 set -euo pipefail
 shopt -s nullglob
 
@@ -51,8 +61,7 @@ SMALL=0
 PUMBO_PROTOCOL=${PUMBO_PROTOCOL:-777}
 case $PUMBO_PROTOCOL in
   777) VARIANT=26.3 ;;
-  776) VARIANT=26.2 ;;
-  *) echo "perms-live: PUMBO_PROTOCOL $PUMBO_PROTOCOL: no Pumpkin plugin variant (777 or 776)" >&2; exit 1 ;;
+  *) echo "perms-live: PumboPerms is built for Minecraft 26.3 only for now (PUMBO_PROTOCOL $PUMBO_PROTOCOL is not tested)" >&2; exit 1 ;;
 esac
 OLD_PERMS_WASM=${OLD_PERMS_WASM:-}
 BRIDGE_DIR=${PUMBO_BRIDGE_DIR:-$L}
@@ -80,12 +89,20 @@ case ${LAYOUT:-} in
   *) echo "perms-live: LAYOUT $LAYOUT: proxy, pumpkin or bridge" >&2; exit 1 ;;
 esac
 case ${LAYOUT:-} in proxy | bridge) SOLO_STEPS= ;; esac
+# N16 is a block of its own after the restarts: N10 and N11 read the data of N7.
+N16=0
+steps=
+for s in $NETWORK_STEPS; do
+  case $s in N16) N16=1 ;; *) steps+=" $s" ;; esac
+done
+NETWORK_STEPS=${steps# }
 
 PORT=25700
 SOLO_PORT=25704
 NET=$P/target/perms-live
 SOLO=$NET/solo
 UPGRADE=$NET/upgrade
+MEMORY=$NET/j10
 PLUGINS=$L/target/live-plugins
 export PATH="$HOME/.cargo/bin:$PATH"
 export PUMBO_PORT=$PORT PUMBO_PROTOCOL PUMBO_PLUGINS_DIR=$PLUGINS PUMBO_NETWORK_DIR=$NET
@@ -125,7 +142,9 @@ cleanup() {
   [ -d "$NET" ] && network down || true
   solo_stop "$SOLO"
   solo_stop "$UPGRADE"
-  [ "${LOCKED:-}" = 1 ] && rmdir /tmp/perms-live.lock
+  solo_stop "$MEMORY"
+  # An if, not &&: under set -e a false test here would end on_exit before record.
+  if [ "${LOCKED:-}" = 1 ]; then rmdir /tmp/perms-live.lock; fi
 }
 record() { # <exit code>
   [ -d "${RESULTS%/*}" ] || { rm -f "$RUN_LOG"; return 0; }
@@ -140,7 +159,7 @@ record() { # <exit code>
     echo "- code: $(basename "$L") $(git -C "$L" rev-parse --short HEAD)$(changed "$L"), $(basename "$P") $(git -C "$P" rev-parse --short HEAD)$(changed "$P")"
     echo "- steps: $(grep -oE '^(PASS|FAIL|SKIP) [A-Za-z0-9]+' "$RUN_LOG" | tr '\n' ' ' || true)"
     echo "- retries: $(grep -c '^RETRY' "$RUN_LOG" || true)"
-    grep -E '^[NJ][0-9]+[a-z]?: .*[0-9]+ ms' "$RUN_LOG" | sed 's/^/- /' || true
+    grep -E '^[NJ][0-9]+[a-z]?: .*[0-9]+ (ms|MB|KB)' "$RUN_LOG" | sed 's/^/- /' || true
     grep -E '^perms-live: ' "$RUN_LOG" | tail -1 | sed 's/^/- /' || true
     echo "- log: logi/$stamp-perms-live.log"
   } >> "$RESULTS/perms-live.md"
@@ -182,6 +201,17 @@ done
 DRIVER=${CARGO_TARGET_DIR:-$P/target}/debug/examples/perms_live
 uuid() { "$DRIVER" --uuid "$1"; }
 solo_uuid() { "$DRIVER" --solo-uuid "$1"; }
+# J10 and N16 open a database with nothing but the names Player0..Player399999
+# and their UUIDs, as names_fixture of pumbo-perms-core writes them.
+NAMES=400000
+if [ "$N16" = 1 ] || [[ " $SOLO_STEPS " = *" J10 "* ]]; then
+  (cd "$L" && cargo build --release -p pumbo-perms-core --example names_fixture)
+fi
+names_db() { # <perms.redb>
+  rm -f "$1"
+  mkdir -p "$(dirname "$1")"
+  "${CARGO_TARGET_DIR:-$L/target}/release/examples/names_fixture" "$1" "$NAMES"
+}
 
 ops() { # <file> (<nick> <uuid> <level>)...
   local file=$1 sep=
@@ -232,7 +262,7 @@ run_network() { # <step>...
   (cd "$NET" && "$DRIVER" network "127.0.0.1:$PORT" "$NET" "$@")
 }
 
-if [ -n "$NETWORK_STEPS" ]; then
+if [ -n "$NETWORK_STEPS" ] || [ "$N16" = 1 ]; then
   echo "== network: fresh install in $NET"
   # The directory is this script's own; dev-network.sh deletes only what it created.
   if [ -f "$NET/.dev-network" ]; then network reset; else rm -rf "$NET"; fi
@@ -261,8 +291,8 @@ if [ -n "$NETWORK_STEPS" ]; then
   grep -q PpPend7x "$NET/proxy/permissions.yml" || die "permissions.yml was overwritten"
   grep -q PpOp7x "$NET/survival/data/ops.json" || die "ops.json was overwritten"
   # shellcheck disable=SC2086
-  run_network $NETWORK_STEPS
-  if [ "$RESTART" = 1 ]; then
+  [ -z "$NETWORK_STEPS" ] || run_network $NETWORK_STEPS
+  if [ "$RESTART" = 1 ] && [ -n "$NETWORK_STEPS" ]; then
     network down
     network up "$PUMPKIN"
     [ -z "$P_PART" ] || half N10
@@ -280,6 +310,17 @@ if [ -n "$NETWORK_STEPS" ]; then
     [ -n "$P_PART" ] || lock_after_kill "$NET/survival/console.log" "$lines" "$(($(date +%s) - killed))" "N11 survival"
     [ -z "$P_PART" ] || half N11
     run_network N11$P_PART
+  fi
+  if [ "$N16" = 1 ]; then
+    echo "== network: N16, $NAMES names and memory-mb: 64 on the proxy"
+    network down
+    names_db "$NET/proxy/plugins/data/pumbo-perms/perms.redb"
+    perl -pi -e '$_ .= "  memory-mb: 64\n" if /^plugins:$/' "$NET/proxy/pumboprox.yml"
+    grep -qx '  memory-mb: 64' "$NET/proxy/pumboprox.yml" || die "N16: no plugins: section in $NET/proxy/pumboprox.yml"
+    # N16 reads fresh logs: the import into the new database, and errors since the start.
+    for s in proxy lobby survival; do mv "$NET/$s/console.log" "$NET/$s/console.before-n16.log"; done
+    network up "$PUMPKIN"
+    run_network N16
   fi
   network down
 fi
@@ -336,8 +377,12 @@ run_solo() { # <dir> <step>...
   (cd "$dir" && "$DRIVER" solo "127.0.0.1:$SOLO_PORT" "$dir" "$@")
 }
 
-SOLO_MAIN=${SOLO_STEPS//J8/}
-if [ -n "${SOLO_MAIN// /}" ]; then
+# J8 and J10 have blocks of their own below.
+SOLO_MAIN=
+for s in $SOLO_STEPS; do
+  case $s in J8 | J10) ;; *) SOLO_MAIN+=" $s" ;; esac
+done
+if [ -n "$SOLO_MAIN" ]; then
   echo "== solo: fresh install in $SOLO"
   solo_setup "$SOLO" "$PLUGINS/PumboPerms-$VARIANT.wasm"
   # `/plugin load` of Pumpkin 0.2.0 reads from the working directory (J4).
@@ -356,6 +401,17 @@ if [ -n "${SOLO_MAIN// /}" ]; then
   lock_after_kill "$SOLO/console.log" "$lines" "$(($(date +%s) - killed))" "solo"
   solo_stop "$SOLO"
 fi
+
+case " $SOLO_STEPS " in *" J10 "*)
+  echo "== solo: J10, $NAMES names and max_memory_mb = 64 in $MEMORY"
+  solo_setup "$MEMORY" "$PLUGINS/PumboPerms-$VARIANT.wasm"
+  names_db "$MEMORY/plugins/data/pumboperms/perms.redb"
+  printf '\n[plugins.overrides.pumboperms]\nmax_memory_mb = 64\n' >> "$MEMORY/pumpkin.toml"
+  solo_start "$MEMORY"
+  run_solo "$MEMORY" J10
+  solo_stop "$MEMORY"
+  ;;
+esac
 
 case " $SOLO_STEPS " in *" J8 "*)
   echo "== solo: J8, PumboPerms 0.1.2-beta in $UPGRADE"
