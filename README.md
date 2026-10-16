@@ -28,17 +28,17 @@
 
 PumboProx and the other Pumbo plugins are still MVPs. We will bring every plugin to production state.
 
-No code was copied or used from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
+No code or parts was copied or used from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
 
-## Roadmap
+## All known issues and Roadmap
 
-1.0.0 makes PumboPerms ready for production on single servers and on networks. 
-✅ FIXED - confirmed in game. Open a topic for the details.
+1.0.0 makes PumboPerms ready for production on single servers and on networks. \
+✅ FIXED - confirmed in game. Open a topic for the details. \
 ☑️ FIXED - not confirmed in game yet
 
 Work on the next release happens on the [`dev`](https://github.com/PumboMC/PumboPerms/tree/dev) branch.
 
-### 1.0.0
+### 1.0.0 - ✅ 
 
 <details>
 <summary><b>Security</b></summary>
@@ -115,7 +115,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 - ✅ `meta set` checks keys, and `meta unset` removes the key you name.
 - ✅ `/pp reload` applies all settings.
 - ✅ Polish messages without English fragments.
-- ✅ A clearer `/pp` in chat, laid out like LuckPerms: a `[PP]` tag on every line, the help grouped by topic, views between bars in the Pumbo colours, `true` in green, `false` in red and prefixes in their own colours.
+- ✅ A clearer `/pp` in chat, laid out: a `[PP]` tag on every line, the help grouped by topic, views between bars in the Pumbo colours, `true` in green, `false` in red and prefixes in their own colours.
 
 </details>
 
@@ -141,21 +141,94 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 </details>
 
-### 1.1.0
+## Features
+
+<details>
+<summary><b>Ranks and permissions</b></summary>
+
+- ✅ Groups with inheritance: a group gets the permissions of its parents
+- ✅ Weights: when two groups disagree, the heavier one wins
+- ✅ A `default` group for every player without a group, on every server and in every world
+- ✅ Wildcards: `pumbo.bans.*`, `minecraft:command.*`, `*`; the most specific node decides
+- ✅ Temporary permissions, groups, prefixes and suffixes (`1h30m`, `7d`) that end on their own, also while the player is online
+- ✅ Contexts: `server=lobby`, `group=lobbies` or `world=world_nether` limit a permission, a group or a prefix
+- ✅ Prefixes and suffixes with priorities, shown in their own colours
+- ✅ Meta: your own key and value pairs on players and groups
+- ✅ Tracks: rank ladders with `/pp promote` and `/pp demote`
+
+</details>
+
+<details>
+<summary><b>Live changes</b></summary>
+
+- ✅ No restart or reload needed: changes apply at once
+- ✅ Players get their new command list right after a rank change
+
+</details>
+
+<details>
+<summary><b>Commands</b></summary>
+
+- ✅ `/pp` laid out like LuckPerms: `[PP]` on every line, help grouped by topic, views between bars
+- ✅ Tab completion for subcommands, players, groups, tracks and permission nodes
+- ✅ Tab offers players, groups and tracks only to staff who may see them
+- ✅ Long lists split into pages with arrows to click
+- ✅ Rename `/pp` or turn off subcommands in `config.yml`
+- ✅ English and Polish messages
+
+</details>
+
+<details>
+<summary><b>Data</b></summary>
+
+- ✅ Takes over the permissions your server already has at the first start
+- ✅ Imports ranks from PumboProx and from other plugins; `/pp import undo` takes an import back
+- ✅ Running an import again keeps what you changed with `/pp`
+- ✅ `/pp export` saves everything to one JSON file, and `/pp import` from the console restores it
+- ✅ Every change in `/pp log`, with messages to staff about changes made by others
+- ✅ Database format versions with upgrade steps
+
+</details>
+
+<details>
+<summary><b>Networks (PumboProx)</b></summary>
+
+- ✅ One set of ranks for every server, with differences per server where you need them
+- ✅ Wildcards and denials set on the proxy apply on the servers the same way
+- ✅ Ranks reach the server at every join and server switch, also after a reconnect or a restart
+- ✅ Servers answer other plugins with the proxy's ranks, prefixes and suffixes
+- ✅ Staff who have `/pp` on the proxy have it on the servers too
+- ✅ Networks with thousands of ranked players stay in proxy mode
+
+</details>
+
+<details>
+<summary><b>Safety and recovery</b></summary>
+
+- ✅ A broken `config.yml` keeps the last working settings and shows the line with the error
+- ✅ During a provider outage or with a damaged database, online players keep their ranks and new ones follow `on-load-failure` (deny by default)
+- ✅ `/pp export` never overwrites a file and never replaces a backup with an empty one
+- ✅ Two servers cannot open the same database at once
+- ✅ Whole-file import only from the console; command blocks, signs and functions cannot run `/pp` as the console
+- ✅ Closes a Pumpkin 0.2.0 hole: `/tp`, `/xp`, `/banip` and `/pardonip` need their permission
+
+</details>
+
+<details>
+<summary><b>For plugin developers</b></summary>
+
+- ✅ Placeholders: `%pumboperms_prefix%`, `%pumboperms_suffix%`, `%pumboperms_rank%`, `%pumboperms_group%`, `%pumboperms_groups%` and `%pumboperms_meta:<key>%`
+- ✅ Other plugins can ask PumboPerms about permissions, ranks and prefixes, also for offline players
+
+</details>
+
+### What next? in - 1.1.0
 
 - Staff limits, with two switches that are off by default: argument permissions, and a rule that staff must be in a group before they change it or give it to players. They decide which players, groups and tracks your staff may change and view.
 - Lower memory use with hundreds of thousands of known players: names stay in the database, and memory keeps only the players online.
 - `/pp log` reads only the page you open, also with an unlimited log.
 - Rank, prefix, suffix and meta as placeholders through PumpkinPIE.
 
-### Later
-
-- Several proxies sharing one database.
-- Ranks that follow a PumboAuth account when it switches to premium.
-
-<p align="center">
-  <a href="https://github.com/PumboMC/PumboProx"><img src="assets/pumboprox.webp" alt="PumboProx: everything you need to run a network on Pumpkin" width="100%"></a>
-</p>
 
 <p align="center"><b>Running more than one server?</b> <a href="https://github.com/PumboMC/PumboProx">PumboProx</a> is the proxy for Pumpkin networks, with plugins in WebAssembly.<br>PumboPerms runs on it too: ranks live in one place for the whole network and can differ from server to server.</p>
 
