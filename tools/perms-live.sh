@@ -15,7 +15,9 @@
 # (3600) shorten the load and the long run, RESTART (1: then
 # N10 after down and up, N11 after a SIGKILL of the proxy and survival),
 # SOLO_STEPS (J1 J2 J3 J7 J4 J5 J6 J8; J7 before J4, which loads PumboPerms
-# again); an empty list skips its phase. J8 starts the
+# again; J10, only when named, runs before J8 on a lone Pumpkin of its own with
+# a database of 400000 names and max_memory_mb = 64 for PumboPerms); an empty
+# list skips its phase. J8 starts the
 # released PumboPerms 0.1.2-beta (OLD_PERMS_WASM), makes data, swaps in this
 # build, checks the data and goes back to the old file, which has to refuse the
 # newer database and leave its data as it is (this build reads it again). PUMPKIN_BIN
@@ -30,8 +32,11 @@
 #   pumpkin   PumboPerms on a lone Pumpkin (the J phase)
 #   bridge    PumboPerms on the proxy, PumboBridge and a passive PumboPerms on
 #             the servers (the N phase)
+# One step alone, to look at a failure (any J step the same way):
+#   LAYOUT=pumpkin SOLO_STEPS=J10 tools/perms-live.sh
 # Every phase starts from a fresh install with default configs; only ports and
-# paths are set. Processes are stopped by the PIDs this script started.
+# paths are set, and J10 sets the memory limit and the database of PumboPerms.
+# Processes are stopped by the PIDs this script started.
 set -euo pipefail
 shopt -s nullglob
 
@@ -85,6 +90,7 @@ SOLO_PORT=25704
 NET=$P/target/perms-live
 SOLO=$NET/solo
 UPGRADE=$NET/upgrade
+MEMORY=$NET/j10
 PLUGINS=$L/target/live-plugins
 export PATH="$HOME/.cargo/bin:$PATH"
 export PUMBO_PORT=$PORT PUMBO_PROTOCOL PUMBO_PLUGINS_DIR=$PLUGINS PUMBO_NETWORK_DIR=$NET
@@ -124,6 +130,7 @@ cleanup() {
   [ -d "$NET" ] && network down || true
   solo_stop "$SOLO"
   solo_stop "$UPGRADE"
+  solo_stop "$MEMORY"
   # An if, not &&: under set -e a false test here would end on_exit before record.
   if [ "${LOCKED:-}" = 1 ]; then rmdir /tmp/perms-live.lock; fi
 }
@@ -182,6 +189,17 @@ done
 DRIVER=${CARGO_TARGET_DIR:-$P/target}/debug/examples/perms_live
 uuid() { "$DRIVER" --uuid "$1"; }
 solo_uuid() { "$DRIVER" --solo-uuid "$1"; }
+# J10 opens a database with nothing but the names Player0..Player399999 and
+# their UUIDs, as names_fixture of pumbo-perms-core writes them.
+NAMES=400000
+if [[ " $SOLO_STEPS " = *" J10 "* ]]; then
+  (cd "$L" && cargo build --release -p pumbo-perms-core --example names_fixture)
+fi
+names_db() { # <perms.redb>
+  rm -f "$1"
+  mkdir -p "$(dirname "$1")"
+  "${CARGO_TARGET_DIR:-$L/target}/release/examples/names_fixture" "$1" "$NAMES"
+}
 
 ops() { # <file> (<nick> <uuid> <level>)...
   local file=$1 sep=
@@ -336,8 +354,12 @@ run_solo() { # <dir> <step>...
   (cd "$dir" && "$DRIVER" solo "127.0.0.1:$SOLO_PORT" "$dir" "$@")
 }
 
-SOLO_MAIN=${SOLO_STEPS//J8/}
-if [ -n "${SOLO_MAIN// /}" ]; then
+# J8 and J10 have blocks of their own below.
+SOLO_MAIN=
+for s in $SOLO_STEPS; do
+  case $s in J8 | J10) ;; *) SOLO_MAIN+=" $s" ;; esac
+done
+if [ -n "$SOLO_MAIN" ]; then
   echo "== solo: fresh install in $SOLO"
   solo_setup "$SOLO" "$PLUGINS/PumboPerms-$VARIANT.wasm"
   # `/plugin load` of Pumpkin 0.2.0 reads from the working directory (J4).
@@ -356,6 +378,17 @@ if [ -n "${SOLO_MAIN// /}" ]; then
   lock_after_kill "$SOLO/console.log" "$lines" "$(($(date +%s) - killed))" "solo"
   solo_stop "$SOLO"
 fi
+
+case " $SOLO_STEPS " in *" J10 "*)
+  echo "== solo: J10, $NAMES names and max_memory_mb = 64 in $MEMORY"
+  solo_setup "$MEMORY" "$PLUGINS/PumboPerms-$VARIANT.wasm"
+  names_db "$MEMORY/plugins/data/pumboperms/perms.redb"
+  printf '\n[plugins.overrides.pumboperms]\nmax_memory_mb = 64\n' >> "$MEMORY/pumpkin.toml"
+  solo_start "$MEMORY"
+  run_solo "$MEMORY" J10
+  solo_stop "$MEMORY"
+  ;;
+esac
 
 case " $SOLO_STEPS " in *" J8 "*)
   echo "== solo: J8, PumboPerms 0.1.2-beta in $UPGRADE"
