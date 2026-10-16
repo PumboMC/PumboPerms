@@ -246,8 +246,6 @@ Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS
 | Opening a database with 400 000 names       | 6 ms                                                                       | 15 ms, with loading the data                             |
 | Database after a crash (kill -9)            | opens in 11-17 ms (3000 players)                                           | about 30 s: waits for the old lock to go stale           |
 
-PumboPerms keeps groups, tracks and the players with their own groups, permissions or meta in memory, also while those players are offline, and copies all of it before every change. The row with 20 000 players shows what that costs. 1.1.0 changes both: a change copies only what it touches, and offline players stay in the database.
-
 
 <p align="center"><b>Running more than one server?</b> <a href="https://github.com/PumboMC/PumboProx">PumboProx</a> is the proxy for Pumpkin networks, with plugins in WebAssembly.<br>PumboPerms runs on it too: ranks live in one place for the whole network and can differ from server to server.</p>
 
