@@ -217,6 +217,61 @@ mod tests {
         walk(&pp_tree(&[]), &mut Vec::new());
     }
 
+    /// Pumpkin runs every node, so a command cut short reaches the core, which
+    /// answers with its usage, its help or why it cannot run, as on PumboProx.
+    #[test]
+    fn every_incomplete_command_gets_an_answer() {
+        use pumbo_perms_core::command::{self, Env, Who};
+        use pumbo_perms_core::perms::KnownName;
+        use pumbo_perms_core::store::PermsStore;
+
+        fn sample(slot: &str) -> &'static str {
+            match slot {
+                "player" => "Steve",
+                "name" | "group" | "track" | "new-name" => "vip",
+                "node" => "essentials.home",
+                "value" => "true",
+                "duration" => "1h",
+                "page" | "priority" | "position" | "weight" => "1",
+                _ => "x",
+            }
+        }
+        fn walk(nodes: &[Node], path: &mut Vec<String>, cut: &mut Vec<Vec<String>>) {
+            for n in nodes {
+                path.push(match &n.word {
+                    Word::Fixed(w) => w.clone(),
+                    Word::Slot(slot, _) => sample(slot).to_string(),
+                });
+                if !n.executes {
+                    cut.push(path.clone());
+                }
+                walk(&n.children, path, cut);
+                path.pop();
+            }
+        }
+        let lang = pumbo_common::lang::Lang::load(&crate::BUNDLES, "en", None).0;
+        let mut e = Engine::new(Ok(PermsStore::in_memory().unwrap()), CoreCfg::default(), lang);
+        let online = |n: &str| {
+            (n == "Steve").then(|| KnownName {
+                uuid: "00000000-0000-4000-8000-000000000001".into(),
+                name: "Steve".into(),
+                online: true,
+            })
+        };
+        let env = Env { now: 1, online: &online, version: "test", version_rows: Vec::new() };
+        for line in ["creategroup vip", "createtrack vip"] {
+            command::run(&mut e, &Who::console(), &command::split_args(line), &env);
+        }
+        let mut cut = Vec::new();
+        walk(&pp_tree(&[]), &mut Vec::new(), &mut cut);
+        assert!(cut.len() > 20, "{cut:?}");
+        for args in cut {
+            let reply = command::run(&mut e, &Who::console(), &args, &env).reply.plain();
+            println!("/pp {} -> {}", args.join(" "), reply.lines().next().unwrap_or_default());
+            assert!(!reply.trim().is_empty() && !reply.contains("Unknown subcommand"), "/pp {}: {reply}", args.join(" "));
+        }
+    }
+
     #[test]
     fn switched_off_subcommands_are_left_out() {
         let t = pp_tree(&["user", "editor"]);
