@@ -32,7 +32,9 @@ No code was copied or used from [LuckPerms](https://github.com/LuckPerms/LuckPer
 
 ## Roadmap
 
-1.0.0 makes PumboPerms ready for production on single servers and on networks. ✅ FIXED - confirmed in game. Open a topic for the details.
+1.0.0 makes PumboPerms ready for production on single servers and on networks. 
+✅ FIXED - confirmed in game. Open a topic for the details.
+☑️ FIXED - not confirmed in game yet
 
 Work on the next release happens on the [`dev`](https://github.com/PumboMC/PumboPerms/tree/dev) branch.
 
@@ -141,7 +143,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 ### 1.1.0
 
-- Staff limits like in LuckPerms, with two switches that are off by default: argument permissions, and a rule that staff must be in a group before they change it or give it to players. They decide which players, groups and tracks your staff may change and view.
+- Staff limits, with two switches that are off by default: argument permissions, and a rule that staff must be in a group before they change it or give it to players. They decide which players, groups and tracks your staff may change and view.
 - Lower memory use with hundreds of thousands of known players: names stay in the database, and memory keeps only the players online.
 - `/pp log` reads only the page you open, also with an unlimited log.
 - Rank, prefix, suffix and meta as placeholders through PumpkinPIE.
