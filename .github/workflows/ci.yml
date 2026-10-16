@@ -39,12 +39,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # The plugin builds as build.sh makes them: Pumpkin 26.3 (default
-      # features), Pumpkin 26.2 (mc262) and PumboProx, where the plugin has one.
+      # features) and PumboProx, where the plugin has one.
       - name: Clippy for WebAssembly
         run: |
           cargo clippy -p pumbo-perms-pumpkin --target wasm32-wasip2 --locked -- -D warnings
-          cargo clippy -p pumbo-perms-pumpkin --target wasm32-wasip2 --no-default-features --features mc262 \
-            --target-dir target/mc262 --locked -- -D warnings
           if [ -d plugins/pumbo-perms-prox ]; then
             cargo clippy -p pumbo-perms-prox --target wasm32-wasip2 --target-dir target/perms-prox --locked -- -D warnings
           fi
