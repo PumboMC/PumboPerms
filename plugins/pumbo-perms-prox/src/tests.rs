@@ -9,6 +9,8 @@ use pumbo_sdk::testing::{self, block_on};
 
 use super::*;
 
+mod service;
+
 const MANIFEST: &str = include_str!("../pumbo-perms.yml");
 
 fn server(name: &str, groups: &[&str]) -> ServerInfo {
