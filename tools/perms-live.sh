@@ -125,7 +125,8 @@ cleanup() {
   [ -d "$NET" ] && network down || true
   solo_stop "$SOLO"
   solo_stop "$UPGRADE"
-  [ "${LOCKED:-}" = 1 ] && rmdir /tmp/perms-live.lock
+  # An if, not &&: under set -e a false test here would end on_exit before record.
+  if [ "${LOCKED:-}" = 1 ]; then rmdir /tmp/perms-live.lock; fi
 }
 record() { # <exit code>
   [ -d "${RESULTS%/*}" ] || { rm -f "$RUN_LOG"; return 0; }
