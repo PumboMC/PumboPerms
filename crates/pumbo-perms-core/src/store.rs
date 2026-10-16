@@ -256,19 +256,27 @@ impl PermsStore {
         })
     }
 
-    /// Log entries, newest first: page `page` (1-based) of `per_page`, and the total.
+    /// Log entries, newest first: page `page` (1-based) of `per_page`, and the
+    /// total. Reads the keys from the newest down to the end of the page and
+    /// decodes only the page; a page past the end reads nothing.
     pub fn log_page(&self, page: usize, per_page: usize) -> Result<(Vec<LogEntry>, usize)> {
-        let all = self.store.read(|tx| tx.collect_prefix(LOG, ""))?;
-        let total = all.len();
-        let skip = page.saturating_sub(1).saturating_mul(per_page);
-        let entries = all
-            .iter()
-            .rev()
-            .skip(skip)
-            .take(per_page)
-            .map(|(k, v)| decode::<LogEntry>(LOG, k, v))
-            .collect::<Result<Vec<_>>>()?;
-        Ok((entries, total))
+        self.store.read(|tx| {
+            let total = usize::try_from(tx.len(LOG)?).unwrap_or(usize::MAX);
+            let skip = page.saturating_sub(1).saturating_mul(per_page);
+            if skip >= total || per_page == 0 {
+                return Ok((Vec::new(), total));
+            }
+            let (mut seen, mut raw) = (0, Vec::new());
+            tx.scan_rev(LOG, &mut |k, v| {
+                seen += 1;
+                if seen > skip {
+                    raw.push((k.to_string(), v.to_vec()));
+                }
+                raw.len() < per_page
+            })?;
+            let entries = raw.iter().map(|(k, v)| decode(LOG, k, v)).collect::<Result<_>>()?;
+            Ok((entries, total))
+        })
     }
 
     /// Nodes the platform has ever set on its host.
@@ -345,17 +353,20 @@ fn append_log(tx: &mut dyn WriteOps, entry: &LogEntry, log_max: u64) -> Result<(
     tx.put_u64(META, "log_seq", seq)?;
     tx.put_json(LOG, &format!("{seq:020}"), entry)?;
     let len = tx.len(LOG)?;
-    // trim in batches so that not every change rewrites the table
+    // trim in batches so that most changes do not touch the old entries
     if log_max > 0 && len > log_max.saturating_add(log_max / 10).max(log_max + 1) {
-        let mut extra = len - log_max;
-        tx.retain(LOG, &mut |_, _| {
-            if extra > 0 {
-                extra -= 1;
+        // From the oldest key, one key at a time: the trim stops at the boundary
+        // and holds one key in memory, even when a lowered max-entries removes
+        // most of the log (then it costs a seek per entry).
+        for _ in log_max..len {
+            let mut oldest = None;
+            tx.scan(LOG, "", &mut |k, _| {
+                oldest = Some(k.to_string());
                 false
-            } else {
-                true
-            }
-        })?;
+            })?;
+            let Some(key) = oldest else { break };
+            tx.remove(LOG, &key)?;
+        }
     }
     Ok(())
 }
@@ -578,4 +589,6 @@ mod tests {
         drop(s);
         let _ = std::fs::remove_file(&path);
     }
+
+    mod log;
 }
