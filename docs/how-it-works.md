@@ -28,7 +28,7 @@ Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS
 | One change among 20 000 players in a group  | heap peak +24.4 MiB                                                        | heap peak +24.4 MiB                                      |
 | Change in a group every player has          | about 30 ms for 300 players on 10 servers                                  | about 10 ms for 100 players and 8000 permissions         |
 | Change for one player                       | only that player is recomputed                                             | about 4 ms                                               |
-| Import of 3000 players                      | 28-44 ms, 14-18 ms again after a change                                    | not measured                                             |
+| Import of 3000 players                      | `permissions.yml`: 28-44 ms, 14-18 ms again after a change                 | `/pp import <file>`: 27-31 ms, 69-74 ms again (it saves the current data first) |
 | Join with 400 000 known names               | up to 0.135 ms (0.57 ms for the first after the start)                     | up to 0.135 ms (0.57 ms for the first after the start)   |
 | Opening a database with 400 000 names       | 6 ms                                                                       | 15 ms, with loading the data                             |
 | Database after a crash (kill -9)            | opens in 11-17 ms (3000 players)                                           | about 30 s: waits for the old lock to go stale           |
