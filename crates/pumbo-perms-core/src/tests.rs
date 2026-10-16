@@ -435,18 +435,20 @@ fn deleting_and_renaming_groups_cleans_references() {
 
 #[test]
 fn names_and_lookup() {
-    let mut p = Perms::new();
-    assert!(p.seen(U, "Steve", false).0);
-    assert!(!p.seen(U, "Steve", false).0);
-    assert_eq!(p.find_user("steve").unwrap().uuid, U);
-    assert_eq!(p.find_user(U).unwrap().name, "Steve");
+    let lang = pumbo_common::lang::Lang::load(&[pumbo_common::lang::COMMON], "en", None).0;
+    let mut e = crate::engine::Engine::in_memory(crate::config::CoreCfg::default(), lang);
+    e.seen(U, "Steve", false).unwrap();
+    e.gone(U);
+    assert_eq!(e.find_user("steve").unwrap().uuid, U);
+    assert_eq!(e.find_user(U).unwrap().name, "Steve");
     // renamed account: the old name no longer points to it
-    assert!(p.seen(U, "Steve2", false).0);
-    assert!(p.find_user("steve").is_none());
-    assert_eq!(p.find_user("STEVE2").unwrap().name, "Steve2");
-    assert!(p.find_user("nobody").is_none());
+    e.seen(U, "Steve2", false).unwrap();
+    e.gone(U);
+    assert!(e.find_user("steve").is_none());
+    assert_eq!(e.find_user("STEVE2").unwrap().name, "Steve2");
+    assert!(e.find_user("nobody").is_none());
     // a UUID is accepted even when never seen
-    assert_eq!(p.find_user("00000000000000000000000000000009").unwrap().uuid, "00000000-0000-0000-0000-000000000009");
+    assert_eq!(e.find_user("00000000000000000000000000000009").unwrap().uuid, "00000000-0000-0000-0000-000000000009");
 }
 
 #[test]

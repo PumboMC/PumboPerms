@@ -1,7 +1,8 @@
 //! The running plugin without its platform: the database, its store, the
 //! config and the messages, and the operations the platform calls.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pumbo_common::lang::Lang;
 use pumbo_common::store::StoreError;
@@ -9,7 +10,7 @@ use pumbo_common::store::StoreError;
 use crate::config::CoreCfg;
 use crate::context::Query;
 use crate::merge::Ledger;
-use crate::perms::{Decision, Dirty, Perms, Saved};
+use crate::perms::{Decision, Dirty, KnownName, Perms, Saved};
 use crate::store::{LogEntry, PermsStore};
 
 /// The operator fallback covers only these nodes: every other Pumbo plugin
@@ -40,6 +41,12 @@ pub struct Engine {
     /// What changed since [`Engine::take_affected`] last looked; `None`:
     /// everything (the data was read again).
     changes: Option<Dirty>,
+    /// The players online now, by UUID ([`Engine::seen`] until
+    /// [`Engine::gone`]); everyone else's name is looked up in the database.
+    connected: HashMap<String, KnownName>,
+    /// Damaged name records already reported, and the lines for
+    /// [`Engine::take_warnings`].
+    damaged_names: RefCell<(BTreeSet<String>, Vec<String>)>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -64,6 +71,8 @@ impl Engine {
             ledgers: Err("no database".into()),
             reported: BTreeSet::new(),
             changes: None,
+            connected: HashMap::new(),
+            damaged_names: RefCell::default(),
         };
         match store {
             Ok(store) => match store.load() {
@@ -345,23 +354,89 @@ impl Engine {
     }
 
     /// Records a joining player's name (`online`: an account the host checked
-    /// with Mojang). Returns the line to log when the name leaves a UUID that
-    /// still has groups, permissions or meta.
+    /// with Mojang): kept in memory while the player is online, written to
+    /// the database for later. Returns the line to log when the name leaves a
+    /// UUID that still has groups, permissions or meta.
     pub fn seen(&mut self, uuid: &str, name: &str, online: bool) -> Result<Option<String>, String> {
-        let old = self.perms.name_key_of(uuid).map(str::to_string);
-        let (changed, left) = self.perms.seen(uuid, name, online);
-        if changed
-            && self.broken.is_none()
-            && let Some(store) = &self.store
-            && let Some(known) = self.perms.find_user(name)
-        {
-            store.save_name(&known, old.as_deref()).map_err(|e| e.to_string())?;
-        }
+        let known = KnownName { uuid: uuid.to_string(), name: name.to_string(), online };
+        self.connected.insert(uuid.to_string(), known.clone());
+        self.perms.set_user_name(uuid, name);
+        let Some(store) = self.store.as_ref().filter(|_| self.broken.is_none()) else { return Ok(None) };
+        let mut damaged = Vec::new();
+        let previous = store.save_name(&known, &mut damaged);
+        self.note_damaged(damaged);
+        let left = previous
+            .map_err(|e| e.to_string())?
+            .filter(|old| old != uuid && self.perms.user(old).is_some_and(|u| !u.data.is_empty()));
         Ok(left.map(|old| {
             format!(
                 "PumboPerms: the name {name} moved from {old} to {uuid}; the groups, permissions and meta of {old} stay with {old}"
             )
         }))
+    }
+
+    /// A player left (the platform calls it once no session of the UUID
+    /// is left): their name comes from the database from now on.
+    pub fn gone(&mut self, uuid: &str) {
+        self.connected.remove(uuid);
+    }
+
+    /// The player online under `uuid`, as [`Engine::seen`] recorded them.
+    pub fn connected(&self, uuid: &str) -> Option<&KnownName> {
+        self.connected.get(uuid)
+    }
+
+    /// A user by nickname or by UUID. A nickname gives the account that
+    /// joined last under it (the platform looks among its online players
+    /// first); a record's own name never decides it. A UUID always gives a
+    /// user: with the name it is online under, the name of its record, the
+    /// name it joined with last, or else the UUID as the name.
+    pub fn find_user(&self, name_or_uuid: &str) -> Option<KnownName> {
+        let Some(uuid) = pumbo_common::id::Uuid::parse(name_or_uuid).map(|u| u.to_string()) else {
+            return self.stored(|store, damaged| store.find_name(name_or_uuid, damaged));
+        };
+        if let Some(known) = self.connected.get(&uuid) {
+            return Some(known.clone());
+        }
+        let recorded = self.perms.user(&uuid).map(|u| u.name.clone()).filter(|n| !n.is_empty());
+        let known = match recorded {
+            Some(name) => Some(KnownName { uuid: uuid.clone(), name, online: false }),
+            None => self.stored(|store, damaged| store.name_of(&uuid, damaged)),
+        };
+        Some(known.unwrap_or_else(|| KnownName { name: uuid.clone(), uuid, online: false }))
+    }
+
+    /// A name lookup in the database; a read error counts as not found.
+    fn stored(
+        &self,
+        lookup: impl FnOnce(&PermsStore, &mut Vec<String>) -> Result<Option<KnownName>, StoreError>,
+    ) -> Option<KnownName> {
+        let store = self.store.as_ref()?;
+        let mut damaged = Vec::new();
+        let found = lookup(store, &mut damaged);
+        self.note_damaged(damaged);
+        found.ok().flatten()
+    }
+
+    /// One warning per damaged name record, for [`Engine::take_warnings`].
+    fn note_damaged(&self, damaged: Vec<String>) {
+        if damaged.is_empty() {
+            return;
+        }
+        let mut notes = self.damaged_names.borrow_mut();
+        let (reported, lines) = &mut *notes;
+        for record in damaged {
+            if reported.insert(record.clone()) {
+                lines.push(format!(
+                    "PumboPerms: the name record {record} is damaged; it counts as missing until the player joins again"
+                ));
+            }
+        }
+    }
+
+    /// Lines the platform logs as warnings (damaged name records), each once.
+    pub fn take_warnings(&self) -> Vec<String> {
+        std::mem::take(&mut self.damaged_names.borrow_mut().1)
     }
 
     /// Drops expired nodes and saves that. Returns whether something was due
@@ -389,6 +464,8 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    mod names;
+
     use super::*;
     use crate::context::Contexts;
     use crate::model::PermNode;
@@ -463,9 +540,12 @@ mod tests {
         let mut e = engine();
         e.broken = Some("taken over".into());
         e.seen(U, "Steve", true).unwrap();
+        assert_eq!(e.find_user(U).map(|k| k.name), Some("Steve".into()), "known while online");
         e.broken = None;
         e.reload_data();
-        assert!(e.perms.find_user("Steve").is_none());
+        assert!(e.find_user("Steve").is_none(), "not in the database");
+        e.gone(U);
+        assert_eq!(e.find_user(U).map(|k| k.name), Some(U.into()));
     }
 
     #[test]
@@ -491,7 +571,7 @@ mod tests {
         }
     }
 
-    /// A join with 400 000 known names: a hash lookup and a point write.
+    /// A join with 400 000 known names: a few point reads and a point write.
     #[test]
     #[ignore = "release benchmark"]
     fn seen_is_constant_time() {
@@ -515,7 +595,7 @@ mod tests {
             })
             .unwrap();
         let mut e = Engine::new(PermsStore::new(store), CoreCfg::default(), Lang::load(&[COMMON], "en", None).0);
-        assert_eq!(e.perms.known_names().count(), 400_000);
+        assert_eq!(e.find_user("player399999").map(|k| k.uuid), Some("00000000-0000-4000-8000-000000399999".into()));
         let mut worst = std::time::Duration::ZERO;
         for i in 0..200u32 {
             // New players, and known ones under a new name.
@@ -528,8 +608,8 @@ mod tests {
             worst = worst.max(start.elapsed());
         }
         e.reload_data();
-        assert!(e.perms.find_user("Player1").is_none() && e.perms.find_user("renamed1").is_some());
-        assert_eq!(e.perms.known_names().count(), 400_100);
+        assert!(e.find_user("Player1").is_none() && e.find_user("renamed1").is_some());
+        assert!(e.find_user("Player0").is_some() && e.find_user("newcomer0").is_some());
         println!("Engine::seen with 400 000 names: at most {worst:?}");
         drop(e);
         let _ = std::fs::remove_dir_all(&dir);

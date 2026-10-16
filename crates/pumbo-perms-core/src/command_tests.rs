@@ -581,12 +581,15 @@ fn in_mod(e: &Engine, uuid: &str) -> bool {
 fn reimport_keeps_first_resolved_uuid() {
     let mut e = engine();
     let (first, second) = ("00000000-0000-0000-0000-0000000000d1", "00000000-0000-0000-0000-0000000000d2");
+    // Joined and left: the name is only in the database.
     e.seen(first, "Mod1", true).unwrap();
+    e.gone(first);
     let out = import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
     assert!(out.reply.plain().contains(&format!("Mod1 -> {first}")), "{}", out.reply.plain());
     assert!(in_mod(&e, first));
-    // The name goes to another account; the source is imported again.
+    // The name goes to another account, online now; the source is imported again.
     e.seen(second, "Mod1", true).unwrap();
+    assert_eq!(e.find_user("mod1").map(|k| k.uuid), Some(second.to_string()));
     let mut changed = mod1_source();
     changed.groups[0].weight = 5;
     let out = import_source(&mut e, &Who::console(), "file", Ok(("f2".into(), changed)), SourceMode::Run, 2);
@@ -600,8 +603,12 @@ fn reimport_keeps_first_resolved_uuid() {
 fn offline_name_does_not_resolve_import() {
     let mut e = engine();
     let offline = "00000000-0000-0000-0000-0000000000d1";
+    // Online now, then only in the database: an offline account binds neither way.
     e.seen(offline, "Mod1", false).unwrap();
     let out = import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
+    assert!(out.reply.plain().contains("known only by name"), "{}", out.reply.plain());
+    e.gone(offline);
+    let out = import_source(&mut e, &Who::console(), "file", Ok(("f2".into(), mod1_source())), SourceMode::Run, 2);
     assert!(out.reply.plain().contains("known only by name"), "{}", out.reply.plain());
     assert!(!in_mod(&e, offline));
     assert_eq!(e.ledger("file").unwrap().pending.len(), 1);

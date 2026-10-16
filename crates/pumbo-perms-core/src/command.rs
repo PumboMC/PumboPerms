@@ -699,7 +699,7 @@ fn find_user(e: &Engine, env: &Env, name: &str) -> Result<KnownName, Text> {
     if let Some(k) = (env.online)(name) {
         return Ok(k);
     }
-    e.perms.find_user(name).ok_or_else(|| ui::error(&e.lang, "command-player-not-found", &Args::new().arg(value(name))))
+    e.find_user(name).ok_or_else(|| ui::error(&e.lang, "command-player-not-found", &Args::new().arg(value(name))))
 }
 
 // ----- changes -----
@@ -1567,7 +1567,7 @@ pub fn import_source(
     for u in std::mem::take(&mut snap.by_name) {
         let key = pumbo_common::id::name_key(&u.name);
         let bound = ledger.resolved.get(&key).cloned();
-        let uuid = bound.or_else(|| e.perms.find_user(&u.name).filter(|k| k.online).map(|k| k.uuid));
+        let uuid = bound.or_else(|| e.find_user(&u.name).filter(|k| k.online).map(|k| k.uuid));
         match uuid {
             Some(uuid) => {
                 resolved.insert(key, uuid.clone());

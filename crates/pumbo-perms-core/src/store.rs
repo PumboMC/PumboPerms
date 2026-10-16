@@ -4,15 +4,17 @@
 //! - `perms_groups`: group name -> [`Group`]
 //! - `perms_users`: UUID -> [`User`] (only users with data)
 //! - `perms_names`: nickname key -> [`KnownName`] (everyone who joined)
+//! - `perms_name_keys`: UUID -> its key in `perms_names` (a JSON string);
+//!   databases of older builds have only `perms_names`
 //! - `perms_tracks`: track name -> [`Track`]
 //! - `perms_log`: 20-digit sequence number -> [`LogEntry`]
 //! - `perms_host_nodes`: nodes the platform ever handed to its host (value empty)
 //! - `perms_imports`: source name -> [`Ledger`] (what an import added), from schema 2
 //! - `perms_meta`: `schema`, `log_seq` (numbers)
 //!
-//! The whole database is read once at start; every change writes what it
-//! touched in one transaction together with its log entry, an import also
-//! with its ledger.
+//! Groups, users and tracks are read once at start; names stay on disk and
+//! are looked up when needed. Every change writes what it touched in one
+//! transaction together with its log entry, an import also with its ledger.
 //!
 //! Schema 1 (0.1.2-beta and older) kept the ledgers as files
 //! (`imports/<source>.json`); [`PermsStore::migrate_ledgers`] moves them into
@@ -20,8 +22,9 @@
 //! refuses the file after that.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-use pumbo_common::store::{Durability, ReadExt, Result, Store, StoreError, WriteExt, WriteOps};
+use pumbo_common::store::{Durability, ReadExt, ReadOps, Result, Store, StoreError, WriteExt, WriteOps};
 use serde::{Deserialize, Serialize};
 
 use crate::merge::Ledger;
@@ -31,6 +34,7 @@ use crate::perms::{Dirty, KnownName, Perms};
 pub const GROUPS: &str = "perms_groups";
 pub const USERS: &str = "perms_users";
 pub const NAMES: &str = "perms_names";
+pub const NAME_KEYS: &str = "perms_name_keys";
 pub const TRACKS: &str = "perms_tracks";
 pub const LOG: &str = "perms_log";
 pub const HOST_NODES: &str = "perms_host_nodes";
@@ -39,6 +43,9 @@ pub const META: &str = "perms_meta";
 
 /// Version of the stored data.
 pub const SCHEMA: u64 = 2;
+
+/// One name write in this many reaches the disk at once ([`PermsStore::save_name`]).
+const DURABLE_NAME_WRITES: u32 = 1000;
 
 /// One change, as shown by `/pp log`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +77,8 @@ struct StoredName {
 #[derive(Debug)]
 pub struct PermsStore {
     store: Store,
+    /// Name writes so far ([`DURABLE_NAME_WRITES`]).
+    name_writes: AtomicU32,
 }
 
 impl PermsStore {
@@ -87,17 +96,17 @@ impl PermsStore {
             }
             Some(_) => {}
         }
-        Ok(Self { store })
+        Ok(Self { store, name_writes: AtomicU32::new(0) })
     }
 
     pub fn in_memory() -> Result<Self> {
         Self::new(Store::in_memory())
     }
 
-    /// Reads everything. A damaged record stops the load (fail closed) instead
-    /// of silently losing someone's rank.
+    /// Reads the groups, users and tracks (not the names). A damaged record
+    /// stops the load (fail closed) instead of silently losing someone's rank.
     pub fn load(&self) -> Result<(Perms, Dirty)> {
-        let (groups, users, names, tracks) = self.store.read(|tx| {
+        let (groups, users, tracks) = self.store.read(|tx| {
             let mut groups: Vec<Group> = Vec::new();
             for (k, v) in tx.collect_prefix(GROUPS, "")? {
                 groups.push(decode(GROUPS, &k, &v)?);
@@ -106,18 +115,13 @@ impl PermsStore {
             for (k, v) in tx.collect_prefix(USERS, "")? {
                 users.push(decode(USERS, &k, &v)?);
             }
-            let mut names: Vec<KnownName> = Vec::new();
-            for (k, v) in tx.collect_prefix(NAMES, "")? {
-                let n: StoredName = decode(NAMES, &k, &v)?;
-                names.push(KnownName { uuid: n.uuid, name: n.name, online: n.online });
-            }
             let mut tracks: Vec<Track> = Vec::new();
             for (k, v) in tx.collect_prefix(TRACKS, "")? {
                 tracks.push(decode(TRACKS, &k, &v)?);
             }
-            Ok((groups, users, names, tracks))
+            Ok((groups, users, tracks))
         })?;
-        Ok(Perms::from_parts(groups, users, names, tracks))
+        Ok(Perms::from_parts(groups, users, tracks))
     }
 
     /// Writes what `dirty` names, as it is now in `perms`, and the log entry,
@@ -132,19 +136,69 @@ impl PermsStore {
         })
     }
 
-    /// Records a nickname (cheap, may be lost on a crash: it comes back at the
-    /// next join); `old`: the key of the name the UUID had before, removed.
-    pub fn save_name(&self, name: &KnownName, old: Option<&str>) -> Result<()> {
+    /// The account that joined last under `name`. A record whose account
+    /// joined under another name since is stale: its `perms_name_keys` entry
+    /// names another key, whose record points back to it. Databases of older
+    /// builds have no `perms_name_keys`, so their records count until the
+    /// player joins again. Damaged records count as missing and are named in
+    /// `damaged` (`table/key`).
+    pub fn find_name(&self, name: &str, damaged: &mut Vec<String>) -> Result<Option<KnownName>> {
+        let key = pumbo_common::id::name_key(name);
+        self.store.read(|tx| {
+            let Some(found) = read_name(tx, &key, damaged)? else { return Ok(None) };
+            let stale = match read_key(tx, &found.uuid, damaged)? {
+                Some(now) if now != key => read_name(tx, &now, damaged)?.is_some_and(|n| n.uuid == found.uuid),
+                _ => false,
+            };
+            Ok((!stale).then_some(found))
+        })
+    }
+
+    /// The name `uuid` joined with last, while that name still points to it.
+    /// Damaged records count as missing, as in [`PermsStore::find_name`].
+    pub fn name_of(&self, uuid: &str, damaged: &mut Vec<String>) -> Result<Option<KnownName>> {
+        self.store.read(|tx| match read_key(tx, uuid, damaged)? {
+            Some(key) => Ok(read_name(tx, &key, damaged)?.filter(|n| n.uuid == uuid)),
+            None => Ok(None),
+        })
+    }
+
+    /// Records a join under `name`, in one transaction: the name record, the
+    /// key of the account, and the removal of the account's previous name
+    /// record. Damaged records in the way are overwritten (and named in
+    /// `damaged`). Returns the account the name pointed to before; writes
+    /// nothing when both records are already so. Cheap: it may be lost on a
+    /// crash (the next join writes it again), except every
+    /// [`DURABLE_NAME_WRITES`]th write, which also bounds what redb keeps for
+    /// the writes that did not reach the disk yet.
+    pub fn save_name(&self, name: &KnownName, damaged: &mut Vec<String>) -> Result<Option<String>> {
         let key = pumbo_common::id::name_key(&name.name);
-        self.store.write_with(Durability::Eventual, |tx| {
-            if let Some(old) = old.filter(|o| *o != key) {
-                tx.remove(NAMES, old)?;
+        let record = StoredName { uuid: name.uuid.clone(), name: name.name.clone(), online: name.online };
+        let record =
+            serde_json::to_vec(&record).map_err(|e| StoreError::new(format!("cannot encode {NAMES}/{key}: {e}")))?;
+        let index = serde_json::to_vec(&key).map_err(|e| StoreError::new(format!("cannot encode {NAME_KEYS}: {e}")))?;
+        let uuid = name.uuid.as_str();
+        let same = self.store.read(|tx| {
+            Ok(tx.get(NAMES, &key)?.is_some_and(|r| r == record)
+                && tx.get(NAME_KEYS, uuid)?.is_some_and(|i| i == index))
+        })?;
+        if same {
+            return Ok(Some(name.uuid.clone()));
+        }
+        let durable =
+            self.name_writes.fetch_add(1, Ordering::Relaxed).wrapping_add(1).is_multiple_of(DURABLE_NAME_WRITES);
+        let durability = if durable { Durability::Immediate } else { Durability::Eventual };
+        self.store.write_with(durability, |tx| {
+            let previous = read_name(tx, &key, damaged)?.map(|n| n.uuid);
+            if let Some(old) = read_key(tx, uuid, damaged)?
+                && old != key
+                && read_name(tx, &old, damaged)?.is_some_and(|n| n.uuid == uuid)
+            {
+                tx.remove(NAMES, &old)?;
             }
-            tx.put_json(
-                NAMES,
-                &key,
-                &StoredName { uuid: name.uuid.clone(), name: name.name.clone(), online: name.online },
-            )
+            tx.put(NAMES, &key, &record)?;
+            tx.put(NAME_KEYS, uuid, &index)?;
+            Ok(previous)
         })
     }
 
@@ -371,12 +425,37 @@ fn append_log(tx: &mut dyn WriteOps, entry: &LogEntry, log_max: u64) -> Result<(
     Ok(())
 }
 
+/// The record of a name key. A damaged one (also one without a canonical
+/// UUID) counts as missing and is named in `damaged`.
+fn read_name<R: ReadOps + ?Sized>(tx: &R, key: &str, damaged: &mut Vec<String>) -> Result<Option<KnownName>> {
+    let Some(bytes) = tx.get(NAMES, key)? else { return Ok(None) };
+    let record = serde_json::from_slice::<StoredName>(&bytes)
+        .ok()
+        .filter(|n| pumbo_common::id::Uuid::parse(&n.uuid).is_some_and(|u| u.to_string() == n.uuid));
+    if record.is_none() {
+        damaged.push(format!("{NAMES}/{key}"));
+    }
+    Ok(record.map(|n| KnownName { uuid: n.uuid, name: n.name, online: n.online }))
+}
+
+/// The name key an account joined with last; a damaged entry counts as missing.
+fn read_key<R: ReadOps + ?Sized>(tx: &R, uuid: &str, damaged: &mut Vec<String>) -> Result<Option<String>> {
+    let Some(bytes) = tx.get(NAME_KEYS, uuid)? else { return Ok(None) };
+    let key = serde_json::from_slice::<String>(&bytes).ok();
+    if key.is_none() {
+        damaged.push(format!("{NAME_KEYS}/{uuid}"));
+    }
+    Ok(key)
+}
+
 fn decode<T: serde::de::DeserializeOwned>(table: &str, key: &str, bytes: &[u8]) -> Result<T> {
     serde_json::from_slice(bytes).map_err(|e| StoreError::new(format!("damaged record {table}/{key}: {e}")))
 }
 
 #[cfg(test)]
 mod tests {
+    mod names;
+
     use super::*;
     use crate::context::{Contexts, Query};
     use crate::model::{ParentNode, PermNode};
@@ -423,13 +502,14 @@ mod tests {
         );
         d.merge(p.create_track("ranks").unwrap());
         s.commit(&p, &d, Some(&entry(1)), 100).unwrap();
-        p.seen(U, "Steve", true);
-        s.save_name(&p.find_user("steve").unwrap(), None).unwrap();
+        let steve = KnownName { uuid: U.into(), name: "Steve".into(), online: true };
+        assert_eq!(s.save_name(&steve, &mut Vec::new()).unwrap(), None, "a new name");
 
         let (mut q, dirty) = s.load().unwrap();
         assert!(dirty.is_empty());
         assert_eq!(q.check(U, "a", &Query::default(), 0), Some(true));
-        assert_eq!(q.find_user("Steve").unwrap().uuid, U);
+        assert_eq!(s.find_name("STEVE", &mut Vec::new()).unwrap(), Some(steve.clone()));
+        assert_eq!(s.name_of(U, &mut Vec::new()).unwrap(), Some(steve.clone()));
         assert!(q.track("ranks").is_some());
 
         // users without data are removed; deleting a group removes its record
@@ -438,7 +518,7 @@ mod tests {
         s.commit(&q, &d, None, 100).unwrap();
         let (r, _) = s.load().unwrap();
         assert!(r.user(U).is_none() && r.group("vip").is_none());
-        assert_eq!(r.find_user("steve").unwrap().uuid, U, "the name index stays");
+        assert_eq!(s.find_name("steve", &mut Vec::new()).unwrap(), Some(steve), "the name stays");
     }
 
     #[test]

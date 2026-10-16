@@ -218,7 +218,7 @@ impl Dirty {
     }
 }
 
-/// A copy of [`Perms`] without the name index ([`Perms::saved`]).
+/// The groups, users and tracks of [`Perms`] ([`Perms::saved`]).
 #[derive(Debug, Clone)]
 pub struct Saved {
     groups: BTreeMap<String, Group>,
@@ -231,9 +231,6 @@ pub struct Saved {
 pub struct Perms {
     groups: BTreeMap<String, Group>,
     users: HashMap<String, User>,
-    names: HashMap<String, KnownName>,
-    /// UUID -> its key in `names`.
-    name_of: HashMap<String, String>,
     tracks: BTreeMap<String, Track>,
     default_group: String,
     generation: u64,
@@ -278,8 +275,6 @@ impl Perms {
         Self {
             groups,
             users: HashMap::new(),
-            names: HashMap::new(),
-            name_of: HashMap::new(),
             tracks: BTreeMap::new(),
             default_group: DEFAULT_GROUP.to_string(),
             generation: 1,
@@ -289,12 +284,7 @@ impl Perms {
 
     /// Builds the database from stored records. The default group is created
     /// when missing (returned as dirty so it gets saved).
-    pub fn from_parts(
-        groups: Vec<Group>,
-        users: Vec<User>,
-        names: Vec<KnownName>,
-        tracks: Vec<Track>,
-    ) -> (Self, Dirty) {
+    pub fn from_parts(groups: Vec<Group>, users: Vec<User>, tracks: Vec<Track>) -> (Self, Dirty) {
         let mut p = Self::new();
         p.groups.clear();
         for g in groups {
@@ -302,11 +292,6 @@ impl Perms {
         }
         for u in users {
             p.users.insert(u.uuid.clone(), u);
-        }
-        for n in names {
-            let key = pumbo_common::id::name_key(&n.name);
-            p.name_of.insert(n.uuid.clone(), key.clone());
-            p.names.insert(key, n);
         }
         for t in tracks {
             p.tracks.insert(t.name.clone(), t);
@@ -320,7 +305,7 @@ impl Perms {
     }
 
     /// Groups, users and tracks as they are now, to [`Perms::restore`] after a
-    /// change that could not be saved (names are not changed by commands).
+    /// change that could not be saved.
     pub fn saved(&self) -> Saved {
         Saved { groups: self.groups.clone(), users: self.users.clone(), tracks: self.tracks.clone() }
     }
@@ -455,55 +440,14 @@ impl Perms {
         self.tracks.values()
     }
 
-    pub fn known_names(&self) -> impl Iterator<Item = &KnownName> {
-        self.names.values()
-    }
-
-    /// A user by nickname (from earlier joins) or by UUID.
-    pub fn find_user(&self, name_or_uuid: &str) -> Option<KnownName> {
-        if let Some(uuid) = pumbo_common::id::Uuid::parse(name_or_uuid) {
-            let uuid = uuid.to_string();
-            let name = self.users.get(&uuid).map(|u| u.name.clone()).filter(|n| !n.is_empty());
-            let known = self.name_key_of(&uuid).and_then(|k| self.names.get(k));
-            let online = known.is_some_and(|n| n.online);
-            let name = name.or_else(|| known.map(|n| n.name.clone())).unwrap_or_else(|| uuid.clone());
-            return Some(KnownName { uuid, name, online });
-        }
-        self.names.get(&pumbo_common::id::name_key(name_or_uuid)).cloned()
-    }
-
-    /// The key in the name table of the name a UUID joined with last.
-    pub fn name_key_of(&self, uuid: &str) -> Option<&str> {
-        self.name_of.get(uuid).map(String::as_str).filter(|k| self.names.get(*k).is_some_and(|n| n.uuid == uuid))
-    }
-
-    /// Records a nickname seen at join (`online`: an account the host checked
-    /// with Mojang). Returns whether the stored name index changed (and should
-    /// be saved), and the UUID that had the name before when it holds data:
-    /// its groups and permissions stay there, which the platform logs.
-    pub fn seen(&mut self, uuid: &str, name: &str, online: bool) -> (bool, Option<String>) {
-        let key = pumbo_common::id::name_key(name);
-        let entry = KnownName { uuid: uuid.to_string(), name: name.to_string(), online };
-        let previous = self.names.get(&key).map(|n| n.uuid.clone());
-        let changed = self.names.get(&key) != Some(&entry);
-        if changed {
-            // a name now belongs to another account: drop the old mapping of this uuid
-            if let Some(old) = self.name_of.remove(uuid)
-                && self.names.get(&old).is_some_and(|n| n.uuid == uuid)
-            {
-                self.names.remove(&old);
-            }
-            self.name_of.insert(uuid.to_string(), key.clone());
-            self.names.insert(key, entry);
-        }
-        let left = previous.filter(|p| p != uuid && self.users.get(p).is_some_and(|u| !u.data.is_empty()));
+    /// Shows a user's new nickname (`listmembers`, `info`); the record is
+    /// saved with its next change. A user without a record gets none.
+    pub fn set_user_name(&mut self, uuid: &str, name: &str) {
         if let Some(u) = self.users.get_mut(uuid)
             && u.name != name
         {
             u.name = name.to_string();
-            return (true, left);
         }
-        (changed, left)
     }
 
     /// Users that have `group` as a direct parent (in any context).
@@ -1087,8 +1031,7 @@ impl Perms {
 
     /// Replaces everything (import). Missing default group is added.
     pub fn replace_all(&mut self, groups: Vec<Group>, users: Vec<User>, tracks: Vec<Track>) {
-        let names: Vec<KnownName> = self.names.values().cloned().collect();
-        let (mut fresh, _) = Self::from_parts(groups, users, names, tracks);
+        let (mut fresh, _) = Self::from_parts(groups, users, tracks);
         fresh.generation = self.generation.wrapping_add(1);
         *self = fresh;
     }
@@ -1096,29 +1039,4 @@ impl Perms {
 
 fn applicable_parents<'a>(data: &'a Data, query: &'a Query, now: u64) -> impl Iterator<Item = &'a ParentNode> + 'a {
     data.parents.iter().filter(move |p| alive(p.expiry, now) && p.context.applies(query))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::PermNode;
-
-    const A: &str = "00000000-0000-0000-0000-0000000000a1";
-    const B: &str = "00000000-0000-0000-0000-0000000000b2";
-
-    #[test]
-    fn seen_warns_when_name_leaves_uuid_with_data() {
-        let mut p = Perms::new();
-        assert_eq!(p.seen(A, "Steve", true), (true, None));
-        // Without data nothing is left behind.
-        assert_eq!(p.seen(B, "Steve", false), (true, None));
-        assert_eq!(p.seen(A, "Steve", true), (true, None));
-        p.edit_user(A, "Steve", |d| {
-            d.set_permission(PermNode { node: "fly".into(), value: true, context: Contexts::global(), expiry: None })
-        });
-        assert_eq!(p.seen(B, "Steve", false), (true, Some(A.to_string())));
-        assert_eq!(p.find_user("steve").map(|k| (k.uuid, k.online)), Some((B.to_string(), false)));
-        // The same account again: no warning.
-        assert_eq!(p.seen(B, "Steve", false), (false, None));
-    }
 }

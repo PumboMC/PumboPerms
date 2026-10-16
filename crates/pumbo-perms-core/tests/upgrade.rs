@@ -50,9 +50,9 @@ fn opens_database_from_0_1_2_beta() {
     let parents: Vec<(&str, bool)> = user.data.parents.iter().map(|x| (x.group.as_str(), x.expiry.is_some())).collect();
     assert!(parents.contains(&("mod", false)) && parents.contains(&("helper", true)), "{parents:?}");
     assert!(user.data.meta.iter().any(|x| x.key == "color" && x.value == "red"));
-    assert_eq!(p.find_user("ppmod7x").map(|k| k.uuid), Some(MODERATOR.to_string()));
     let here = Query::default();
     assert_eq!(p.check(MODERATOR, "pumbo.bans.ban", &here, 0), Some(true));
+    assert_eq!(e.find_user("ppmod7x").map(|k| k.uuid), Some(MODERATOR.to_string()));
 
     let (log, total) = e.store().unwrap().log_page(1, 20).unwrap();
     assert_eq!(total, 12, "{log:?}");
@@ -115,13 +115,26 @@ fn opens_database_from_1_0_0() {
     assert_eq!(p.user(RENAMED).unwrap().name, "OldName", "the record keeps the name of its last change");
     assert_eq!(p.check(FIRST, "group.vip", &here, 0), Some(true));
 
-    let by_name = |p: &pumbo_perms_core::perms::Perms, name: &str| p.find_user(name).map(|k| (k.uuid, k.online));
-    assert_eq!(by_name(p, "steve"), Some((STEVE.to_string(), true)));
-    assert_eq!(by_name(p, "ALEX"), Some((ALEX.to_string(), false)));
-    assert_eq!(by_name(p, "Notch"), Some((NOTCH.to_string(), true)));
-    assert_eq!(by_name(p, "newname"), Some((RENAMED.to_string(), true)));
-    assert_eq!(by_name(p, "oldname"), None);
-    assert_eq!(by_name(p, "shared"), Some((SECOND.to_string(), true)));
+    let by_name = |e: &Engine, name: &str| e.find_user(name).map(|k| (k.uuid, k.online));
+    assert_eq!(by_name(&e, "steve"), Some((STEVE.to_string(), true)));
+    assert_eq!(by_name(&e, "ALEX"), Some((ALEX.to_string(), false)));
+    assert_eq!(by_name(&e, "Notch"), Some((NOTCH.to_string(), true)));
+    assert_eq!(by_name(&e, "newname"), Some((RENAMED.to_string(), true)));
+    assert_eq!(by_name(&e, "oldname"), None);
+    assert_eq!(by_name(&e, "shared"), Some((SECOND.to_string(), true)));
+    // By UUID: the name of the record; without one the UUID until the next join.
+    let by_uuid = |e: &Engine, uuid: &str| e.find_user(uuid).map(|k| k.name);
+    assert_eq!(by_uuid(&e, STEVE), Some("Steve".to_string()));
+    assert_eq!(by_uuid(&e, NOTCH), Some(NOTCH.to_string()));
+    // Joins write the name of each account; the 1.0.0 record of an old name stops counting.
+    e.seen(NOTCH, "Notch2", true).unwrap();
+    e.gone(NOTCH);
+    assert_eq!(by_name(&e, "notch"), None);
+    assert_eq!(by_name(&e, "notch2"), Some((NOTCH.to_string(), true)));
+    assert_eq!(by_uuid(&e, NOTCH), Some("Notch2".to_string()));
+    let moved = e.seen(FIRST, "Shared", false).unwrap();
+    assert_eq!(moved, None, "{SECOND} has no data");
+    assert_eq!(by_name(&e, "shared"), Some((FIRST.to_string(), false)));
 
     assert_eq!(e.ledger("file").unwrap().pending.len(), 1);
     let (log, total) = e.store().unwrap().log_page(1, 20).unwrap();
