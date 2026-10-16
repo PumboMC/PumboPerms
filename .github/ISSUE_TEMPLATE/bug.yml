@@ -36,7 +36,6 @@ body:
       options:
         - PumboProx (whole network)
         - Pumpkin 26.3
-        - Pumpkin 26.2
     validations:
       required: true
   - type: input

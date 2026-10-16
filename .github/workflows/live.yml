@@ -39,10 +39,6 @@ jobs:
             protocol: 777
             variant: '26.3'
             sha256: 68c4416ca9fbfb3f2aeb6a8ce1de0e3fb02c5a85a53c8ba59a27941d7e43d8cd
-          - tag: 0.1.0-dev+26.2-26.45
-            protocol: 776
-            variant: '26.2'
-            sha256: 565db1641b229d6a311d299f7a28c7e2d27b2f572480cfed36b930b0ae89ac11
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -91,7 +87,6 @@ jobs:
         run: |
           gh release download v0.1.2-beta --repo PumboMC/PumboPerms --pattern "$FILE" --dir "$RUNNER_TEMP"
           grep -F "  $FILE" > "$RUNNER_TEMP/old.sha256" <<'EOF'
-          b11ce58adc1b87da64383a0697c2f34c3493d3d793525d4bb2ebef348c686027  PumboPerms-Pumpkin-26.2-0.1.2-beta.wasm
           eb38421a3f318279d2069c7058ea3b099c242b2c0ac8b8c9fef133c75f97392a  PumboPerms-Pumpkin-26.3-0.1.2-beta.wasm
           EOF
           (cd "$RUNNER_TEMP" && sha256sum -c old.sha256)
