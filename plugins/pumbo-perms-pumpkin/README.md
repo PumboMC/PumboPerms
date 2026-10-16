@@ -46,7 +46,8 @@ Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS
 
 - A change in a group every player inherits, with 100 players online and 8000 permissions named in the data: about 10 ms to work out what changes on the players. A change that reaches one player: about 4 ms, most of it for the list of permissions.
 - A player gets the command list again at most once a second.
-- Memory: with the numbers above the test process grew by about 13 MB. `max_memory_mb = 64` in `[plugins.overrides.pumboperms]` leaves room.
+- A join with 400 000 known names: up to 0.135 ms, the first after the start up to 0.57 ms (empty database cache). Known names stay in the database, and memory holds the names of the players online: with 400 000 known names, opening the database and 200 joins raised the heap peak by 0.4 MiB (159.3 MiB in 0.1.2-beta).
+- Memory: with the numbers above the test process grew by about 13 MB. `max_memory_mb = 64` in `[plugins.overrides.pumboperms]` leaves room, also for 400 000 known names: with that limit and such a database, PumboPerms on Pumpkin 0.2.0 opened the database and read its data in 15 ms, with no plugin errors in the log.
 
 ## Compatibility
 

@@ -31,6 +31,10 @@ First stable release. Before you upgrade from 0.1.2-beta, run `/pp export`: Pumb
 - On PumboProx, a second PumboPerms file in `plugins/` stops the proxy at start with both file names, so the network does not fall back to `permissions.yml`.
 - A rank change recomputes only the players it reaches, so a change in `default` on a large network stays within the proxy's time limit. The database cache takes up to 16 MiB instead of 1 GiB, and a join takes under 1 ms with 400 000 known names.
 
+- Known player names stay in the database, and memory keeps only the players online: with 400 000 known players PumboPerms runs within 64 MB on Pumpkin and on PumboProx.
+- `/pp log` reads only the page you open, also with `log.max-entries: 0`.
+- The `info` answer to other plugins names a player who has not joined since the update and has no groups, permissions or meta by their UUID until they join again.
+
 ### Removed
 
 - The file for Pumpkin 0.1.0-dev (Minecraft 26.2). Its builds are paused for now.
@@ -52,6 +56,7 @@ First stable release. Before you upgrade from 0.1.2-beta, run `/pp export`: Pumb
 - On PumboProx, `%pumboperms_prefix%`, `%pumboperms_suffix%` and `%pumboperms_rank%` close their colours, so `&c[Admin]` does not colour the rest of the chat line.
 - On PumboProx, permissions that other plugins set for a session survive a rank change, and checks for offline players see rank changes at once.
 - Polish messages without English parts.
+- A damaged player name record no longer blocks the database: PumboPerms skips it and logs one warning.
 
 ### Security
 

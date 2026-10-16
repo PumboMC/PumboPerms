@@ -24,7 +24,7 @@ Send JSON to the plugin `pumboperms` with Pumpkin's inter-plugin call (`ipc::sen
 | --- | --- |
 | `{"op": "hello"}` | `{"ok": true, "plugin": "PumboPerms", "version": "…", "protocol": 1, "ops": ["hello", "check", "info", "fill"]}` |
 | `{"op": "check", "uuid": "…", "node": "myplugin.fly", "world": "world", "op-level": 0}` | `{"ok": true, "value": true}`, `false`, or `null` when nobody decides (use your own default). Works for offline players too. |
-| `{"op": "info", "uuid": "…", "world": "world"}` | rank, display name, prefix, suffix, all groups and meta of the player |
+| `{"op": "info", "uuid": "…", "world": "world"}` | name, rank, display name, prefix, suffix, all groups and meta of the player. A player without groups, permissions or meta who has not joined since the update from 0.1.2-beta has the UUID as the name until they join again. |
 | `{"op": "fill", "uuid": "…", "world": "world", "text": "%pumboperms_prefix%Steve"}` | `{"ok": true, "text": "&6[VIP] Steve"}` |
 
 Errors are `{"ok": false, "error": "…"}`. An `op` this version does not know answers `{"ok": false, "error": "unsupported op"}`, and a known `op` with missing or bad fields `{"ok": false, "error": "bad request: …"}`. Send only the ops that `hello` lists.
