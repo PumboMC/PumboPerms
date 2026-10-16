@@ -46,7 +46,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 </details>
 
-<details open>
+<details>
 <summary><b>Permission rules: the same answer everywhere</b></summary>
 
 - ✅ Wildcards and denials set on the proxy, such as `pumbo.bans.*`, apply on the servers exactly as on the proxy.
@@ -62,7 +62,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 </details>
 
-<details open>
+<details>
 <summary><b>Network sync</b></summary>
 
 - ✅ A player's ranks reach the server as soon as they join, and again after a reconnect or a restart of the server or the proxy.
@@ -77,7 +77,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 </details>
 
-<details open>
+<details>
 <summary><b>Data and imports</b></summary>
 
 - ✅ Running `/pp import run` again keeps the groups, tracks, weights and inheritance you changed with `/pp`, and removes only what the source dropped.
@@ -92,7 +92,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 </details>
 
-<details open>
+<details>
 <summary><b>Failures and recovery</b></summary>
 
 - ✅ During a provider outage, a reload or a damaged database, online players keep their last ranks and `on-load-failure` decides for new ones (deny by default). Ranks removed with `/pp` stay removed.
@@ -105,7 +105,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 </details>
 
-<details open>
+<details>
 <summary><b>Commands</b></summary>
 
 - ✅ Tab completion for `/pp` subcommands, players, groups and nodes, on PumboProx and on Pumpkin.
@@ -119,7 +119,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 </details>
 
-<details open>
+<details>
 <summary><b>Speed</b></summary>
 
 - ✅ A rank change recomputes only the players it affects.
@@ -132,7 +132,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 </details>
 
-<details open>
+<details>
 <summary><b>Quality</b></summary>
 
 - ✅ Cross tests in CI on PumboProx and on real Pumpkin servers: the proxy plugin on PumboProx, the Pumpkin plugin on its own, and both together through PumboBridge, on Pumpkin 0.2.0 (Minecraft 26.3).
