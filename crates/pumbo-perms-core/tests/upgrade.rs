@@ -78,8 +78,8 @@ const RENAMED: &str = "44444444-4444-4444-8444-444444444444";
 const FIRST: &str = "55555555-5555-4555-8555-555555555555";
 const SECOND: &str = "66666666-6666-4666-8666-666666666666";
 
-/// A database written by PumboPerms 1.0.0 (schema 2, names only in
-/// `perms_names`) opens in this build. `fixtures/perms-1.0.0.redb` was filled
+/// A database written before name keys existed (schema 2, names only in
+/// `perms_names`) opens in this build. `fixtures/perms-names-without-keys.redb` was filled
 /// through `Engine::seen` and `/pp` as the console: joins of `Steve` (online
 /// account), `Alex` (offline), `Notch` (online, no data), `OldName` and
 /// `Shared` (offline); groups `vip` (weight 10, prefix `&6[VIP] `) and
@@ -88,12 +88,12 @@ const SECOND: &str = "66666666-6666-4666-8666-666666666666";
 /// `OldName` joined as `NewName`, another account took `Shared`, and an
 /// import of `file` left `Pending1` waiting by name.
 #[test]
-fn opens_database_from_1_0_0() {
-    let dir = std::env::temp_dir().join(format!("pumbo-perms-upgrade-1-0-0-{}", std::process::id()));
+fn opens_database_written_before_name_keys() {
+    let dir = std::env::temp_dir().join(format!("pumbo-perms-upgrade-name-keys-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("perms.redb");
-    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/perms-1.0.0.redb"), &path).unwrap();
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/perms-names-without-keys.redb"), &path).unwrap();
 
     let store = PermsStore::new(Store::open(&path).unwrap()).unwrap();
     assert_eq!(store.schema().unwrap(), SCHEMA);
@@ -126,7 +126,7 @@ fn opens_database_from_1_0_0() {
     let by_uuid = |e: &Engine, uuid: &str| e.find_user(uuid).map(|k| k.name);
     assert_eq!(by_uuid(&e, STEVE), Some("Steve".to_string()));
     assert_eq!(by_uuid(&e, NOTCH), Some(NOTCH.to_string()));
-    // Joins write the name of each account; the 1.0.0 record of an old name stops counting.
+    // Joins write the name of each account; the old record of an old name stops counting.
     e.seen(NOTCH, "Notch2", true).unwrap();
     e.gone(NOTCH);
     assert_eq!(by_name(&e, "notch"), None);
