@@ -26,9 +26,8 @@
 
 ---
 
-PumboProx and the other Pumbo plugins are still MVPs. We will bring every plugin to production state.
 
-No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
+No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but is strongly based on, that we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
 
 ## All known issues and Roadmap
 
@@ -130,6 +129,7 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 - ✅ Lower memory use on the proxy for large networks.
 - ✅ Lower memory use with hundreds of thousands of known players: names stay in the database, and memory keeps only the players online.
 - ✅ `/pp log` reads only the page you open, also with an unlimited log.
+- 
 
 </details>
 
@@ -228,9 +228,28 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 - Staff limits, with two switches that are off by default: argument permissions, and a rule that staff must be in a group before they change it or give it to players. They decide which players, groups and tracks your staff may change and view.
 - Rank, prefix, suffix and meta as placeholders through PumpkinPIE.
+- A change copies only what it touches, so a change in a big group no longer doubles the memory PumboPerms uses.
+- Players with their own groups, permissions or meta stay in the database while offline and load when they join or when a command changes them, so memory follows the players online.
+
+### Performance
+
+|                                             | Pumpkin (one server)                                     |
+| ------------------------------------------- | -------------------------------------------------------- |
+| Memory                                      | about 13 MB with 100 players online and 8000 permissions |
+| Memory for 400 000 known names              | +0.4 MiB, runs within a 64 MB plugin limit               |
+| One change among 20 000 players in a group  | heap peak +24.4 MiB                                      |
+| Change in a group every player has          | about 10 ms for 100 players and 8000 permissions         |
+| Change for one player                       | about 4 ms                                               |
+| Import of 3000 players                      | `/pp import <file>`: 27-31 ms, 69-74 ms again (it saves the current data first) |
+| Join with 400 000 known names               | up to 0.135 ms (0.57 ms for the first after the start)   |
+| Opening a database with 400 000 names       | 15 ms, with loading the data                             |
+| Database after a crash (kill -9)            | about 30 s: waits for the old lock to go stale           |
 
 
 <p align="center"><b>Running more than one server?</b> <a href="https://github.com/PumboMC/PumboProx">PumboProx</a> is the proxy for Pumpkin networks, with plugins in WebAssembly.<br>PumboPerms runs on it too: ranks live in one place for the whole network and can differ from server to server.</p>
+
+PumboProx and the other Pumbo plugins are still MVPs. We will bring every plugin to production state.
+
 
 ## License
 
