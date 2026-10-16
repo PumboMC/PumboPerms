@@ -28,7 +28,7 @@
 
 PumboProx and the other Pumbo plugins are still MVPs. We will bring every plugin to production state.
 
-No code or parts was copied or used from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
+No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
 
 ## All known issues and Roadmap
 
