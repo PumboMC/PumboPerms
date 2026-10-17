@@ -1,0 +1,24 @@
+[package]
+name = "pumbo-perms-core"
+description = "PumboPerms core: groups, inheritance, permission resolution, meta and rank tracks without platform code"
+version = "1.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+# Test helpers for the platform crates (`testing::pumpkin_has`).
+testing = []
+
+[dependencies]
+pumbo-common.workspace = true
+pumbo-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,87 @@
+# Publishes each release to the Pumpkin market and keeps the market description
+# in sync with pumpkinmarket.md. Needs the MARKET_API_TOKEN secret.
+name: market
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+    paths: [pumpkinmarket.md]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release to publish, e.g. v0.1.1-beta (empty updates only the description)
+        required: false
+
+permissions:
+  contents: read
+
+concurrency: market
+
+jobs:
+  market:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Plugin file and notes of the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          [ -n "$TAG" ] || exit 0
+          v=${TAG#v}
+          f="PumboPerms-Pumpkin-26.3-$v.wasm"
+          for _ in 1 2 3 4 5 6; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$f" --dir dist --clobber && break
+            sleep 10
+          done
+          test -f "dist/$f"
+          # The market file keeps one name across releases, so an update
+          # replaces the old file on the server instead of adding a second one.
+          mv "dist/$f" dist/PumboPerms-26.3.wasm
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          # The market gets the changes first, then the links.
+          changes=$(printf '%s\n' "$body" | awk '/^## What.s changed/{f=1;next} f&&/^(## |Previous release|\*\*Full changelog)/{exit} f' | sed '/^$/d')
+          [ -n "$changes" ] || changes=$(printf '%s\n' "$body" | sed -n '1{/^\*\*Full Changelog/!p;}')
+          prev=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq "[.[] | select(.tag_name != \"$TAG\")][0].tag_name // empty")
+          {
+            echo "version=$v"
+            echo "file=dist/PumboPerms-26.3.wasm"
+            echo "notes<<PUMBO_NOTES_END"
+            if [ -n "$changes" ]; then printf "## What's changed\n\n%s\n\n" "$changes"; fi
+            echo "Full notes: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+            if [ -n "$prev" ]; then echo "Full changelog: https://github.com/$GITHUB_REPOSITORY/compare/$prev...$TAG"; fi
+            echo "PUMBO_NOTES_END"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish to the Pumpkin market
+        if: steps.release.outputs.version != ''
+        uses: filiphsps/pumpkin-plugins/actions/publish-to-pumpkin-market@7ffc9694ba8e658df0540604691de268a1c30b64 # publish-to-pumpkin-market-v0.0.4
+        with:
+          plugin-id: 130
+          version: ${{ steps.release.outputs.version }}
+          wasm-file: ${{ steps.release.outputs.file }}
+          api-token: ${{ secrets.MARKET_API_TOKEN }}
+          release-notes: ${{ steps.release.outputs.notes }}
+
+      # Images can be linked by their path in the repository
+      # (`![Login](assets/market/login.png)`); the market gets their public address.
+      - name: Description from pumpkinmarket.md
+        id: listing
+        run: |
+          raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA"
+          {
+            echo "text<<PUMBO_MD_END"
+            sed -E "s#\]\((\./)?assets/#]($raw/assets/#g; s#src=\"(\./)?assets/#src=\"$raw/assets/#g" pumpkinmarket.md
+            echo "PUMBO_MD_END"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update the market listing
+        uses: filiphsps/pumpkin-plugins/actions/update-pumpkin-market-listing@59e85d260977a2dd7d07da2f9a75a4e799a6e6bd # update-pumpkin-market-listing-v0.0.2
+        with:
+          plugin-id: 130
+          description: ${{ steps.listing.outputs.text }}
+          api-token: ${{ secrets.MARKET_API_TOKEN }}

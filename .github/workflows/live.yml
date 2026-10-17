@@ -1,0 +1,111 @@
+# The live scenario (tools/perms-live.sh) on PumboProx and released Pumpkin
+# servers, on every pull request and every push to main: three setups, each on
+# two Pumpkin releases. Setups: proxy (PumboPerms on the proxy, servers without
+# PumboBridge), pumpkin (PumboPerms on a lone Pumpkin) and bridge (PumboPerms on the
+# proxy, PumboBridge and a passive PumboPerms on the servers). The proxy, its
+# test network script and the bots come from PumboProx, branch dev; PumboBridge
+# and PumboBans from their dev branches.
+name: live
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request cancels the run still going.
+concurrency:
+  group: live-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Without debug info in test builds; with it the runner disk fills up.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  live:
+    name: ${{ matrix.layout }}, Pumpkin ${{ matrix.pumpkin.tag }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [proxy, pumpkin, bridge]
+        pumpkin:
+          - tag: 0.2.0+26.3-26.51
+            protocol: 777
+            variant: '26.3'
+            sha256: 68c4416ca9fbfb3f2aeb6a8ce1de0e3fb02c5a85a53c8ba59a27941d7e43d8cd
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          path: plugin
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: PumboMC/PumboProx
+          ref: dev
+          path: prox
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: PumboMC/PumboBridge
+          ref: dev
+          path: bridge
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: PumboMC/PumboBans
+          ref: dev
+          path: bans
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal -t wasm32-wasip2
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: |
+            plugin
+            prox
+            bridge
+            bans
+      - name: Pumpkin ${{ matrix.pumpkin.tag }}
+        env:
+          TAG: ${{ matrix.pumpkin.tag }}
+          SHA256: ${{ matrix.pumpkin.sha256 }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/pumpkin" \
+            "https://github.com/Pumpkin-MC/Pumpkin/releases/download/${TAG//+/%2B}/pumpkin-X64-Linux"
+          echo "$SHA256  $RUNNER_TEMP/pumpkin" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/pumpkin"
+      # Step J8 starts the released 0.1.2-beta on the same data first.
+      - name: 'PumboPerms 0.1.2-beta'
+        if: matrix.layout == 'pumpkin'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILE: 'PumboPerms-Pumpkin-${{ matrix.pumpkin.variant }}-0.1.2-beta.wasm'
+        run: |
+          gh release download v0.1.2-beta --repo PumboMC/PumboPerms --pattern "$FILE" --dir "$RUNNER_TEMP"
+          grep -F "  $FILE" > "$RUNNER_TEMP/old.sha256" <<'EOF'
+          eb38421a3f318279d2069c7058ea3b099c242b2c0ac8b8c9fef133c75f97392a  PumboPerms-Pumpkin-26.3-0.1.2-beta.wasm
+          EOF
+          (cd "$RUNNER_TEMP" && sha256sum -c old.sha256)
+      - name: Live scenario
+        env:
+          LAYOUT: ${{ matrix.layout }}
+          PUMBO_PROTOCOL: ${{ matrix.pumpkin.protocol }}
+          PUMPKIN_BIN: ${{ runner.temp }}/pumpkin
+          OLD_PERMS_WASM: ${{ runner.temp }}/PumboPerms-Pumpkin-${{ matrix.pumpkin.variant }}-0.1.2-beta.wasm
+          PUMBO_PROX_DIR: ${{ github.workspace }}/prox
+          PUMBO_BRIDGE_DIR: ${{ github.workspace }}/bridge
+          PUMBO_BANS_DIR: ${{ github.workspace }}/bans
+        run: plugin/tools/perms-live.sh
+      - name: Server logs
+        if: failure()
+        run: |
+          shopt -s nullglob
+          for f in prox/target/perms-live/*/console.log; do
+            echo "::group::$f"
+            tail -n 300 "$f"
+            echo "::endgroup::"
+          done

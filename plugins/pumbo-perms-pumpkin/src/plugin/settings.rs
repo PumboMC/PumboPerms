@@ -1,0 +1,82 @@
+//! Reading `config.yml` and `lang/<code>.yml`.
+
+use pumbo_common::config::{self, Warning};
+use pumbo_common::lang::Lang;
+use pumbo_common::text::Args;
+use pumbo_perms_core::ui::{self, Text};
+
+use super::state::Rt;
+use crate::BUNDLES;
+use crate::config::{Config, TEMPLATE};
+
+pub fn load_config(dir: &str) -> (Config, Vec<Warning>) {
+    let (text, warning) = config::read_or_create(&format!("{dir}/config.yml"), TEMPLATE);
+    let (cfg, mut warnings) = config::load::<Config>(&text);
+    warnings.extend(warning);
+    warnings.extend(config::old_files(dir));
+    (cfg, warnings)
+}
+
+/// [`load_config`] at start: a `config.yml` that is not valid YAML gives way to
+/// the last good copy; without one the plugin does not start.
+pub fn load_config_at_start(dir: &str) -> Result<(Config, Vec<Warning>), String> {
+    let (_, warning) = config::read_or_create(&format!("{dir}/config.yml"), TEMPLATE);
+    let (cfg, mut warnings) = config::load_with_last_good::<Config>(dir, dir)?;
+    warnings.extend(warning);
+    warnings.extend(config::old_files(dir));
+    Ok((cfg, warnings))
+}
+
+pub fn load_lang(dir: &str, code: &str) -> (Lang, Vec<Warning>) {
+    let template = Lang::template(&BUNDLES, code);
+    let (text, warning) = config::read_or_create(&format!("{dir}/lang/{code}.yml"), &template);
+    let (lang, warnings) = Lang::load(&BUNDLES, code, Some(&text));
+    let mut warnings: Vec<Warning> =
+        warnings.into_iter().map(|w| Warning { message: format!("lang/{code}.yml: {}", w.message), ..w }).collect();
+    warnings.extend(warning);
+    (lang, warnings)
+}
+
+/// `/pp reload`: config and messages (the database stays as it is). Whether
+/// the permission check event is answered, the command tree and the
+/// operator level of the nodes registered in Pumpkin change with a restart.
+pub fn reload(rt: &mut Rt) -> Text {
+    let (mut cfg, mut warnings) = load_config(&rt.dir);
+    let (lang, more) = load_lang(&rt.dir, &cfg.language);
+    warnings.extend(more);
+    if let Some(w) = warnings.iter().find(|w| w.fatal) {
+        rt.warn(format!("PumboPerms: reload refused, the current settings stay: {w}"));
+        return ui::error(rt.lang(), "command-reload-failed", &Args::new().arg(ui::value(&w.message)));
+    }
+    if cfg.provider.check_event != rt.check_event {
+        warnings.push(Warning::new(Some("provider.check-event"), "changes after a server restart"));
+    }
+    if cfg.commands.aliases != rt.cfg.commands.aliases {
+        warnings.push(Warning::new(Some("commands.aliases"), "commands.aliases changes after a server restart"));
+        cfg.commands.aliases.clone_from(&rt.cfg.commands.aliases);
+    }
+    if cfg.commands.disabled != rt.cfg.commands.disabled {
+        warnings.push(Warning::new(
+            Some("commands.disabled"),
+            "commands.disabled applies to /pp now, to the command tree after a server restart",
+        ));
+    }
+    if cfg.defaults.op_level != rt.registered_op_level {
+        warnings.push(Warning::new(
+            Some("defaults.op-level"),
+            "defaults.op-level applies to /pp now, to Pumpkin's own permission checks after a server restart",
+        ));
+    }
+    rt.engine.cfg = cfg.core();
+    rt.engine.lang = lang;
+    rt.cfg = cfg;
+    warnings.extend(config::keep_last_good(&rt.dir, &rt.dir));
+    for w in &warnings {
+        rt.warn(format!("PumboPerms: config: {w}"));
+    }
+    if warnings.is_empty() {
+        ui::success(rt.lang(), "command-reloaded", &Args::new())
+    } else {
+        ui::warn(rt.lang(), "reloaded-warnings", &Args::new().arg(ui::value(warnings.len())))
+    }
+}

@@ -1,0 +1,11 @@
+# PumboPerms on PumboProx (English).
+prefix: "&8[&#f28c28&lP&#ffd54f&lP&8] "
+reloaded-warnings: Reloaded with {0} warnings, see the proxy log.
+version-mode: Mode
+mode-provider: permission provider of the proxy
+mode-not-provider: "not the provider: set permissions.provider in pumboprox.yml"
+version-online: Online
+version-servers: Servers
+source-unknown: "there is no source {0} here; on PumboProx it is {1} (permissions.yml)"
+source-no-file: the proxy has not sent permissions.yml yet
+source-file-errors: "permissions.yml has errors: {0}"
