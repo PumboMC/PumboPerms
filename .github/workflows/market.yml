@@ -61,7 +61,7 @@ jobs:
         if: steps.release.outputs.version != ''
         uses: filiphsps/pumpkin-plugins/actions/publish-to-pumpkin-market@7ffc9694ba8e658df0540604691de268a1c30b64 # publish-to-pumpkin-market-v0.0.4
         with:
-          plugin-id: 112
+          plugin-id: 130
           version: ${{ steps.release.outputs.version }}
           wasm-file: ${{ steps.release.outputs.file }}
           api-token: ${{ secrets.MARKET_API_TOKEN }}
@@ -82,6 +82,6 @@ jobs:
       - name: Update the market listing
         uses: filiphsps/pumpkin-plugins/actions/update-pumpkin-market-listing@59e85d260977a2dd7d07da2f9a75a4e799a6e6bd # update-pumpkin-market-listing-v0.0.2
         with:
-          plugin-id: 112
+          plugin-id: 130
           description: ${{ steps.listing.outputs.text }}
           api-token: ${{ secrets.MARKET_API_TOKEN }}
