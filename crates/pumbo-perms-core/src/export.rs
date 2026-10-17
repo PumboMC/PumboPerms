@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn rejects_bad_files() {
         assert!(parse("nope").is_err());
-        assert!(parse(r#"{"format":"luckperms","version":1}"#).is_err());
+        assert!(parse(r#"{"format":"other","version":1}"#).is_err());
         assert!(parse(r#"{"format":"pumboperms","version":99}"#).is_err());
         let ok = parse(r#"{"format":"pumboperms","version":1,"groups":[{"name":"a","data":{"permissions":[{"node":"PumboBans:Ban","value":true}]}}]}"#)
             .unwrap();

@@ -1393,7 +1393,7 @@ fn chat_lines_start_with_the_tag() {
 }
 
 #[test]
-fn player_help_is_grouped_like_luckperms() {
+fn player_help_is_grouped() {
     let mut e = engine();
     let op = Who::player("Steve", STEVE, 4, "world");
     let show = |e: &mut Engine, who: &Who, line: &str| command::run(e, who, &split_args(line), &env(0)).reply;

@@ -36,8 +36,8 @@ pub const YES: &str = "&a";
 /// `false`.
 pub const NO: &str = "&c";
 
-/// Chat text with the PumboPerms prefix in front of every line, as LuckPerms
-/// does (`[PP] ...`); lines that already start with it stay as they are. An
+/// Chat text with the PumboPerms prefix in front of every line (`[PP] ...`);
+/// lines that already start with it stay as they are. An
 /// empty prefix leaves the text alone.
 pub fn tagged(lang: &Lang, text: Text) -> Text {
     let tag = style::prefix(lang);
