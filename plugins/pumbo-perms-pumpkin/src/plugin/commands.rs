@@ -62,7 +62,7 @@ pub fn node(n: &Node, path: &mut Vec<Word>) -> CommandNode {
         built = built.then(node(child, path));
     }
     // Every node runs, also before a command is complete: PumboPerms answers
-    // with the usage or the help, as on PumboProx and in LuckPerms, where
+    // with the usage or the help, as on PumboProx, where
     // Pumpkin would only say the command is unknown or incomplete.
     built = built.execute(Pp { path: path.clone() });
     path.pop();

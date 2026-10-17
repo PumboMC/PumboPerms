@@ -246,7 +246,7 @@ pub fn run(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Outcome {
     };
     if !who.is_console() {
         // In chat a view sits between two bars and every line starts with the
-        // prefix, as in LuckPerms (`[PP] ...`).
+        // prefix (`[PP] ...`).
         out.reply = ui::tagged(&e.lang, ui::framed(&e.lang, std::mem::take(&mut out.reply)));
     }
     out
@@ -538,7 +538,7 @@ fn rights(e: &mut Engine, who: &Who, now: u64) -> impl Fn(&str) -> bool + use<> 
 
 fn show_help(e: &mut Engine, who: &Who, help: Help, page: usize, now: u64) -> Text {
     let check = rights(e, who, now);
-    // Every command in one reply, like LuckPerms' /lp; the views keep their pages.
+    // Every command in one reply; the views keep their pages.
     let help = help
         .per_page(usize::MAX)
         .tag(style::prefix(&e.lang), Line::parse(&format!("{}> ", ui::MUTED)))
@@ -559,7 +559,7 @@ fn general_help(e: &mut Engine, who: &Who, page: usize, now: u64) -> Text {
 }
 
 /// The words of the player and group help that stand for their own list of
-/// commands, as in LuckPerms (`/pp user <player> permission`), with the
+/// commands (`/pp user <player> permission`), with the
 /// message that describes each.
 const SUBGROUPS: &[(&str, &str)] =
     &[("permission", "desc-perm-group"), ("parent", "desc-parent-group"), ("meta", "desc-meta-group")];
@@ -601,7 +601,7 @@ fn holder_help(e: &mut Engine, who: &Who, base: &str, user: bool, filter: &str, 
 }
 
 /// `/pp user`, `/pp group` or `/pp track` without a name: its commands, with
-/// `<player>` or `<name>` in place of the name, as LuckPerms lists them.
+/// `<player>` or `<name>` in place of the name.
 fn unnamed_help(e: &mut Engine, who: &Who, kind: &str, now: u64) -> Res {
     if !allowed_prefix(e, who, &format!("{kind}."), now) {
         return Err(ui::error(&e.lang, "command-no-permission", &Args::new()));
