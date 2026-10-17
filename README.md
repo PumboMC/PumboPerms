@@ -17,10 +17,6 @@
 
 No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but is strongly modeled on, that why we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
 
-<p align="center">
-  <img src="assets/pp-help.png" alt="/pp help">
-</p>
-
 ## Project Pages
 
 - [Features](docs/features.md)
