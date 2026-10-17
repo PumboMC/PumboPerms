@@ -46,14 +46,16 @@ Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS
 
 - A change in a group every player inherits, with 100 players online and 8000 permissions named in the data: about 10 ms to work out what changes on the players. A change that reaches one player: about 4 ms, most of it for the list of permissions.
 - A player gets the command list again at most once a second.
-- Memory: with the numbers above the test process grew by about 13 MB. `max_memory_mb = 64` in `[plugins.overrides.pumboperms]` leaves room.
+- A join with 400 000 known names: up to 0.135 ms, the first after the start up to 0.57 ms (empty database cache). Known names stay in the database, and memory holds the names of the players online: with 400 000 known names, opening the database and 200 joins raised the heap peak by 0.4 MiB (159.3 MiB in 0.1.2-beta).
+- Memory: with the numbers above the test process grew by about 13 MB. `max_memory_mb = 64` in `[plugins.overrides.pumboperms]` leaves room, also for 400 000 known names: with that limit and such a database, PumboPerms on Pumpkin 0.2.0 opened the database and read its data in 15 ms, with no plugin errors in the log.
 
 ## Compatibility
 
 | File | Pumpkin | Minecraft |
 | --- | --- | --- |
 | `PumboPerms-26.3.wasm` | release `0.2.0+26.3-26.51` | 26.3 |
-| `PumboPerms-26.2.wasm` | release `0.1.0-dev+26.2-26.45` | 26.2 |
+
+Builds for Pumpkin 0.1.0-dev (Minecraft 26.2) are paused for now.
 
 Pumpkin checks the plugin API strictly: a file only loads on the server version it was built for.
 
@@ -76,14 +78,14 @@ The plugin needs the `fs.read.data` and `fs.write.data` permissions of Pumpkin's
 
 ## Updating
 
-Replace the file with the new one of the same name (`PumboPerms-26.3.wasm` or `PumboPerms-26.2.wasm`) and restart the server. The GitHub release has the version in the file name (`PumboPerms-Pumpkin-26.3-<version>.wasm`); rename it. Keep the name, so the update overwrites the old file instead of adding a second PumboPerms next to it. `plugins/data/pumboperms/` stays.
+Replace the file with the new one of the same name (`PumboPerms-26.3.wasm`) and restart the server. The GitHub release has the version in the file name (`PumboPerms-Pumpkin-26.3-<version>.wasm`); rename it. Keep the name, so the update overwrites the old file instead of adding a second PumboPerms next to it. `plugins/data/pumboperms/` stays.
 
 Coming from 0.1.2-beta, run `/pp export` first. The first start of the new version moves the import ledgers (`imports/<source>.json`, renamed to `.json.migrated`) into `perms.redb` and raises its schema to 2; 0.1.2-beta then refuses that file as newer than it understands. To go back, put the old file in place and import the export with `/pp import <file>` on a fresh `perms.redb`.
 
 ## Building
 
 ```sh
-./build.sh          # dist/PumboPerms-26.3.wasm and dist/PumboPerms-26.2.wasm
+./build.sh          # dist/PumboPerms-26.3.wasm
 cargo test -p pumbo-perms-core -p pumbo-perms-pumpkin
 ```
 

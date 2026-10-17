@@ -1,65 +1,23 @@
-# PumboPerms
+The project is 100% open source under GPL-3.0: [PumboPerms on GitHub](https://github.com/PumboMC/PumboPerms).
 
-Ranks and permissions for Pumpkin servers. Put players into groups, give the groups permissions and prefixes, and move players up and down rank ladders. On the first start PumboPerms takes over the permissions your server already has.
+No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but is strongly modeled on, that why we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
 
-## Features
+## No restart or reload needed
 
-- **Groups with inheritance and weights.** A group gets the permissions of its parents. When two groups disagree, the heavier one wins.
-- **Wildcards.** `minecraft:command.*` or `*`. The most specific node wins.
-- **Temporary ranks.** Permissions, groups and prefixes for `1h30m` or `7d`. They end on their own.
-- **Contexts.** `world=world_nether` limits a permission, a group or a prefix to one world.
-- **Prefixes and suffixes** with priorities, plus your own meta values.
-- **Rank ladders** with `/pp promote` and `/pp demote`.
-- **Change log, JSON export and import**, with undo.
-- **Tab completion** for players, groups, tracks and permission nodes.
-- **Placeholders for other plugins** (from 0.1.2-beta): `%pumboperms_prefix%`, `%pumboperms_rank%` and more for chat, tab and scoreboard plugins. How to use them: [INTEGRATION.md](https://github.com/PumboMC/PumboPerms/blob/main/INTEGRATION.md).
-- **Closes a Pumpkin 0.2.0 hole.** There `/tp`, `/xp`, `/banip` and `/pardonip` skip the permission check. PumboPerms blocks them for players without the permission.
+Permissions and groups apply at once, without a restart or reload.
 
-## Quick start
+![/pp in game](assets/market/demo.gif)
 
-```
-/pp creategroup vip
-/pp group vip parent add default
-/pp group vip setweight 10
-/pp group vip permission set minecraft:command.gamemode
-/pp group vip meta setprefix 10 "&6[VIP] "
-/pp user Steve parent add vip
-```
+## Project Pages
 
-## Commands
+- [Roadmap](https://github.com/PumboMC/PumboPerms/blob/main/docs/roadmap.md)
+- [Features](https://github.com/PumboMC/PumboPerms/blob/main/docs/features.md)
+- [Installation](https://github.com/PumboMC/PumboPerms/blob/main/docs/installation.md)
+- [Commands](https://github.com/PumboMC/PumboPerms/blob/main/docs/commands.md)
+- [Performance](https://github.com/PumboMC/PumboPerms/blob/main/docs/how-it-works.md#limits)
+- [Changelog](https://github.com/PumboMC/PumboPerms/blob/main/CHANGELOG.md)
+- [Bug reports](https://github.com/PumboMC/PumboPerms/issues)
 
-| Command | What it does |
-| --- | --- |
-| `/pp user <player> info` | Groups, permissions and meta of a player |
-| `/pp user <player> permission set\|unset <node>` | Give or take a permission |
-| `/pp user <player> parent add\|remove <group>` | Add or remove a group |
-| `/pp user <player> meta setprefix <priority> <text>` | Set a prefix |
-| `/pp group <name> ...` | The same for groups, plus `setweight` |
-| `/pp creategroup <name>` / `deletegroup <name>` | Create or delete a group |
-| `/pp track <name> create\|append\|remove` | Build a rank ladder |
-| `/pp promote <player> <track>` / `demote` | Move a player one step |
-| `/pp log` / `export` / `import` | Change log, backup, restore |
-| `/pp reload` / `version` | Reload the config, show the version |
+## License
 
-`/pp help` shows every command you may use. `/pp` is short for `/pumboperms`, and `u`, `g`, `t` work for `user`, `group`, `track`. Permissions are named `pumboperms:<name>` and default to operators of level 3.
-
-## Screenshots
-
-![/pp help](assets/market/help.webp)
-![/pp user commands](assets/market/user-help.webp)
-![A group with its permissions](assets/market/group-info.webp)
-
-## Installation
-
-Drop the file into `plugins/` and start the server. The config is created in `plugins/data/pumboperms/`. Works with Pumpkin 0.2.0 (Minecraft 26.3).
-
-## Running a network?
-
-PumboPerms also runs on [PumboProx](https://github.com/PumboMC/PumboProx): one set of ranks for every server, with differences per server where you need them.
-
----
-
-PumboPerms is in beta. Try it on a test server before you put players on it.
-Source, documentation and issues: https://github.com/PumboMC/PumboPerms (GPL-3.0)
-
-[![PumboProx: everything you need to run a network on Pumpkin](assets/pumboprox.webp)](https://github.com/PumboMC/PumboProx)
+PumboPerms is licensed under the GNU General Public License v3.0. It is not affiliated with Mojang, Microsoft or the Pumpkin project.
