@@ -2,8 +2,6 @@ The project is 100% open source under GPL-3.0: [PumboPerms on GitHub](https://gi
 
 No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but is strongly modeled on, that why we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
 
-![/pp help](assets/pp-help.png)
-
 ## No restart or reload needed
 
 Permissions and groups apply at once, without a restart or reload.
