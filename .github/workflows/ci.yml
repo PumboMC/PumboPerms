@@ -39,10 +39,16 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # The plugin builds as build.sh makes them: Pumpkin 26.3 (default
-      # features) and PumboProx, where the plugin has one.
+      # features), Pumpkin 26.2 (mc262) only when build.sh builds that feature
+      # (a plugin can keep it in Cargo.toml unbuilt), and PumboProx, where the
+      # plugin has one.
       - name: Clippy for WebAssembly
         run: |
           cargo clippy -p pumbo-perms-pumpkin --target wasm32-wasip2 --locked -- -D warnings
+          if grep -q -- '--features mc262' plugins/pumbo-perms-pumpkin/build.sh; then
+            cargo clippy -p pumbo-perms-pumpkin --target wasm32-wasip2 --no-default-features --features mc262 \
+              --target-dir target/mc262 --locked -- -D warnings
+          fi
           if [ -d plugins/pumbo-perms-prox ]; then
             cargo clippy -p pumbo-perms-prox --target wasm32-wasip2 --target-dir target/perms-prox --locked -- -D warnings
           fi
@@ -52,3 +58,9 @@ jobs:
         run: cargo deny --locked check
       - name: Build
         run: for b in plugins/*/build.sh; do "$b"; done
+      - name: Keep the plugin files
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: plugins
+          path: dist/*.wasm
+          retention-days: 14
