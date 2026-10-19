@@ -26,8 +26,9 @@ The plugin only needs to read and write its own data folder. It has no network a
 | --- | --- | --- | --- |
 | **PumboProx** (whole network) | `PumboPerms-Proxy-<version>.wasm` | `pumbo-perms.wasm`, on the proxy | Stable. One set of ranks for the whole network: set them with `/pp` on the proxy and they apply on every server right away, through [PumboBridge](https://github.com/PumboMC/PumboBridge). Imports the proxy's `permissions.yml` at the first start. |
 | **Pumpkin 0.2.0** (one server, Minecraft 26.3) | `PumboPerms-Pumpkin-26.3-<version>.wasm` | `PumboPerms-26.3.wasm`, on the server | Stable. Ranks and permissions for that server. |
+| **Pumpkin 0.1.0-dev** (one server, Minecraft 26.2) | `PumboPerms-Pumpkin-26.2-<version>.wasm` | `PumboPerms-26.2.wasm`, on the server | Stable. Ranks and permissions for that server. |
 
-Pumpkin checks the plugin API strictly: a file only loads on the Pumpkin version it was built for. Builds for Pumpkin 0.1.0-dev (Minecraft 26.2) are paused for now.
+Pumpkin checks the plugin API strictly: a file only loads on the Pumpkin version it was built for. On Pumpkin 0.1.0-dev every player sees the whole command list in Tab; commands they lack are still refused.
 
 When PumboPerms runs on the proxy, the proxy rules. A PumboPerms on a server behind it steps back within 10 seconds: it hands the permissions it set to PumboBridge, which writes the proxy's decisions from then on, and its `/pp` answers that the proxy manages the ranks. Its own data stays untouched. The export PumboBridge receives holds only the flag that the proxy rules, whatever the size of your database and whether PumboPerms on the proxy runs right now, so a server never takes over because the proxy's PumboPerms is restarting. Remove PumboPerms from the proxy and the one on the server takes over again.
 
@@ -55,7 +56,7 @@ max_memory_mb = 64
 
 ## Updating
 
-Save the new file in `plugins/` under the same name as the old one: `pumbo-perms.wasm` on PumboProx, `PumboPerms-26.3.wasm` on Pumpkin. Keep the name, so the update overwrites the old file. On PumboProx two files with the id `pumbo-perms` stop the proxy at start with both names and "delete the older one". Your data folder stays.
+Save the new file in `plugins/` under the same name as the old one: `pumbo-perms.wasm` on PumboProx, `PumboPerms-26.3.wasm` or `PumboPerms-26.2.wasm` on Pumpkin. Keep the name, so the update overwrites the old file. On PumboProx two files with the id `pumbo-perms` stop the proxy at start with both names and "delete the older one". Your data folder stays.
 
 Coming from 0.1.2-beta, run `/pp export` first. The first start of the new version moves the import ledgers into `perms.redb` and raises its schema; 0.1.2-beta then refuses the file as newer than it understands. To go back, put the old file in place and import your export with `/pp import <file>` on a fresh `perms.redb`.
 
@@ -71,13 +72,11 @@ rustup target add wasm32-wasip2
 
 Cargo fetches the shared Pumbo libraries (`pumbo-common`, `pumbo-sdk`, `pumbo-contracts`) from the [PumboProx](https://github.com/PumboMC/PumboProx) repository on the first build.
 
-Pumpkin build (`dist/PumboPerms-26.3.wasm`):
+Pumpkin builds (`dist/PumboPerms-26.3.wasm` and `dist/PumboPerms-26.2.wasm`):
 
 ```sh
 plugins/pumbo-perms-pumpkin/build.sh
 ```
-
-To build for Pumpkin 0.1.0-dev (Minecraft 26.2) by hand, run `cargo build -p pumbo-perms-pumpkin --release --target wasm32-wasip2 --no-default-features --features mc262`.
 
 PumboProx build (`plugins/pumbo-perms-prox/dist/pumbo-perms.wasm`):
 
