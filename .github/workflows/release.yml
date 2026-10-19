@@ -67,7 +67,12 @@ jobs:
           # Most Pumpkin builds land in dist/ of the workspace, some in their own folder.
           src=dist
           if [ -d plugins/pumbo-perms-pumpkin/dist ]; then src=plugins/pumbo-perms-pumpkin/dist; fi
-          cp "$src/PumboPerms-26.3.wasm" "$out/PumboPerms-Pumpkin-26.3-$v.wasm"
+          # Every Pumpkin file build.sh made (PumboPerms-<Minecraft version>.wasm);
+          # the checkout starts clean, so there are no others.
+          for f in "$src"/PumboPerms-*.wasm; do
+            mc=${f##*/PumboPerms-}
+            cp "$f" "$out/PumboPerms-Pumpkin-${mc%.wasm}-$v.wasm"
+          done
           cd "$out"
           sha256sum -- *.wasm > SHA256SUMS
           cat SHA256SUMS

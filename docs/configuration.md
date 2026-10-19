@@ -12,7 +12,7 @@ The config file is written on the first start, with a short comment on every opt
 | `defaults.op-level` | `3` | Pumpkin | Operators from this level may use every `/pp` subcommand that no group decides (0 turns it off). Other Pumbo plugins and Pumpkin's commands keep their own operator levels. Pumpkin's own default for the `pumboperms:` nodes changes only after a server restart. |
 | `log.max-entries` | `10000` | both | Changes kept in the log (0: no limit). |
 | `log.notify` | `true` | both | Tell staff with `pumbo.perms.log.notify` about changes. |
-| `provider.check-event` | `false` | Pumpkin | Also answer each of Pumpkin's permission checks. For testing only: on Pumpkin 0.2.0 it can hang the server. Needs a restart. |
+| `provider.check-event` | `false` | Pumpkin | Also answer each of Pumpkin's permission checks. For testing only: on Pumpkin 0.2.0 and 0.1.0-dev it can hang the server. Needs a restart. |
 | `provider.resend-commands` | `true` | Pumpkin | Send players their command list again after a change (not with `check-event: true`). |
 | `provider.refresh-seconds` | `5` | Pumpkin | How often PumboPerms checks expired nodes and the operator levels and worlds of online players. Commands, joins and calls from other plugins remove expired nodes at once. `/pp reload` changes it. |
 | `import.enabled` | `true` | both | Take over other permission sources at start (on PumboProx: `permissions.yml`). |

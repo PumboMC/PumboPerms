@@ -17,7 +17,7 @@ First stable release. Run `/pp export` before you upgrade from 0.1.2-beta: 1.0.0
 ### Changed
 
 - New chat formatting.
-- Tab shows only what you may use.
+- Tab shows only what you may use (on Pumpkin 0.1.0-dev it still lists every command).
 - Players without a group are in `default` everywhere.
 - `group.<name>` checks group membership.
 - `defaults.op-level` covers only `/pp`.
@@ -31,7 +31,6 @@ First stable release. Run `/pp export` before you upgrade from 0.1.2-beta: 1.0.0
 
 ### Removed
 
-- Minecraft 26.2 build, paused for now.
 - `/pp editor` from the help and Tab.
 
 ### Fixed

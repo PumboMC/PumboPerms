@@ -24,7 +24,7 @@
 # build, checks the data and goes back to the old file, which has to refuse the
 # newer database and leave its data as it is (this build reads it again). PUMPKIN_BIN
 # (the Pumpkin binary), PUMBO_PROTOCOL of that Pumpkin (777 for
-# 0.2.0+26.3-26.51; PumboPerms is built for Minecraft 26.3 only for now),
+# 0.2.0+26.3-26.51, 776 for 0.1.0-dev+26.2-26.45; it picks the plugin builds),
 # PUMBO_PROX_DIR (a PumboProx checkout), PUMBO_BRIDGE_DIR and PUMBO_BANS_DIR (checkouts
 # that build PumboBridge and PumboBans; this repository when it has them).
 # LAYOUT runs one setup instead of both phases:
@@ -61,7 +61,8 @@ SMALL=0
 PUMBO_PROTOCOL=${PUMBO_PROTOCOL:-777}
 case $PUMBO_PROTOCOL in
   777) VARIANT=26.3 ;;
-  *) echo "perms-live: PumboPerms is built for Minecraft 26.3 only for now (PUMBO_PROTOCOL $PUMBO_PROTOCOL is not tested)" >&2; exit 1 ;;
+  776) VARIANT=26.2 ;;
+  *) echo "perms-live: PUMBO_PROTOCOL $PUMBO_PROTOCOL: no Pumpkin plugin variant (777 or 776)" >&2; exit 1 ;;
 esac
 OLD_PERMS_WASM=${OLD_PERMS_WASM:-}
 BRIDGE_DIR=${PUMBO_BRIDGE_DIR:-$L}
@@ -284,8 +285,9 @@ if [ -n "$NETWORK_STEPS" ] || [ "$N16" = 1 ]; then
     fi
   } > "$NET/proxy/permissions.yml"
   # The load bots of N12 and N13 are ops: Pumpkin kicks anyone else who sends more than about a command a second.
-  ops "$NET/survival/data/ops.json" PpOp7x "$(uuid PpOp7x)" 3 PpPlain7x "$(uuid PpPlain7x)" 1 \
-    PpPend7x "$(uuid PpPend7x)" 1 PpSlow7x "$(uuid PpSlow7x)" 1
+  # Level 2, not 1: Pumpkin 0.1.0-dev knows no level 1 and then reads no ops at all, without a word in its log.
+  ops "$NET/survival/data/ops.json" PpOp7x "$(uuid PpOp7x)" 3 PpPlain7x "$(uuid PpPlain7x)" 2 \
+    PpPend7x "$(uuid PpPend7x)" 2 PpSlow7x "$(uuid PpSlow7x)" 2
   network up "$PUMPKIN"
   # dev-network.sh keeps files it did not write.
   grep -q PpPend7x "$NET/proxy/permissions.yml" || die "permissions.yml was overwritten"
