@@ -50,17 +50,17 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           repository: PumboMC/PumboProx
-          ref: dev
+          ref: main
           path: prox
       - uses: actions/checkout@v7.0.1
         with:
           repository: PumboMC/PumboBridge
-          ref: dev
+          ref: main
           path: bridge
       - uses: actions/checkout@v7.0.1
         with:
           repository: PumboMC/PumboBans
-          ref: dev
+          ref: main
           path: bans
       - name: Rust
         run: |

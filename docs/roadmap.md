@@ -6,7 +6,7 @@
 ✅ FIXED - confirmed in game. Open a topic for the details. \
 ☑️ FIXED - not confirmed in game yet
 
-Work on the next release happens on the [`dev`](https://github.com/PumboMC/PumboPerms/tree/dev) branch.
+Work on the next release happens on [`main`](https://github.com/PumboMC/PumboPerms/tree/main).
 
 ### 1.0.0 - ✅ 
 
