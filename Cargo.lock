@@ -4,9 +4,9 @@ version = 4
 
 [[package]]
 name = "annotate-snippets"
-version = "0.12.16"
+version = "0.12.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f211a51805bc641f3ad5b7664c77d2547af685cc33b4cd8d31964027a46f13f1"
+checksum = "b2a5b0a5ab8561c603f16c3b78c24a386b1f70e7fc1b1b1e8c15738828e4a176"
 dependencies = [
  "anstyle",
  "memchr",
@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "pumbo-common"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c4a1f397141bf1265409baf2cebab14be6b5a0bd"
 dependencies = [
  "md-5",
  "rand_core 0.6.4",
@@ -578,7 +578,7 @@ dependencies = [
 [[package]]
 name = "pumbo-contracts"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c4a1f397141bf1265409baf2cebab14be6b5a0bd"
 dependencies = [
  "serde",
 ]
@@ -621,7 +621,7 @@ dependencies = [
 [[package]]
 name = "pumbo-sdk"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?branch=dev#6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f"
+source = "git+https://github.com/PumboMC/PumboProx?branch=dev#c4a1f397141bf1265409baf2cebab14be6b5a0bd"
 dependencies = [
  "ciborium",
  "futures",
