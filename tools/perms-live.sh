@@ -39,8 +39,9 @@
 #   LAYOUT=proxy NETWORK_STEPS=N16 tools/perms-live.sh  (a fresh network and the
 #             N16 block only, without the other steps and the restarts)
 # Every phase starts from a fresh install with default configs; only ports and
-# paths are set, and J10 and N16 set the memory limit and the database of
-# PumboPerms.
+# paths are set, the proxy gets online-mode: false (per-player asks Mojang about
+# every bot, and a busy API refuses the login), and J10 and N16 set the memory
+# limit and the database of PumboPerms.
 # Processes are stopped by the PIDs this script started.
 set -euo pipefail
 shopt -s nullglob
@@ -106,7 +107,7 @@ UPGRADE=$NET/upgrade
 MEMORY=$NET/j10
 PLUGINS=$L/target/live-plugins
 export PATH="$HOME/.cargo/bin:$PATH"
-export PUMBO_PORT=$PORT PUMBO_PROTOCOL PUMBO_PLUGINS_DIR=$PLUGINS PUMBO_NETWORK_DIR=$NET
+export PUMBO_PORT=$PORT PUMBO_PROTOCOL PUMBO_PLUGINS_DIR=$PLUGINS PUMBO_NETWORK_DIR=$NET PUMBO_ONLINE_MODE=false
 
 die() { echo "perms-live: $*" >&2; exit 1; }
 network() { "$P/tools/dev-network.sh" "$@"; }
