@@ -97,7 +97,7 @@ impl Plugin for PumboPerms {
         let summary = format!(
             "PumboPerms {} loaded ({}): {} groups, {} users, {} tracks",
             env!("CARGO_PKG_VERSION"),
-            api::API_LABEL,
+            api::api_label(),
             engine.perms.groups().count(),
             engine.perms.users().filter(|u| !u.data.is_empty()).count(),
             engine.perms.tracks().count()

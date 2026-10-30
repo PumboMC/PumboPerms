@@ -70,7 +70,7 @@ pub const PLUGIN_NAME: &str = "pumboperms";
 #[cfg(all(target_arch = "wasm32", feature = "mc263", feature = "mc262"))]
 compile_error!("enable only one of the features `mc263` and `mc262`");
 #[cfg(all(target_arch = "wasm32", not(any(feature = "mc263", feature = "mc262"))))]
-compile_error!("enable one of the features `mc263` (Pumpkin 0.2.0) or `mc262` (Pumpkin 0.1.0-dev)");
+compile_error!("enable one of the features `mc263` (Pumpkin 0.2.1 or 0.2.0) or `mc262` (Pumpkin 0.1.0-dev)");
 
 #[cfg(all(target_arch = "wasm32", feature = "mc262", not(feature = "mc263")))]
 extern crate api262 as papi;

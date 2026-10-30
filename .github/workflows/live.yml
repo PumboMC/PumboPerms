@@ -1,10 +1,10 @@
 # The live scenario (tools/perms-live.sh) on PumboProx and released Pumpkin
 # servers, on every pull request and every push to main: three setups, each on
-# two Pumpkin releases. Setups: proxy (PumboPerms on the proxy, servers without
+# three Pumpkin releases. Setups: proxy (PumboPerms on the proxy, servers without
 # PumboBridge), pumpkin (PumboPerms on a lone Pumpkin) and bridge (PumboPerms on the
 # proxy, PumboBridge and a passive PumboPerms on the servers). The proxy, its
-# test network script and the bots come from PumboProx, branch dev; PumboBridge
-# and PumboBans from their dev branches.
+# test network script and the bots come from PumboProx, branch main;
+# PumboBridge and PumboBans from their main branches.
 name: live
 
 on:
@@ -35,13 +35,24 @@ jobs:
       matrix:
         layout: [proxy, pumpkin, bridge]
         pumpkin:
-          - tag: 0.2.0+26.3-26.51
+          # variant: the plugin builds for that release (PUMBO_VARIANT).
+          # old: the released PumboPerms 0.1.2-beta file that step J8 starts
+          # first. 0.1.2-beta has no file for Pumpkin 0.2.1, so that entry
+          # runs the lone server steps without J8 (solo_steps).
+          - tag: 0.2.1+26.3-26.51
             protocol: 777
             variant: '26.3'
+            sha256: bda0fcefe2f808c5d8fdf82a04326f5d77055322dfcd2900356e47e48f3dd56f
+            solo_steps: 'J1 J2 J3 J7 J4 J5 J6'
+          - tag: 0.2.0+26.3-26.51
+            protocol: 777
+            variant: '0.2.0'
+            old: 'PumboPerms-Pumpkin-26.3-0.1.2-beta.wasm'
             sha256: 68c4416ca9fbfb3f2aeb6a8ce1de0e3fb02c5a85a53c8ba59a27941d7e43d8cd
           - tag: 0.1.0-dev+26.2-26.45
             protocol: 776
             variant: '26.2'
+            old: 'PumboPerms-Pumpkin-26.2-0.1.2-beta.wasm'
             sha256: 565db1641b229d6a311d299f7a28c7e2d27b2f572480cfed36b930b0ae89ac11
     steps:
       - uses: actions/checkout@v7.0.1
@@ -84,10 +95,10 @@ jobs:
           chmod +x "$RUNNER_TEMP/pumpkin"
       # Step J8 starts the released 0.1.2-beta on the same data first.
       - name: 'PumboPerms 0.1.2-beta'
-        if: matrix.layout == 'pumpkin'
+        if: matrix.layout == 'pumpkin' && matrix.pumpkin.old != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          FILE: 'PumboPerms-Pumpkin-${{ matrix.pumpkin.variant }}-0.1.2-beta.wasm'
+          FILE: ${{ matrix.pumpkin.old }}
         run: |
           gh release download v0.1.2-beta --repo PumboMC/PumboPerms --pattern "$FILE" --dir "$RUNNER_TEMP"
           grep -F "  $FILE" > "$RUNNER_TEMP/old.sha256" <<'EOF'
@@ -99,12 +110,16 @@ jobs:
         env:
           LAYOUT: ${{ matrix.layout }}
           PUMBO_PROTOCOL: ${{ matrix.pumpkin.protocol }}
+          PUMBO_VARIANT: ${{ matrix.pumpkin.variant }}
           PUMPKIN_BIN: ${{ runner.temp }}/pumpkin
-          OLD_PERMS_WASM: ${{ runner.temp }}/PumboPerms-Pumpkin-${{ matrix.pumpkin.variant }}-0.1.2-beta.wasm
+          OLD_PERMS_WASM: ${{ runner.temp }}/${{ matrix.pumpkin.old }}
+          STEPS: ${{ matrix.pumpkin.solo_steps }}
           PUMBO_PROX_DIR: ${{ github.workspace }}/prox
           PUMBO_BRIDGE_DIR: ${{ github.workspace }}/bridge
           PUMBO_BANS_DIR: ${{ github.workspace }}/bans
-        run: plugin/tools/perms-live.sh
+        run: |
+          if [ -n "$STEPS" ]; then export SOLO_STEPS=$STEPS; fi
+          plugin/tools/perms-live.sh
       - name: Server logs
         if: failure()
         run: |

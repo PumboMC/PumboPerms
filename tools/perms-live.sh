@@ -24,7 +24,10 @@
 # build, checks the data and goes back to the old file, which has to refuse the
 # newer database and leave its data as it is (this build reads it again). PUMPKIN_BIN
 # (the Pumpkin binary), PUMBO_PROTOCOL of that Pumpkin (777 for
-# 0.2.0+26.3-26.51, 776 for 0.1.0-dev+26.2-26.45; it picks the plugin builds),
+# 0.2.1+26.3-26.51 and 0.2.0+26.3-26.51, 776 for 0.1.0-dev+26.2-26.45; it picks
+# the plugin slot, PumboPerms-26.3.wasm or -26.2.wasm), PUMBO_VARIANT (the build
+# of each plugin that goes into that slot: 26.3 for Pumpkin 0.2.1, 0.2.0 for
+# Pumpkin 0.2.0, 26.2; by default the slot's own),
 # PUMBO_PROX_DIR (a PumboProx checkout), PUMBO_BRIDGE_DIR and PUMBO_BANS_DIR (checkouts
 # that build PumboBridge and PumboBans; this repository when it has them).
 # LAYOUT runs one setup instead of both phases:
@@ -65,6 +68,7 @@ case $PUMBO_PROTOCOL in
   776) VARIANT=26.2 ;;
   *) echo "perms-live: PUMBO_PROTOCOL $PUMBO_PROTOCOL: no Pumpkin plugin variant (777 or 776)" >&2; exit 1 ;;
 esac
+PUMBO_VARIANT=${PUMBO_VARIANT:-$VARIANT}
 OLD_PERMS_WASM=${OLD_PERMS_WASM:-}
 BRIDGE_DIR=${PUMBO_BRIDGE_DIR:-$L}
 BANS_DIR=${PUMBO_BANS_DIR:-$L}
@@ -189,8 +193,10 @@ echo "== build"
 "$BANS_DIR/plugins/pumbo-bans-pumpkin/build.sh"
 rm -rf "$PLUGINS"
 mkdir -p "$PLUGINS"
-cp "$L/plugins/pumbo-perms-prox/dist/pumbo-perms.wasm" "$L/dist/PumboPerms-$VARIANT.wasm" \
-  "$BRIDGE_DIR/dist/PumboBridge-$VARIANT.wasm" "$BANS_DIR/plugins/pumbo-bans-pumpkin/dist/PumboBans-$VARIANT.wasm" "$PLUGINS/"
+cp "$L/plugins/pumbo-perms-prox/dist/pumbo-perms.wasm" "$PLUGINS/"
+cp "$L/dist/PumboPerms-$PUMBO_VARIANT.wasm" "$PLUGINS/PumboPerms-$VARIANT.wasm"
+cp "$BRIDGE_DIR/dist/PumboBridge-$PUMBO_VARIANT.wasm" "$PLUGINS/PumboBridge-$VARIANT.wasm"
+cp "$BANS_DIR/plugins/pumbo-bans-pumpkin/dist/PumboBans-$PUMBO_VARIANT.wasm" "$PLUGINS/PumboBans-$VARIANT.wasm"
 # SERVER_PLUGINS picks which Pumbo plugins the network's servers get (default:
 # all three; LAYOUT=proxy: PumboBans), to tell which one a measurement belongs to.
 for p in PumboBridge PumboPerms PumboBans; do
@@ -393,6 +399,11 @@ if [ -n "$SOLO_MAIN" ]; then
   solo_start "$SOLO"
   # shellcheck disable=SC2086
   run_solo "$SOLO" $SOLO_MAIN
+  # The build in the slot names the Pumpkin release it was made for.
+  ran=$(sed -nE 's/.*Starting Pumpkin ([^+ ]+).*/\1/p' "$SOLO/console.log" | head -n 1)
+  grep -qF "loaded (Pumpkin $ran (" "$SOLO/console.log" ||
+    die "PumboPerms does not name Pumpkin $ran in its loaded line, see $SOLO/console.log"
+  echo "PASS PumboPerms names Pumpkin $ran"
   lock_moves "$SOLO/plugins/data/pumboperms"
   # A crash and a restart 1 s later, as systemd's Restart=always does.
   kill -KILL "$(cat "$SOLO/pid")"

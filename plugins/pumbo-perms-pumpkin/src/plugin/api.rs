@@ -1,5 +1,5 @@
 //! The parts of the Pumpkin plugin API this plugin uses, the same for Pumpkin
-//! 0.2.0 (MC 26.3) and 0.1.0-dev (MC 26.2), and the conversion of replies into
+//! 0.2.1 and 0.2.0 (MC 26.3) and 0.1.0-dev (MC 26.2), and the conversion of replies into
 //! text components.
 
 pub use crate::papi::command::{Arg, ArgumentType, Command, CommandNode, CommandSender, ConsumedArgs, StringType};
@@ -21,10 +21,22 @@ pub use crate::papi::{Context, Player, Plugin, PluginMetadata, Server, permissio
 use pumbo_common::rich::{Click, Segment, Text};
 use pumbo_common::text::{Color, Named};
 
+/// Pumpkin release and Minecraft version of this build. One mc263 source builds
+/// for Pumpkin 0.2.1 and, with PUMBO_PUMPKIN=0.2.0 from build.sh, for 0.2.0.
 #[cfg(feature = "mc263")]
-pub const API_LABEL: &str = "Pumpkin 0.2.0 (Minecraft 26.3)";
+const PUMPKIN: (&str, &str) = (
+    match option_env!("PUMBO_PUMPKIN") {
+        Some(v) => v,
+        None => "0.2.1",
+    },
+    "26.3",
+);
 #[cfg(feature = "mc262")]
-pub const API_LABEL: &str = "Pumpkin 0.1.0-dev (Minecraft 26.2)";
+const PUMPKIN: (&str, &str) = ("0.1.0-dev", "26.2");
+
+pub fn api_label() -> String {
+    format!("Pumpkin {} (Minecraft {})", PUMPKIN.0, PUMPKIN.1)
+}
 
 pub fn info(msg: &str) {
     log(LogLevel::Info, msg);

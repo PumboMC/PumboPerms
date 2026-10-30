@@ -205,7 +205,7 @@ fn version_rows(rt: &Rt) -> Vec<(String, String)> {
     } else {
         l.get("mode-attachments")
     };
-    let mut rows = vec![(l.get("version-platform"), api::API_LABEL.to_string()), (l.get("version-mode"), mode)];
+    let mut rows = vec![(l.get("version-platform"), api::api_label()), (l.get("version-mode"), mode)];
     rows.push((l.get("version-online"), rt.online.len().to_string()));
     if rt.check_event {
         rows.push(("Checks".into(), format!("{} answered, {} skipped (busy)", rt.answered, super::events::skipped())));
