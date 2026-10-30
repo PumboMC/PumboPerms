@@ -38,7 +38,7 @@ What this cannot do: a permission that nobody named anywhere (not built into Pum
 
 `provider.check-event: true` makes PumboPerms also answer Pumpkin's permission check event. **Do not use it on Pumpkin 0.2.0 or 0.1.0-dev**: there the server hangs when a plugin is hot-reloaded while players are online, and under a few hundred commands per second (every permission check then waits for the plugin, and Pumpkin runs out of threads). It is there for Pumpkin versions that fix this.
 
-Pumpkin 0.2.0 and 0.1.0-dev run `/tp`, `/xp`, `/banip` and `/pardonip` without any permission check (fixed upstream after 0.2.0, Pumpkin #3801), also after `/execute ... run`. PumboPerms checks these four, typed directly or after any `run` of `/execute`, against the permission of their command (`minecraft:command.teleport`, `.experience`, `.banip`, `.pardonip`) and answers a player without it like an unknown command, as vanilla does. Tab completion still shows the four aliases to everyone, because Pumpkin builds that list; only running them is refused.
+Pumpkin 0.2.0 and 0.1.0-dev run `/tp`, `/xp`, `/banip` and `/pardonip` without any permission check (fixed in Pumpkin 0.2.1, Pumpkin #3801), also after `/execute ... run`. PumboPerms checks these four, typed directly or after any `run` of `/execute`, against the permission of their command (`minecraft:command.teleport`, `.experience`, `.banip`, `.pardonip`) and answers a player without it like an unknown command, as vanilla does. Tab completion still shows the four aliases to everyone, because Pumpkin builds that list; only running them is refused.
 
 ## Limits
 
@@ -53,7 +53,8 @@ Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS
 
 | File | Pumpkin | Minecraft |
 | --- | --- | --- |
-| `PumboPerms-26.3.wasm` | release `0.2.0+26.3-26.51` | 26.3 |
+| `PumboPerms-26.3.wasm` | release `0.2.1+26.3-26.51` | 26.3 |
+| `PumboPerms-0.2.0.wasm` | release `0.2.0+26.3-26.51` | 26.3 |
 | `PumboPerms-26.2.wasm` | release `0.1.0-dev+26.2-26.45` | 26.2 |
 
 Pumpkin checks the plugin API strictly: a file only loads on the server version it was built for.
@@ -86,7 +87,7 @@ Coming from 0.1.2-beta, run `/pp export` first. The first start of the new versi
 ## Building
 
 ```sh
-./build.sh          # dist/PumboPerms-26.3.wasm and dist/PumboPerms-26.2.wasm
+./build.sh          # dist/PumboPerms-26.3.wasm, dist/PumboPerms-0.2.0.wasm and dist/PumboPerms-26.2.wasm
 cargo test -p pumbo-perms-core -p pumbo-perms-pumpkin
 ```
 
