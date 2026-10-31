@@ -10,7 +10,13 @@ Permissions and groups apply at once, without a restart or reload.
 
 ## Pumpkin versions
 
-Works with Pumpkin 0.2.1 (Minecraft 26.3). For Pumpkin 0.2.0 take `PumboPerms-Pumpkin-0.2.0-<version>.wasm` from the [releases on GitHub](https://github.com/PumboMC/PumboPerms/releases).
+Each Pumpkin release loads only its own file:
+
+- Pumpkin 0.2.1+26.3-26.51: the file here, or `PumboPerms-Pumpkin-26.3-<version>.wasm` from GitHub
+- Pumpkin 0.2.0+26.3-26.51: `PumboPerms-Pumpkin-0.2.0-<version>.wasm` from GitHub
+- Pumpkin 0.1.0-dev+26.2-26.45: `PumboPerms-Pumpkin-26.2-<version>.wasm` from GitHub
+
+The GitHub files are in the [latest release](https://github.com/PumboMC/PumboPerms/releases/latest).
 
 ## Project Pages
 
