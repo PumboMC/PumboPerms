@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-perms-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "proptest",
  "pumbo-common",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-perms-prox"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "pumbo-common",
  "pumbo-contracts",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "pumbo-perms-pumpkin"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "pumbo-common",
  "pumbo-perms-core",

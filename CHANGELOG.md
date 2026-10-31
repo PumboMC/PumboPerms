@@ -2,11 +2,15 @@
 
 All notable changes to PumboPerms, one section per release. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.0.1] - 2026-10-30
+
+### Added
+
+- Own file for Pumpkin 0.2.0: `PumboPerms-Pumpkin-0.2.0-1.0.1.wasm`.
 
 ### Changed
 
-- Builds for Pumpkin 0.2.1; Pumpkin 0.2.0 has its own file.
+- The 26.3 file is built for Pumpkin 0.2.1 and no longer loads on 0.2.0.
 
 ## [1.0.0] - 2026-10-16
 
@@ -77,7 +81,7 @@ No changes in PumboPerms; built with the shared library of 0.1.1-beta.
 
 First public beta.
 
-[Unreleased]: https://github.com/PumboMC/PumboPerms/compare/v1.0.0...HEAD
+[1.0.1]: https://github.com/PumboMC/PumboPerms/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/PumboMC/PumboPerms/compare/v0.1.2-beta...v1.0.0
 [0.1.2-beta]: https://github.com/PumboMC/PumboPerms/compare/v0.1.1-beta...v0.1.2-beta
 [0.1.1-beta]: https://github.com/PumboMC/PumboPerms/compare/v0.1.0-beta.1...v0.1.1-beta
