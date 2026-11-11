@@ -72,6 +72,21 @@ pub fn last_word(input: &str) -> (usize, usize) {
     (start, input.len() - start)
 }
 
+/// Why the commands get no Tab completion on `pumpkin`, the release that
+/// Pumpkin reports (`0.2.1+26.3-26.51`); `None` when they may have it. Pumpkin
+/// 0.2.2 asks a plugin for suggestions on a thread without its async runtime
+/// and crashes. A later release, or one this cannot read, goes without them
+/// until a PumboPerms release is checked with it.
+pub fn no_tab_completion(pumpkin: &str) -> Option<&'static str> {
+    let release = pumpkin.split(['+', '-']).next().unwrap_or_default();
+    let mut parts = release.split('.').map(str::parse::<u32>);
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(Ok(major)), Some(Ok(minor)), Some(Ok(patch)), None) if (major, minor, patch) < (0, 2, 2) => None,
+        (Some(Ok(0)), Some(Ok(2)), Some(Ok(2)), None) => Some("which crashes when a player asks a plugin for one"),
+        _ => Some("which this release of PumboPerms was not checked with"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pumbo_perms_core::config::CoreCfg;
@@ -291,5 +306,18 @@ mod tests {
         assert_eq!(last_word("/pp user Qh"), (9, 2));
         assert_eq!(last_word("/pp user Qhash parent add "), (26, 0));
         assert_eq!(last_word("/pp  group  vi"), (12, 2));
+    }
+
+    #[test]
+    fn tab_completion_only_on_releases_before_pumpkin_0_2_2() {
+        for on in ["0.2.1+26.3-26.51", "0.2.0+26.3-26.51", "0.1.0-dev+26.2-26.45", "0.2.1"] {
+            assert_eq!(no_tab_completion(on), None, "{on}");
+        }
+        for crash in ["0.2.2+26.3-26.60", "0.2.2"] {
+            assert!(no_tab_completion(crash).is_some_and(|why| why.contains("crashes")), "{crash}");
+        }
+        for unknown in ["0.2.10", "0.3.0", "1.0.0", "", "0.2", "0.2.1.1", "x.y.z"] {
+            assert!(no_tab_completion(unknown).is_some_and(|why| why.contains("not checked")), "{unknown}");
+        }
     }
 }

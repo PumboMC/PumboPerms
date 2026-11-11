@@ -45,7 +45,7 @@ Removing the `.wasm` leaves the data and the config in place (the proxy then use
 
 ## Updating
 
-Put the new file in place of `plugins/pumbo-perms.wasm`, under that name (the GitHub release calls it `PumboPerms-Proxy-<version>.wasm`), and restart the proxy. `/prox plugins reload pumbo-perms` also loads the new code, but the proxy applies the manifest of the new version (its permission list, for one) only at the next restart. Keep the name: two files with the id `pumbo-perms` (an old `pumbo-perms-0.1.1.wasm` next to `pumbo-perms.wasm`) stop the proxy at start with both names and "delete the older one", because a proxy without its permission provider would give the network back to `permissions.yml`. `plugins/data/pumbo-perms/` and the config stay.
+Put the new file in place of `plugins/pumbo-perms.wasm`, under that name (the GitHub release calls it `PumboPerms-v<version>-for-PumboProx.wasm`), and restart the proxy. `/prox plugins reload pumbo-perms` also loads the new code, but the proxy applies the manifest of the new version (its permission list, for one) only at the next restart. Keep the name: two files with the id `pumbo-perms` (an old `pumbo-perms-0.1.1.wasm` next to `pumbo-perms.wasm`) stop the proxy at start with both names and "delete the older one", because a proxy without its permission provider would give the network back to `permissions.yml`. `plugins/data/pumbo-perms/` and the config stay.
 
 ## Commands
 

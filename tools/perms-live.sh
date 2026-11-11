@@ -397,10 +397,19 @@ if [ -n "$SOLO_MAIN" ]; then
   # `/plugin load` of Pumpkin 0.2.0 reads from the working directory (J4).
   cp "$PLUGINS/PumboPerms-$VARIANT.wasm" "$SOLO/"
   solo_start "$SOLO"
-  # shellcheck disable=SC2086
-  run_solo "$SOLO" $SOLO_MAIN
-  # The build in the slot names the Pumpkin release it was made for.
   ran=$(sed -nE 's/.*Starting Pumpkin ([^+ ]+).*/\1/p' "$SOLO/console.log" | head -n 1)
+  # Pumpkin 0.2.2 crashes when it asks a plugin for tab completion, so
+  # PumboPerms registers its commands there without it and J7 cannot pass.
+  steps=
+  for s in $SOLO_MAIN; do
+    case $ran:$s in
+      0.2.2:J7) echo "SKIP J7: PumboPerms has no tab completion on Pumpkin 0.2.2" ;;
+      *) steps+=" $s" ;;
+    esac
+  done
+  # shellcheck disable=SC2086
+  [ -z "$steps" ] || run_solo "$SOLO" $steps
+  # The build in the slot names the Pumpkin release it was made for.
   grep -qF "loaded (Pumpkin $ran (" "$SOLO/console.log" ||
     die "PumboPerms does not name Pumpkin $ran in its loaded line, see $SOLO/console.log"
   echo "PASS PumboPerms names Pumpkin $ran"

@@ -49,17 +49,19 @@ impl CommandHandler for Pp {
 }
 
 /// The Pumpkin node of `n` with everything below it; `path` leads to `n`.
-pub fn node(n: &Node, path: &mut Vec<Word>) -> CommandNode {
+/// Its arguments complete on Tab when `suggest` ([`crate::suggest::no_tab_completion`]).
+pub fn node(n: &Node, path: &mut Vec<Word>, suggest: bool) -> CommandNode {
     path.push(n.word.clone());
     let mut built = match &n.word {
         Word::Fixed(w) => CommandNode::literal(w),
         Word::Slot(name, rest) => {
             let kind = if *rest { StringType::Greedy } else { StringType::Quotable };
-            CommandNode::argument(name, &ArgumentType::String(kind)).suggest(Suggest)
+            let slot = CommandNode::argument(name, &ArgumentType::String(kind));
+            if suggest { slot.suggest(Suggest) } else { slot }
         }
     };
     for child in &n.children {
-        built = built.then(node(child, path));
+        built = built.then(node(child, path, suggest));
     }
     // Every node runs, also before a command is complete: PumboPerms answers
     // with the usage or the help, as on PumboProx, where

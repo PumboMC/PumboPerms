@@ -21,11 +21,13 @@ No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPe
 
 Each Pumpkin release loads only its own file:
 
-- Pumpkin 0.2.1+26.3-26.51: `PumboPerms-Pumpkin-26.3-<version>.wasm` from GitHub, or the file on the Pumpkin market
-- Pumpkin 0.2.0+26.3-26.51: `PumboPerms-Pumpkin-0.2.0-<version>.wasm` from GitHub
-- Pumpkin 0.1.0-dev+26.2-26.45: `PumboPerms-Pumpkin-26.2-<version>.wasm` from GitHub
+- Pumpkin 0.2.1+26.3-26.51 and 0.2.2+26.3-26.60: `PumboPerms-v<version>-for-Pumpkin-0.2.1-and-0.2.2.wasm` from GitHub, or the file on the Pumpkin market
+- Pumpkin 0.2.0+26.3-26.51: `PumboPerms-v<version>-for-Pumpkin-0.2.0.wasm` from GitHub
+- Pumpkin 0.1.0-dev+26.2-26.45: `PumboPerms-v<version>-for-Pumpkin-0.1.0-dev.wasm` from GitHub
 
 The GitHub files are in the [latest release](https://github.com/PumboMC/PumboPerms/releases/latest).
+
+On Pumpkin 0.2.2 `/pp` has no Tab completion of player and group names: Pumpkin 0.2.2 crashes when a player asks a plugin for completions. It comes back with a PumboPerms update once Pumpkin ships [a fix](https://github.com/Pumpkin-MC/Pumpkin/pull/4149).
 
 ## Project Pages
 
