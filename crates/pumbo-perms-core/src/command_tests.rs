@@ -61,7 +61,14 @@ fn messages_are_complete_in_every_language() {
 #[test]
 fn every_message_key_used_exists() {
     let (l, _) = Lang::load(&[COMMON, LANG], "en", None);
-    let src = include_str!("command.rs");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/command");
+    let mut src = String::new();
+    for file in std::fs::read_dir(dir).unwrap() {
+        let path = file.unwrap().path();
+        if path.extension().is_some_and(|x| x == "rs") {
+            src.push_str(&std::fs::read_to_string(path).unwrap());
+        }
+    }
     let mut missing = Vec::new();
     for (i, _) in src.match_indices('"') {
         let rest = &src[i + 1..];
