@@ -24,10 +24,10 @@ The plugin only needs to read and write its own data folder. It has no network a
 
 | Build | File in the release | Keep it in `plugins/` as | Status |
 | --- | --- | --- | --- |
-| **PumboProx** (whole network) | `PumboPerms-Proxy-<version>.wasm` | `pumbo-perms.wasm`, on the proxy | Stable. One set of ranks for the whole network: set them with `/pp` on the proxy and they apply on every server right away, through [PumboBridge](https://github.com/PumboMC/PumboBridge). Imports the proxy's `permissions.yml` at the first start. |
-| **Pumpkin 0.2.1** (one server, Minecraft 26.3) | `PumboPerms-Pumpkin-26.3-<version>.wasm` | `PumboPerms-26.3.wasm`, on the server | Stable. Ranks and permissions for that server. |
-| **Pumpkin 0.2.0** (one server, Minecraft 26.3) | `PumboPerms-Pumpkin-0.2.0-<version>.wasm` | `PumboPerms-26.3.wasm`, on the server | Stable. Ranks and permissions for that server. |
-| **Pumpkin 0.1.0-dev** (one server, Minecraft 26.2) | `PumboPerms-Pumpkin-26.2-<version>.wasm` | `PumboPerms-26.2.wasm`, on the server | Stable. Ranks and permissions for that server. |
+| **PumboProx** (whole network) | `PumboPerms-v<version>-for-PumboProx.wasm` | `pumbo-perms.wasm`, on the proxy | Stable. One set of ranks for the whole network: set them with `/pp` on the proxy and they apply on every server right away, through [PumboBridge](https://github.com/PumboMC/PumboBridge). Imports the proxy's `permissions.yml` at the first start. |
+| **Pumpkin 0.2.1 and 0.2.2** (one server, Minecraft 26.3) | `PumboPerms-v<version>-for-Pumpkin-0.2.1-and-0.2.2.wasm` | `PumboPerms-26.3.wasm`, on the server | Stable. Ranks and permissions for that server. |
+| **Pumpkin 0.2.0** (one server, Minecraft 26.3) | `PumboPerms-v<version>-for-Pumpkin-0.2.0.wasm` | `PumboPerms-26.3.wasm`, on the server | Stable. Ranks and permissions for that server. |
+| **Pumpkin 0.1.0-dev** (one server, Minecraft 26.2) | `PumboPerms-v<version>-for-Pumpkin-0.1.0-dev.wasm` | `PumboPerms-26.2.wasm`, on the server | Stable. Ranks and permissions for that server. |
 
 Pumpkin checks the plugin API strictly: a file only loads on the Pumpkin version it was built for. On Pumpkin 0.1.0-dev every player sees the whole command list in Tab; commands they lack are still refused.
 

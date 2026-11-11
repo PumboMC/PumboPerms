@@ -61,17 +61,22 @@ jobs:
           mkdir -p "$out"
           if [ -d plugins/pumbo-perms-prox ]; then
             plugins/pumbo-perms-prox/build.sh
-            cp plugins/pumbo-perms-prox/dist/pumbo-perms.wasm "$out/PumboPerms-Proxy-$v.wasm"
+            cp plugins/pumbo-perms-prox/dist/pumbo-perms.wasm "$out/PumboPerms-v$v-for-PumboProx.wasm"
           fi
           plugins/pumbo-perms-pumpkin/build.sh
           # Most Pumpkin builds land in dist/ of the workspace, some in their own folder.
           src=dist
           if [ -d plugins/pumbo-perms-pumpkin/dist ]; then src=plugins/pumbo-perms-pumpkin/dist; fi
-          # Every Pumpkin file build.sh made (PumboPerms-<Minecraft version>.wasm);
-          # the checkout starts clean, so there are no others.
+          # Every Pumpkin file build.sh made, named after the Pumpkin releases
+          # it loads on; the checkout starts clean, so there are no others.
           for f in "$src"/PumboPerms-*.wasm; do
-            mc=${f##*/PumboPerms-}
-            cp "$f" "$out/PumboPerms-Pumpkin-${mc%.wasm}-$v.wasm"
+            case ${f##*/} in
+              PumboPerms-26.3.wasm) pumpkin=0.2.1-and-0.2.2 ;;
+              PumboPerms-0.2.0.wasm) pumpkin=0.2.0 ;;
+              PumboPerms-26.2.wasm) pumpkin=0.1.0-dev ;;
+              *) echo "::error::no release name for ${f##*/}"; exit 1 ;;
+            esac
+            cp "$f" "$out/PumboPerms-v$v-for-Pumpkin-$pumpkin.wasm"
           done
           cd "$out"
           sha256sum -- *.wasm > SHA256SUMS

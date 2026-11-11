@@ -33,7 +33,7 @@ jobs:
         run: |
           [ -n "$TAG" ] || exit 0
           v=${TAG#v}
-          f="PumboPerms-Pumpkin-26.3-$v.wasm"
+          f="PumboPerms-v$v-for-Pumpkin-0.2.1-and-0.2.2.wasm"
           for _ in 1 2 3 4 5 6; do
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$f" --dir dist --clobber && break
             sleep 10
