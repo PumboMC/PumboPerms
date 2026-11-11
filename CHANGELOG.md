@@ -2,7 +2,7 @@
 
 All notable changes to PumboPerms, one section per release. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [X.Y.Z] - YYYY-MM-DD
+## [1.0.2] - 2026-11-11
 
 ### Fixed
 
@@ -87,7 +87,7 @@ No changes in PumboPerms; built with the shared library of 0.1.1-beta.
 
 First public beta.
 
-[X.Y.Z]: https://github.com/PumboMC/PumboPerms/compare/v1.0.1...vX.Y.Z
+[1.0.2]: https://github.com/PumboMC/PumboPerms/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/PumboMC/PumboPerms/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/PumboMC/PumboPerms/compare/v0.1.2-beta...v1.0.0
 [0.1.2-beta]: https://github.com/PumboMC/PumboPerms/compare/v0.1.1-beta...v0.1.2-beta
