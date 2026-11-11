@@ -27,6 +27,8 @@ Each Pumpkin release loads only its own file:
 
 The GitHub files are in the [latest release](https://github.com/PumboMC/PumboPerms/releases/latest).
 
+On Pumpkin 0.2.2 `/pp` has no Tab completion of player and group names: Pumpkin 0.2.2 crashes when a player asks a plugin for completions. It comes back with a PumboPerms update once Pumpkin ships [a fix](https://github.com/Pumpkin-MC/Pumpkin/pull/4149).
+
 ## Project Pages
 
 - [Features](docs/features.md)

@@ -125,10 +125,16 @@ impl Plugin for PumboPerms {
         // handler during its own load.
         // Each name is a whole command: Pumpkin 0.2.0 suggests nothing right
         // after an alias, which it registers as a redirect.
+        let pumpkin = context.get_server().get_sys_info().pumpkin_version;
+        let why = crate::suggest::no_tab_completion(&pumpkin);
+        if let Some(why) = why {
+            api::warn(&format!("PumboPerms: no tab completion on Pumpkin {pumpkin}, {why}"));
+        }
+        let suggest = why.is_none();
         for name in std::iter::once(PLUGIN_NAME.to_string()).chain(aliases) {
             let mut command = Command::new(&[name], "PumboPerms: permissions, groups and ranks");
             for node in &tree {
-                command = command.then(commands::node(node, &mut Vec::new()));
+                command = command.then(commands::node(node, &mut Vec::new(), suggest));
             }
             context.register_command(command.execute(commands::Pp { path: Vec::new() }), &command_node);
         }

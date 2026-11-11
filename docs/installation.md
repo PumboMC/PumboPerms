@@ -31,6 +31,8 @@ The plugin only needs to read and write its own data folder. It has no network a
 
 Pumpkin checks the plugin API strictly: a file only loads on the Pumpkin version it was built for. On Pumpkin 0.1.0-dev every player sees the whole command list in Tab; commands they lack are still refused.
 
+On Pumpkin 0.2.2 `/pp` has no Tab completion of player and group names: Pumpkin 0.2.2 crashes when a player asks a plugin for completions. It comes back with a PumboPerms update once Pumpkin ships [a fix](https://github.com/Pumpkin-MC/Pumpkin/pull/4149).
+
 When PumboPerms runs on the proxy, the proxy rules. A PumboPerms on a server behind it steps back within 10 seconds: it hands the permissions it set to PumboBridge, which writes the proxy's decisions from then on, and its `/pp` answers that the proxy manages the ranks. Its own data stays untouched. The export PumboBridge receives holds only the flag that the proxy rules, whatever the size of your database and whether PumboPerms on the proxy runs right now, so a server never takes over because the proxy's PumboPerms is restarting. Remove PumboPerms from the proxy and the one on the server takes over again.
 
 **Keeps the ranks while it is down.** When PumboPerms on the proxy restarts, is reloaded or unloaded, or cannot read its database, players online keep their permissions and the proxy refuses new logins with "Permissions are temporarily unavailable" (`on-load-failure: deny`), instead of falling back to `permissions.yml`, which still holds the ranks from before the takeover. Fix it from the proxy console with `/prox plugins reload pumbo-perms`, or set `permissions.provider: file`.
