@@ -35,9 +35,9 @@ body:
       label: Build
       options:
         - PumboProx (whole network)
-        - Pumpkin 26.3
+        - Pumpkin 0.2.1 or 0.2.2
         - Pumpkin 0.2.0
-        - Pumpkin 26.2
+        - Pumpkin 0.1.0-dev
     validations:
       required: true
   - type: input
