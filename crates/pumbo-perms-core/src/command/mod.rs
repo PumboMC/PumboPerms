@@ -402,3 +402,6 @@ fn writable(e: &mut Engine) -> Result<(), Text> {
     e.begin();
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

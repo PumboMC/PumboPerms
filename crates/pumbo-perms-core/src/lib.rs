@@ -81,8 +81,6 @@ pub const LANG: Bundle =
     Bundle { name: "perms", files: &[("en", include_str!("../lang/en.yml")), ("pl", include_str!("../lang/pl.yml"))] };
 
 #[cfg(test)]
-mod command_tests;
-#[cfg(test)]
 mod properties;
 #[cfg(test)]
 mod tests;
