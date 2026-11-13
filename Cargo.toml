@@ -31,7 +31,7 @@ serde_json = "=1.0.154"
 pumbo-common = { git = "https://github.com/PumboMC/PumboProx", rev = "6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f" }
 pumbo-perms-core = { path = "crates/pumbo-perms-core" }
 pumbo-sdk = { git = "https://github.com/PumboMC/PumboProx", rev = "6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f" }
-pumbo-contracts = { git = "https://github.com/PumboMC/PumboProx", rev = "6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f" }
+pumbo-contracts = { git = "https://github.com/PumboMC/PumboProx", rev = "911d6872feda7826dc74bc1fa6c05f8f606fe29d" }
 
 [profile.release]
 opt-level = "s"
