@@ -17,6 +17,10 @@
 
 No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPerms), but is strongly modeled on, that why we still want to thank [@lucko](https://github.com/lucko) for the solutions and standards it gave us.
 
+<p align="center">
+  <img src="assets/screens/help.png" alt="/pp help">
+</p>
+
 ## Pumpkin versions
 
 Each file loads only on the Pumpkin releases it is listed for:
@@ -33,6 +37,7 @@ Installation: [three steps](docs/installation.md), with two lines for `pumpkin.t
 
 ## Project Pages
 
+- [Screenshots](docs/screenshots.md)
 - [Features](docs/features.md)
 - [Installation](docs/installation.md)
 - [Configuration](docs/configuration.md)
