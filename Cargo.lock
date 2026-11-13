@@ -584,12 +584,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pumbo-contracts"
+version = "0.2.5-beta"
+source = "git+https://github.com/PumboMC/PumboProx?rev=911d6872feda7826dc74bc1fa6c05f8f606fe29d#911d6872feda7826dc74bc1fa6c05f8f606fe29d"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "pumbo-perms-core"
 version = "1.0.2"
 dependencies = [
  "proptest",
  "pumbo-common",
- "pumbo-contracts",
+ "pumbo-contracts 0.2.5-beta (git+https://github.com/PumboMC/PumboProx?rev=6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f)",
  "serde",
  "serde_json",
 ]
@@ -599,7 +607,7 @@ name = "pumbo-perms-prox"
 version = "1.0.2"
 dependencies = [
  "pumbo-common",
- "pumbo-contracts",
+ "pumbo-contracts 0.2.5-beta (git+https://github.com/PumboMC/PumboProx?rev=6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f)",
  "pumbo-perms-core",
  "pumbo-sdk",
  "serde",
@@ -621,11 +629,11 @@ dependencies = [
 [[package]]
 name = "pumbo-sdk"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?rev=6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f#6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f"
+source = "git+https://github.com/PumboMC/PumboProx?rev=911d6872feda7826dc74bc1fa6c05f8f606fe29d#911d6872feda7826dc74bc1fa6c05f8f606fe29d"
 dependencies = [
  "ciborium",
  "futures",
- "pumbo-contracts",
+ "pumbo-contracts 0.2.5-beta (git+https://github.com/PumboMC/PumboProx?rev=911d6872feda7826dc74bc1fa6c05f8f606fe29d)",
  "schemars",
  "serde",
  "serde-saphyr",
