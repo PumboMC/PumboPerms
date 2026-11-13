@@ -409,6 +409,30 @@ fn tracks_promote_and_demote() {
 }
 
 #[test]
+fn step_plan_changes_nothing() {
+    let mut p = Perms::new();
+    for (g, w) in [("member", 1), ("vip", 10), ("mvp", 20)] {
+        group(&mut p, g, w, &[]);
+    }
+    p.create_track("ranks").unwrap();
+    for g in ["member", "vip", "mvp"] {
+        p.track_insert("ranks", g, None).unwrap();
+    }
+    let g = Contexts::global();
+    p.edit_user(U, "Steve", |d| d.add_parent(ParentNode { group: "vip".into(), context: g.clone(), expiry: Some(50) }));
+    let (user, generation) = (p.user(U).cloned(), p.generation());
+    let up = p.step_plan(U, "ranks", &g, true, 0).unwrap();
+    let down = p.step_plan(U, "ranks", &g, false, 0).unwrap();
+    assert_eq!((p.user(U).cloned(), p.generation()), (user, generation), "a plan changes nothing");
+    assert_eq!((up.from.as_deref(), up.to.as_deref(), up.expiry), (Some("vip"), Some("mvp"), Some(50)));
+    assert_eq!(down.to.as_deref(), Some("member"));
+    assert_eq!(p.step_plan(U2, "ranks", &g, false, 0), Err(PermsError::NotOnTrack));
+    assert_eq!(p.step_plan(U, "nope", &g, true, 0), Err(PermsError::NoTrack("nope".into())));
+    // the step made is the step planned
+    assert_eq!(p.promote(U, "Steve", "ranks", &g, 0).unwrap().0, up);
+}
+
+#[test]
 fn deleting_and_renaming_groups_cleans_references() {
     let mut p = Perms::new();
     group(&mut p, "vip", 10, &[perm("x", true)]);

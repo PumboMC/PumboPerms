@@ -235,8 +235,7 @@ impl Perms {
         self.step(uuid, name, track, context, false, now)
     }
 
-    /// One rung along a track among the live parents; the new rung keeps the
-    /// end time of the old one (a 30-day `vip` gives a 30-day `mvp`).
+    /// Makes the step [`Perms::step_plan`] works out.
     fn step(
         &mut self,
         uuid: &str,
@@ -246,6 +245,33 @@ impl Perms {
         up: bool,
         now: u64,
     ) -> Result<(Step, Dirty), PermsError> {
+        let plan = self.step_plan(uuid, track, context, up, now)?;
+        let from_c = plan.from.clone();
+        let to_c = plan.to.clone();
+        let expiry = plan.expiry;
+        let ((), dirty) = self.edit_user(uuid, name, |d| {
+            if let Some(f) = &from_c {
+                d.remove_parent(f, context, false);
+            }
+            if let Some(group) = to_c {
+                d.add_parent(ParentNode { group, context: context.clone(), expiry });
+            }
+        });
+        Ok((plan, dirty))
+    }
+
+    /// One rung along a track among the live parents, worked out without
+    /// changing anything ([`Perms::promote`] and [`Perms::demote`] make it);
+    /// the new rung keeps the end time of the old one (a 30-day `vip` gives a
+    /// 30-day `mvp`).
+    pub fn step_plan(
+        &self,
+        uuid: &str,
+        track: &str,
+        context: &Contexts,
+        up: bool,
+        now: u64,
+    ) -> Result<Step, PermsError> {
         let t = self.tracks.get(track).ok_or_else(|| PermsError::NoTrack(track.to_string()))?;
         let ladder = t.groups.clone();
         let first = ladder.first().cloned().ok_or_else(|| PermsError::EmptyTrack(track.to_string()))?;
@@ -287,15 +313,7 @@ impl Perms {
         if !self.groups.contains_key(&to) {
             return Err(PermsError::NoGroup(to));
         }
-        let from_c = from.clone();
-        let to_c = to.clone();
-        let ((), dirty) = self.edit_user(uuid, name, |d| {
-            if let Some(f) = &from_c {
-                d.remove_parent(f, context, false);
-            }
-            d.add_parent(ParentNode { group: to_c, context: context.clone(), expiry });
-        });
-        Ok((Step { from, to: Some(to), expiry }, dirty))
+        Ok(Step { from, to: Some(to), expiry })
     }
 
     /// Removes expired nodes everywhere. Returns what changed.
