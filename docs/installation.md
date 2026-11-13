@@ -4,21 +4,31 @@
 > Download the files from [Releases](https://github.com/PumboMC/PumboPerms/releases/latest), or [build from source](#building).
 
 1. Put the file that matches your Pumpkin version into the server's `plugins/` folder, under the name from [Two builds](#two-builds).
-2. Start the server. The first start creates `plugins/data/pumboperms/config.yml` and `lang/en.yml` (the file of the language set in the config).
-3. From the console (or as an operator), create a group and give it permissions:
+2. **Pumpkin's plugin sandbox.** PumboPerms needs `fs.read.data` and `fs.write.data`: it reads and writes only its own data folder and has no network access. Pumpkin asks about them in the console on the first start. On a hosting panel the server runs without a terminal, so Pumpkin cannot ask: it refuses them, keeps the refusal in `plugins/permission_cache.json`, and the plugin does not load, even after a restart. Approve them in `pumpkin.toml`:
 
+   ```toml
+   [plugins.overrides.pumboperms]
+   allowed_permissions = ["fs.read.data", "fs.write.data"]
    ```
-   /pp creategroup vip
-   /pp group vip parent add default
-   /pp group vip setweight 10
-   /pp group vip permission set minecraft:command.gamemode
-   /pp group vip meta setprefix 10 "&6[VIP] "
-   /pp user Steve parent add vip
-   ```
+
+   This also overrides a refusal in the cache. Write the names with dots: the colon form from Pumpkin's examples never matches.
+3. Start the server. The first start creates `plugins/data/pumboperms/config.yml` and `lang/en.yml` (the file of the language set in the config).
+
+> [!WARNING]
+> On Pumpkin 0.2.1 and 0.2.2 typing a plugin command in the server console can crash the server. This is a bug in Pumpkin. Until it is fixed, set `use_tty = false` in `[commands]` of `pumpkin.toml`. The console still takes commands, without Tab completion.
+
+Then create a group from the console (or as an operator) and give it permissions:
+
+```
+/pp creategroup vip
+/pp group vip parent add default
+/pp group vip setweight 10
+/pp group vip permission set minecraft:command.gamemode
+/pp group vip meta setprefix 10 "&6[VIP] "
+/pp user Steve parent add vip
+```
 
 On PumboProx, put `pumbo-perms.wasm` into the proxy's `plugins/` folder and start the proxy. It writes `plugins/pumbo-perms/config.yml` and imports the groups and players of `permissions.yml`; the log line `permissions.yml: PumboPerms » Imported file: ...` says what it took over.
-
-The plugin only needs to read and write its own data folder. It has no network access.
 
 ## Two builds
 
@@ -48,13 +58,11 @@ For a server with players on it, set this in `pumpkin.toml`:
 hot_reload = false
 
 [plugins.overrides.pumboperms]
-allowed_permissions = ["fs.read.data", "fs.write.data"]
 max_memory_mb = 64
 ```
 
-- `allowed_permissions` approves the only two sandbox permissions PumboPerms asks for. Write them with dots: the colon form from Pumpkin's examples never matches. Without this line every new build (a new file hash) asks in the console, hot reload does not load the plugin, and a "no" in the console stays for that file.
 - With `hot_reload` on, Pumpkin reloads plugins while players play: it changes the order of event handlers, can refuse permissions, and registers commands under load.
-- `max_memory_mb = 64` leaves PumboPerms room (see [Limits](how-it-works.md#limits)).
+- `max_memory_mb = 64` leaves PumboPerms room (see [Limits](how-it-works.md#limits)). Put it into the `[plugins.overrides.pumboperms]` table from step 2: a table may appear only once in `pumpkin.toml`.
 - Let only the user that runs the server write to `plugins/` and `plugins/cache/`: Pumpkin loads compiled plugin code from the cache.
 
 ## Updating

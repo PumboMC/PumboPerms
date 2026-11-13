@@ -64,8 +64,19 @@ On Pumpkin 0.1.0-dev every player sees the whole command list in Tab; commands t
 ## Installation
 
 1. Put the matching `.wasm` file into the `plugins/` folder of the server.
-2. Start the server. PumboPerms writes `plugins/data/pumboperms/config.yml` and `lang/en.yml` (the file of the `language` you set), and keeps its data in `plugins/data/pumboperms/perms.redb`.
-3. From the console (or as an operator of level 3), create groups and give them permissions:
+2. Approve the plugin's sandbox permissions in `pumpkin.toml`. PumboPerms needs `fs.read.data` and `fs.write.data` and nothing else (no network):
+
+   ```toml
+   [plugins.overrides.pumboperms]
+   allowed_permissions = ["fs.read.data", "fs.write.data"]
+   ```
+
+   Without this, Pumpkin asks in the console on the first start. On a hosting panel there is no terminal to answer, so Pumpkin refuses the permissions and keeps the refusal in `plugins/permission_cache.json`: the plugin does not load, even after a restart. The override also wins over that cached refusal. Write the names with dots: the colon form from Pumpkin's examples never matches.
+3. Start the server. PumboPerms writes `plugins/data/pumboperms/config.yml` and `lang/en.yml` (the file of the `language` you set), and keeps its data in `plugins/data/pumboperms/perms.redb`.
+
+On Pumpkin 0.2.1 and 0.2.2 typing a plugin command in the server console can crash the server; this is a bug in Pumpkin. Until it is fixed, set `use_tty = false` in `[commands]` of `pumpkin.toml`. The console still takes commands, without Tab completion.
+
+Then create groups from the console (or as an operator of level 3) and give them permissions:
 
 ```
 /pp creategroup vip
@@ -75,8 +86,6 @@ On Pumpkin 0.1.0-dev every player sees the whole command list in Tab; commands t
 /pp group vip meta setprefix 10 "&6[VIP] "
 /pp user Steve parent add vip
 ```
-
-The plugin needs the `fs.read.data` and `fs.write.data` permissions of Pumpkin's plugin sandbox and nothing else (no network).
 
 ## Updating
 
