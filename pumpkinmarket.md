@@ -63,5 +63,3 @@ PumboPerms also runs on [PumboProx](https://github.com/PumboMC/PumboProx): ranks
 ## License
 
 PumboPerms is licensed under the GNU General Public License v3.0. It is not affiliated with Mojang, Microsoft or the Pumpkin project.
-
-[![PumboProx: everything you need to run a network on Pumpkin](assets/pumboprox.webp)](https://github.com/PumboMC/PumboProx)
