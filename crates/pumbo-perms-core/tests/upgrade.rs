@@ -127,12 +127,12 @@ fn opens_database_written_before_name_keys() {
     assert_eq!(by_uuid(&e, STEVE), Some("Steve".to_string()));
     assert_eq!(by_uuid(&e, NOTCH), Some(NOTCH.to_string()));
     // Joins write the name of each account; the old record of an old name stops counting.
-    e.seen(NOTCH, "Notch2", true).unwrap();
+    e.seen(NOTCH, "Notch2", true, 0).unwrap();
     e.gone(NOTCH);
     assert_eq!(by_name(&e, "notch"), None);
     assert_eq!(by_name(&e, "notch2"), Some((NOTCH.to_string(), true)));
     assert_eq!(by_uuid(&e, NOTCH), Some("Notch2".to_string()));
-    let moved = e.seen(FIRST, "Shared", false).unwrap();
+    let moved = e.seen(FIRST, "Shared", false, 0).unwrap();
     assert_eq!(moved, None, "{SECOND} has no data");
     assert_eq!(by_name(&e, "shared"), Some((FIRST.to_string(), false)));
 

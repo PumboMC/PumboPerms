@@ -15,6 +15,9 @@ use crate::ui::{Click, Text};
 mod basics;
 mod completion;
 mod import;
+mod limits;
+mod limits_props;
+mod offline;
 mod tracks;
 mod views;
 
@@ -26,8 +29,8 @@ const PLATFORM: Bundle = Bundle { name: "test", files: &[("en", "prefix: \"&8[&#
 fn engine() -> Engine {
     let lang = Lang::load(&[COMMON, LANG, PLATFORM], "en", None).0;
     let mut e = Engine::in_memory(CoreCfg::default(), lang);
-    e.seen(STEVE, "Steve", true).unwrap();
-    e.seen(ALEX, "Alex", true).unwrap();
+    e.seen(STEVE, "Steve", true, 0).unwrap();
+    e.seen(ALEX, "Alex", true, 0).unwrap();
     e
 }
 

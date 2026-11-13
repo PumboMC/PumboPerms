@@ -22,15 +22,10 @@ pub(super) fn version(e: &Engine, env: &Env) -> Text {
     let mut rows = env.version_rows.clone();
     let storage = match (&e.broken, e.store()) {
         (Some(why), _) => why.clone(),
-        (None, Some(_)) => text::strip(
-            &e.lang.format(
-                "version-storage",
-                &Args::new()
-                    .arg(e.perms.groups().count())
-                    .arg(e.perms.users().filter(|u| !u.data.is_empty()).count())
-                    .arg(e.perms.tracks().count()),
-            ),
-        ),
+        (None, Some(_)) => text::strip(&e.lang.format(
+            "version-storage",
+            &Args::new().arg(e.perms.groups().count()).arg(e.user_count()).arg(e.perms.tracks().count()),
+        )),
         (None, None) => "-".into(),
     };
     rows.push((e.lang.get("label-storage"), storage));
@@ -346,7 +341,7 @@ pub(super) fn tracks_view(e: &Engine, page: usize) -> Text {
     paged(&e.lang, out, rows, page, &format!("{} tracks", e.root))
 }
 
-pub(super) fn members_view(e: &Engine, group: &str, page: usize) -> Text {
+pub(super) fn members_view(e: &Engine, group: &str, page: usize, _now: u64) -> Text {
     const PER: usize = 15;
     let members = e.perms.members(group);
     let children: Vec<String> = e.perms.child_groups(group).iter().map(|g| g.name.clone()).collect();

@@ -199,7 +199,7 @@ impl Rt {
                 self.engine = engine;
                 for (uuid, o) in &self.online {
                     // As at a join; a name that is not saved is saved at the next one.
-                    let _ = self.engine.seen(uuid, &o.name, false);
+                    let _ = self.engine.seen(uuid, &o.name, false, now);
                 }
                 self.stored = None;
                 if self.engine.broken.is_none() {

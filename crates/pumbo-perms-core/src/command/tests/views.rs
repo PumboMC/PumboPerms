@@ -10,6 +10,8 @@ fn meta_prefix_and_views() {
     assert!(console(&mut e, "group vip meta setprefix 10 \"&6[VIP] \"").contains("Set the prefix"));
     console(&mut e, "group vip meta set color gold");
     console(&mut e, "user Steve parent set vip");
+    let version = console(&mut e, "version");
+    assert!(version.contains("2 groups, 1 users, 0 tracks"), "{version}");
     let info = console(&mut e, "user Steve info");
     for want in ["Steve", "Rank: VIP (vip)", "[VIP]", "Parent groups (1)", "vip"] {
         assert!(info.contains(want), "{want} not in {info}");
@@ -76,8 +78,8 @@ fn stored_values_render_as_plain_text() {
 fn click_from_members_view_runs_only_info() {
     let mut e = engine();
     let (owner, attacker) = ("00000000-0000-0000-0000-0000000000c1", "00000000-0000-0000-0000-0000000000c2");
-    e.seen(owner, "Owner", false).unwrap();
-    e.seen(attacker, "Owner\u{a0}clear", false).unwrap();
+    e.seen(owner, "Owner", false, 0).unwrap();
+    e.seen(attacker, "Owner\u{a0}clear", false, 0).unwrap();
     console(&mut e, "creategroup admin");
     console(&mut e, "creategroup vip");
     console(&mut e, "user Owner parent add admin");

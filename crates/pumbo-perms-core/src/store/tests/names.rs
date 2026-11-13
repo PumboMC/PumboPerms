@@ -44,7 +44,7 @@ fn names_written_by_an_older_build_resolve() {
         store
     });
     assert_eq!(e.find_user(A).map(|k| k.name), Some(A.to_string()));
-    e.seen(A, "Steve2", false).unwrap();
+    e.seen(A, "Steve2", false, 0).unwrap();
     e.gone(A);
     assert_eq!(e.find_user("steve"), None);
     assert_eq!(e.find_user("steve2").map(|k| k.uuid), Some(A.to_string()));
@@ -98,7 +98,7 @@ fn damaged_name_record_is_overwritten_at_join() {
         })
         .unwrap();
     let mut e = engine(store);
-    assert_eq!(e.seen(A, "Steve", true), Ok(None));
+    assert_eq!(e.seen(A, "Steve", true, 0), Ok(None));
     assert_eq!(e.take_warnings().len(), 2);
     e.gone(A);
     assert_eq!(e.find_user("steve"), Some(known(A, "Steve", true)));

@@ -99,7 +99,7 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "listmembers" => {
             need(e, who, "group.listmembers", now)?;
-            Ok(Outcome::reply(members_view(e, &name, page_of(rest))))
+            Ok(Outcome::reply(members_view(e, &name, page_of(rest), now)))
         }
         _ => holder_cmd(e, who, &t, args.get(1..).unwrap_or(&[]), env),
     }

@@ -77,7 +77,7 @@ impl Rt {
     /// Pumpkin does not say whether Mojang checked the account, so the name
     /// counts as offline (an import never binds it here).
     pub fn join(&mut self, uuid: &str, online: Online, now: u64) -> Vec<Plan> {
-        match self.engine.seen(uuid, &online.name, false) {
+        match self.engine.seen(uuid, &online.name, false, now) {
             Ok(Some(moved)) => self.warn(moved),
             Ok(None) => {}
             Err(e) => self.warn(format!("PumboPerms: cannot save the name of {}: {e}", online.name)),

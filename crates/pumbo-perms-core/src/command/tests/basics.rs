@@ -30,7 +30,7 @@ fn every_message_key_used_exists() {
             && word.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
             && [
                 "perm-", "parent-", "meta-", "affix-", "group-", "track-", "bad-", "desc-", "label-", "title-",
-                "hover-",
+                "hover-", "limit-",
             ]
             .iter()
             .any(|p| word.starts_with(p));
@@ -252,8 +252,8 @@ fn cache_follows_group_change() {
     let mut e = engine();
     const NEW: &str = "00000000-0000-0000-0000-00000000000c";
     const SCOPED: &str = "00000000-0000-0000-0000-00000000000d";
-    e.seen(NEW, "Newbie", true).unwrap();
-    e.seen(SCOPED, "Scoped", true).unwrap();
+    e.seen(NEW, "Newbie", true, 0).unwrap();
+    e.seen(SCOPED, "Scoped", true, 0).unwrap();
     let places = [Query::default(), Query::new("lobby", "hubs", "world"), Query::new("survival", "", "nether")];
     let users = [STEVE, ALEX, NEW, SCOPED];
     let steps = [

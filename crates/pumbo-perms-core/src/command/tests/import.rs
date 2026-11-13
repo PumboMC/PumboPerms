@@ -197,13 +197,13 @@ fn reimport_keeps_first_resolved_uuid() {
     let mut e = engine();
     let (first, second) = ("00000000-0000-0000-0000-0000000000d1", "00000000-0000-0000-0000-0000000000d2");
     // Joined and left: the name is only in the database.
-    e.seen(first, "Mod1", true).unwrap();
+    e.seen(first, "Mod1", true, 0).unwrap();
     e.gone(first);
     let out = import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
     assert!(out.reply.plain().contains(&format!("Mod1 -> {first}")), "{}", out.reply.plain());
     assert!(in_mod(&e, first));
     // The name goes to another account, online now; the source is imported again.
-    e.seen(second, "Mod1", true).unwrap();
+    e.seen(second, "Mod1", true, 0).unwrap();
     assert_eq!(e.find_user("mod1").map(|k| k.uuid), Some(second.to_string()));
     let mut changed = mod1_source();
     changed.groups[0].weight = 5;
@@ -219,7 +219,7 @@ fn offline_name_does_not_resolve_import() {
     let mut e = engine();
     let offline = "00000000-0000-0000-0000-0000000000d1";
     // Online now, then only in the database: an offline account binds neither way.
-    e.seen(offline, "Mod1", false).unwrap();
+    e.seen(offline, "Mod1", false, 0).unwrap();
     let out = import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), mod1_source())), SourceMode::Run, 1);
     assert!(out.reply.plain().contains("known only by name"), "{}", out.reply.plain());
     e.gone(offline);
@@ -291,7 +291,7 @@ mod storage_and_import {
         let faults = Faults { reads: backend.fail_reads.clone(), writes: backend.fail_writes.clone() };
         let lang = Lang::load(&[COMMON, LANG, PLATFORM], "en", None).0;
         let mut e = Engine::new(PermsStore::new(Store::new(backend)), CoreCfg::default(), lang);
-        e.seen(STEVE, "Steve", true).unwrap();
+        e.seen(STEVE, "Steve", true, 0).unwrap();
         (e, faults)
     }
 
@@ -427,7 +427,7 @@ mod storage_and_import {
         };
         let mut e = engine();
         import(&mut e, "f1", source(0));
-        e.seen(jeb, "Jeb_", true).unwrap();
+        e.seen(jeb, "Jeb_", true, 0).unwrap();
         assert!(command::on_join(&mut e, jeb, "Jeb_", true, 2).iter().any(|o| o.changed));
         console(&mut e, "user Jeb_ parent remove mod");
         assert!(!in_mod(&e, jeb));

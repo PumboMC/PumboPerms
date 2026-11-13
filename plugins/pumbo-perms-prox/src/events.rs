@@ -94,7 +94,7 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 }
                 s.not_provider = false;
                 s.engine.server_groups = groups;
-                match s.engine.seen(&uuid, &name, p.online_mode) {
+                match s.engine.seen(&uuid, &name, p.online_mode, now) {
                     Ok(Some(moved)) => log::warn(&moved),
                     Ok(None) => {}
                     Err(e) => log::warn(&format!("PumboPerms: cannot save the name of {name}: {e}")),

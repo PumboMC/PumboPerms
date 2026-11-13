@@ -281,7 +281,7 @@ impl PumboPerms {
             "PumboPerms {} loaded: {} groups, {} users, {} tracks, {} servers",
             env!("CARGO_PKG_VERSION"),
             engine.perms.groups().count(),
-            engine.perms.users().filter(|u| !u.data.is_empty()).count(),
+            engine.user_count(),
             engine.perms.tracks().count(),
             engine.server_groups.len(),
         );

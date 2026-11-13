@@ -71,7 +71,7 @@ fn broken_clears_after_reads_recover() {
 fn seen_writes_nothing_while_broken() {
     let mut e = engine();
     e.broken = Some("taken over".into());
-    e.seen(U, "Steve", true).unwrap();
+    e.seen(U, "Steve", true, 0).unwrap();
     assert_eq!(e.find_user(U).map(|k| k.name), Some("Steve".into()), "known while online");
     e.broken = None;
     e.reload_data();
@@ -136,7 +136,7 @@ fn seen_is_constant_time() {
             _ => (format!("00000000-0000-4000-8000-{i:012}"), format!("Renamed{i}")),
         };
         let start = std::time::Instant::now();
-        e.seen(&uuid, &name, true).unwrap();
+        e.seen(&uuid, &name, true, 0).unwrap();
         worst = worst.max(start.elapsed());
     }
     e.reload_data();

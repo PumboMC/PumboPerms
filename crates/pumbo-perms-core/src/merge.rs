@@ -438,7 +438,7 @@ mod tests {
         let mut e = engine();
         let known = "00000000-0000-0000-0000-000000000002";
         let jeb = "00000000-0000-0000-0000-000000000003";
-        e.seen(known, "Known", true).unwrap();
+        e.seen(known, "Known", true, 0).unwrap();
         let in_builder = Data {
             parents: vec![ParentNode { group: "builder".into(), context: Contexts::global(), expiry: None }],
             ..Data::default()

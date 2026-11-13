@@ -354,10 +354,10 @@ impl Engine {
     }
 
     /// Records a joining player's name (`online`: an account the host checked
-    /// with Mojang): kept in memory while the player is online, written to
-    /// the database for later. Returns the line to log when the name leaves a
-    /// UUID that still has groups, permissions or meta.
-    pub fn seen(&mut self, uuid: &str, name: &str, online: bool) -> Result<Option<String>, String> {
+    /// with Mojang) at `now`: kept in memory while the player is online,
+    /// written to the database for later. Returns the line to log when the
+    /// name leaves a UUID that still has groups, permissions or meta.
+    pub fn seen(&mut self, uuid: &str, name: &str, online: bool, _now: u64) -> Result<Option<String>, String> {
         let known = KnownName { uuid: uuid.to_string(), name: name.to_string(), online };
         self.connected.insert(uuid.to_string(), known.clone());
         self.perms.set_user_name(uuid, name);
@@ -379,6 +379,11 @@ impl Engine {
     /// is left): their name comes from the database from now on.
     pub fn gone(&mut self, uuid: &str) {
         self.connected.remove(uuid);
+    }
+
+    /// Players with their own groups, permissions or meta.
+    pub fn user_count(&self) -> u64 {
+        u64::try_from(self.perms.users().filter(|u| !u.data.is_empty()).count()).unwrap_or(u64::MAX)
     }
 
     /// The player online under `uuid`, as [`Engine::seen`] recorded them.

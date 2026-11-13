@@ -461,12 +461,12 @@ fn deleting_and_renaming_groups_cleans_references() {
 fn names_and_lookup() {
     let lang = pumbo_common::lang::Lang::load(&[pumbo_common::lang::COMMON], "en", None).0;
     let mut e = crate::engine::Engine::in_memory(crate::config::CoreCfg::default(), lang);
-    e.seen(U, "Steve", false).unwrap();
+    e.seen(U, "Steve", false, 0).unwrap();
     e.gone(U);
     assert_eq!(e.find_user("steve").unwrap().uuid, U);
     assert_eq!(e.find_user(U).unwrap().name, "Steve");
     // renamed account: the old name no longer points to it
-    e.seen(U, "Steve2", false).unwrap();
+    e.seen(U, "Steve2", false, 0).unwrap();
     e.gone(U);
     assert!(e.find_user("steve").is_none());
     assert_eq!(e.find_user("STEVE2").unwrap().name, "Steve2");

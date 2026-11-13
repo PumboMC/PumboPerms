@@ -37,7 +37,7 @@ fn uuid(i: u32) -> String {
 #[test]
 fn offline_answers_stay_current() {
     let mut e = engine();
-    e.seen(A, "Steve", true).unwrap();
+    e.seen(A, "Steve", true, 0).unwrap();
     e.gone(A);
     console(&mut e, "creategroup vip");
     console(&mut e, "group vip meta setprefix 10 \"[V] \"");
@@ -60,12 +60,12 @@ fn offline_answers_stay_current() {
 #[test]
 fn stale_record_name_does_not_shadow_the_new_owner() {
     let mut e = engine();
-    e.seen(A, "Steve", false).unwrap();
+    e.seen(A, "Steve", false, 0).unwrap();
     console(&mut e, "creategroup vip");
     console(&mut e, "creategroup admin");
     console(&mut e, "user Steve parent add vip");
     e.gone(A);
-    e.seen(B, "Steve", false).unwrap();
+    e.seen(B, "Steve", false, 0).unwrap();
     e.gone(B);
     assert_eq!(e.perms.user(A).unwrap().name, "Steve", "the record of the old owner keeps the name");
     assert!(console(&mut e, "user Steve parent add admin").contains(B));
@@ -77,10 +77,10 @@ fn stale_record_name_does_not_shadow_the_new_owner() {
 fn import_binds_only_names_seen_with_online_accounts() {
     let mut e = engine();
     // An online account that left, an offline one and an online one still here.
-    e.seen(A, "Mod1", true).unwrap();
+    e.seen(A, "Mod1", true, 0).unwrap();
     e.gone(A);
-    e.seen(B, "Mod2", false).unwrap();
-    e.seen(C, "Mod3", true).unwrap();
+    e.seen(B, "Mod2", false, 0).unwrap();
+    e.seen(C, "Mod3", true, 0).unwrap();
     let source = || {
         crate::export::parse(
             r#"{"format":"pumboperms","version":1,"groups":[{"name":"mod"}],"by-name":[
@@ -107,11 +107,11 @@ fn import_binds_only_names_seen_with_online_accounts() {
 #[test]
 fn rejoin_under_a_new_name_updates_views() {
     let mut e = engine();
-    e.seen(A, "Steve", false).unwrap();
+    e.seen(A, "Steve", false, 0).unwrap();
     console(&mut e, "creategroup vip");
     console(&mut e, "user Steve parent add vip");
     e.gone(A);
-    e.seen(A, "Alex", false).unwrap();
+    e.seen(A, "Alex", false, 0).unwrap();
     let info = format!(r#"{{"op":"info","uuid":"{A}"}}"#);
     for online in [true, false] {
         let members = console(&mut e, "group vip listmembers");
@@ -126,8 +126,8 @@ fn rejoin_under_a_new_name_updates_views() {
 #[test]
 fn gone_keeps_the_other_account_of_the_same_name() {
     let mut e = engine();
-    e.seen(A, "Steve", false).unwrap();
-    e.seen(B, "Steve", false).unwrap();
+    e.seen(A, "Steve", false, 0).unwrap();
+    e.seen(B, "Steve", false, 0).unwrap();
     e.gone(A);
     assert_eq!(e.connected(B).map(|k| k.name.as_str()), Some("Steve"));
     assert_eq!(e.find_user("steve").map(|k| k.uuid), Some(B.to_string()));
@@ -141,7 +141,7 @@ fn gone_keeps_the_other_account_of_the_same_name() {
 fn seen_keeps_only_online_names_in_memory() {
     let mut e = engine();
     for i in 0..300 {
-        e.seen(&uuid(i), &format!("Player{i}"), false).unwrap();
+        e.seen(&uuid(i), &format!("Player{i}"), false, 0).unwrap();
         if i != 7 {
             e.gone(&uuid(i));
         }
@@ -156,19 +156,19 @@ fn seen_keeps_only_online_names_in_memory() {
 #[test]
 fn seen_warns_when_name_leaves_uuid_with_data() {
     let mut e = engine();
-    assert_eq!(e.seen(A, "Steve", true), Ok(None));
+    assert_eq!(e.seen(A, "Steve", true, 0), Ok(None));
     // Without data nothing is left behind.
-    assert_eq!(e.seen(B, "Steve", false), Ok(None));
-    assert_eq!(e.seen(A, "Steve", true), Ok(None));
+    assert_eq!(e.seen(B, "Steve", false, 0), Ok(None));
+    assert_eq!(e.seen(A, "Steve", true, 0), Ok(None));
     let (_, d) = e.perms.edit_user(A, "Steve", |d| {
         d.set_permission(PermNode { node: "fly".into(), value: true, context: Contexts::global(), expiry: None })
     });
     e.commit(&d, None).unwrap();
-    let line = e.seen(B, "Steve", false).unwrap().unwrap();
+    let line = e.seen(B, "Steve", false, 0).unwrap().unwrap();
     assert!(line.contains(&format!("moved from {A} to {B}")), "{line}");
     assert_eq!(e.find_user("steve").map(|k| (k.uuid, k.online)), Some((B.to_string(), false)));
     // The same account again: no warning.
-    assert_eq!(e.seen(B, "Steve", false), Ok(None));
+    assert_eq!(e.seen(B, "Steve", false, 0), Ok(None));
 }
 
 /// The name's previous account comes from the database: also after a
@@ -183,14 +183,14 @@ fn name_moving_to_another_account_warns() {
         Engine::new(store, CoreCfg::default(), Lang::load(&[COMMON, crate::LANG], "en", None).0)
     };
     let mut e = open();
-    e.seen(A, "Steve", true).unwrap();
+    e.seen(A, "Steve", true, 0).unwrap();
     console(&mut e, "user Steve permission set fly");
     drop(e);
     let mut e = open();
-    let line = e.seen(B, "Steve", false).unwrap().unwrap();
+    let line = e.seen(B, "Steve", false, 0).unwrap().unwrap();
     assert!(line.contains(&format!("the name Steve moved from {A} to {B}")), "{line}");
-    assert_eq!(e.seen(B, "Steve", false), Ok(None), "the same account again");
-    assert_eq!(e.seen(C, "Steve", false), Ok(None), "{B} has no data");
+    assert_eq!(e.seen(B, "Steve", false, 0), Ok(None), "the same account again");
+    assert_eq!(e.seen(C, "Steve", false, 0), Ok(None), "{B} has no data");
     drop(e);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -198,9 +198,9 @@ fn name_moving_to_another_account_warns() {
 #[test]
 fn renamed_player_old_name_does_not_resolve() {
     let mut e = engine();
-    e.seen(A, "Steve", false).unwrap();
+    e.seen(A, "Steve", false, 0).unwrap();
     e.gone(A);
-    e.seen(A, "Steve2", false).unwrap();
+    e.seen(A, "Steve2", false, 0).unwrap();
     e.gone(A);
     assert!(e.find_user("steve").is_none());
     assert!(console(&mut e, "user Steve info").contains("not found"));

@@ -28,7 +28,7 @@ fn completion() {
 fn nbsp_name_completes_as_one_word() {
     let mut e = engine();
     let u2 = "00000000-0000-0000-0000-0000000000c2";
-    e.seen(u2, "Owner\u{a0}clear", false).unwrap();
+    e.seen(u2, "Owner\u{a0}clear", false, 0).unwrap();
     let online = [KnownName { uuid: u2.into(), name: "Owner\u{a0}clear".into(), online: false }];
     let got = command::complete(&mut e, &Who::console(), &["user".into(), String::new()], &online, 0);
     assert_eq!(got, vec![u2.to_string()]);

@@ -147,7 +147,7 @@ fn known_names_memory_stays_flat() {
             0 => (format!("00000000-0000-4000-9000-{i:012}"), format!("Newcomer{i}")),
             _ => (uuid(i), format!("Renamed{i}")),
         };
-        e.seen(&id, &name, true).unwrap();
+        e.seen(&id, &name, true, 0).unwrap();
     }
     assert_eq!(e.find_user("Player399999").map(|k| k.uuid), Some(uuid(399_999)));
     assert_eq!(e.find_user("renamed1").map(|k| k.uuid), Some(uuid(1)));
