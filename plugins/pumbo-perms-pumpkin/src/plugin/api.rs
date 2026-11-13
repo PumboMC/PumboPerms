@@ -1,6 +1,6 @@
 //! The parts of the Pumpkin plugin API this plugin uses, the same for Pumpkin
-//! 0.2.1 and 0.2.0 (MC 26.3) and 0.1.0-dev (MC 26.2), and the conversion of replies into
-//! text components.
+//! 0.2.2, 0.2.1 and 0.2.0 (MC 26.3) and 0.1.0-dev (MC 26.2), and the conversion of replies
+//! into text components.
 
 pub use crate::papi::command::{Arg, ArgumentType, Command, CommandNode, CommandSender, ConsumedArgs, StringType};
 pub use crate::papi::command::{CommandError, CommandSuggestion, CommandSuggestions, SuggestionRequest};
@@ -22,12 +22,13 @@ use pumbo_common::rich::{Click, Segment, Text};
 use pumbo_common::text::{Color, Named};
 
 /// Pumpkin release and Minecraft version of this build. One mc263 source builds
-/// for Pumpkin 0.2.1 and, with PUMBO_PUMPKIN=0.2.0 from build.sh, for 0.2.0.
+/// for Pumpkin 0.2.2 and 0.2.1 (the same plugin API, so one file names both) and,
+/// with PUMBO_PUMPKIN=0.2.0 from build.sh, for 0.2.0.
 #[cfg(feature = "mc263")]
 const PUMPKIN: (&str, &str) = (
     match option_env!("PUMBO_PUMPKIN") {
         Some(v) => v,
-        None => "0.2.1",
+        None => "0.2.2 and 0.2.1",
     },
     "26.3",
 );

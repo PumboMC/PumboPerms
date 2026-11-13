@@ -23,11 +23,11 @@
 # released PumboPerms 0.1.2-beta (OLD_PERMS_WASM), makes data, swaps in this
 # build, checks the data and goes back to the old file, which has to refuse the
 # newer database and leave its data as it is (this build reads it again). PUMPKIN_BIN
-# (the Pumpkin binary), PUMBO_PROTOCOL of that Pumpkin (777 for
+# (the Pumpkin binary), PUMBO_PROTOCOL of that Pumpkin (777 for 0.2.2+26.3-26.60,
 # 0.2.1+26.3-26.51 and 0.2.0+26.3-26.51, 776 for 0.1.0-dev+26.2-26.45; it picks
 # the plugin slot, PumboPerms-26.3.wasm or -26.2.wasm), PUMBO_VARIANT (the build
-# of each plugin that goes into that slot: 26.3 for Pumpkin 0.2.1, 0.2.0 for
-# Pumpkin 0.2.0, 26.2; by default the slot's own),
+# of each plugin that goes into that slot: 26.3 for Pumpkin 0.2.2 and 0.2.1, 0.2.0
+# for Pumpkin 0.2.0, 26.2; by default the slot's own),
 # PUMBO_PROX_DIR (a PumboProx checkout), PUMBO_BRIDGE_DIR and PUMBO_BANS_DIR (checkouts
 # that build PumboBridge and PumboBans; this repository when it has them).
 # LAYOUT runs one setup instead of both phases:
@@ -409,8 +409,9 @@ if [ -n "$SOLO_MAIN" ]; then
   done
   # shellcheck disable=SC2086
   [ -z "$steps" ] || run_solo "$SOLO" $steps
-  # The build in the slot names the Pumpkin release it was made for.
-  grep -qF "loaded (Pumpkin $ran (" "$SOLO/console.log" ||
+  # The build in the slot names the Pumpkin release it runs on, alone or with
+  # others ("Pumpkin 0.2.2 and 0.2.1"). [.] instead of \. reads the same in every bash.
+  grep -qE "loaded \(Pumpkin ([^(]* )?${ran//./[.]}( [^(]*)? \(" "$SOLO/console.log" ||
     die "PumboPerms does not name Pumpkin $ran in its loaded line, see $SOLO/console.log"
   echo "PASS PumboPerms names Pumpkin $ran"
   lock_moves "$SOLO/plugins/data/pumboperms"

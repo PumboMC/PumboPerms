@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds PumboPerms for every supported Pumpkin release into dist/ at the
 # workspace root:
-#   dist/PumboPerms-26.3.wasm   -> Pumpkin 0.2.1+26.3-26.51     (Minecraft 26.3)
+#   dist/PumboPerms-26.3.wasm   -> Pumpkin 0.2.2+26.3-26.60 and 0.2.1+26.3-26.51 (Minecraft 26.3)
 #   dist/PumboPerms-0.2.0.wasm  -> Pumpkin 0.2.0+26.3-26.51     (Minecraft 26.3)
 #   dist/PumboPerms-26.2.wasm   -> Pumpkin 0.1.0-dev+26.2-26.45 (Minecraft 26.2)
-# Pumpkin 0.2.1 and 0.2.0 each load only their own file. Cargo.lock holds
-# pumpkin-plugin-api 0.2.1; the 0.2.0 file is built with the lock repinned to
-# 0.2.0, and Cargo.lock is put back afterwards.
+# Pumpkin 0.2.2 and 0.2.1 have the same plugin API and load the same file; 0.2.0
+# loads only its own. Cargo.lock holds pumpkin-plugin-api 0.2.1; the 0.2.0 file
+# is built with the lock repinned to 0.2.0, and Cargo.lock is put back afterwards.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 TARGET=wasm32-wasip2
