@@ -1,4 +1,4 @@
-<!-- Pull requests go to `main`. Title: FEAT:, FIX:, DOCS: or DEPS: and a short summary, at most 72 characters. -->
+<!-- Pull requests go to `main`. Title: `type(scope): description`, at most 72 characters, for example `fix(config): keep comments on reload`. -->
 
 ## What
 
@@ -12,6 +12,6 @@
 - [ ] New or changed behaviour has tests
 - [ ] Tried in the game (build, client, Pumpkin and proxy versions):
 
-- [ ] If this finishes a planned item, it is ticked in the roadmap in README.md
+- [ ] If this finishes a planned item, it is ticked in the roadmap
 
 <!-- By sending this pull request you agree that the contribution is licensed under GPL-3.0-only, see CONTRIBUTING.md. -->
