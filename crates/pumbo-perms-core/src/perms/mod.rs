@@ -228,6 +228,15 @@ pub struct Saved {
     tracks: BTreeMap<String, Track>,
 }
 
+/// Records as they were before the change in progress; each is kept the
+/// first time the change touches it (`None`: it did not exist).
+#[derive(Debug, Clone, Default)]
+struct Undo {
+    groups: BTreeMap<String, Option<Group>>,
+    users: HashMap<String, Option<User>>,
+    tracks: BTreeMap<String, Option<Track>>,
+}
+
 /// The whole permission database, in memory.
 #[derive(Debug, Clone)]
 pub struct Perms {
@@ -237,6 +246,8 @@ pub struct Perms {
     default_group: String,
     generation: u64,
     memo: Memo,
+    /// The change in progress ([`Perms::begin`]); `None`: nothing changes now.
+    undo: Option<Undo>,
 }
 
 /// What is computed from the data and kept until the data changes. A copy of
@@ -281,6 +292,7 @@ impl Perms {
             default_group: DEFAULT_GROUP.to_string(),
             generation: 1,
             memo: Memo::default(),
+            undo: None,
         }
     }
 
@@ -318,6 +330,75 @@ impl Perms {
         self.tracks = saved.tracks;
         self.generation = self.generation.wrapping_add(1);
         self.memo = Memo::default();
+    }
+
+    /// Starts a change: from now on the first image of every record it
+    /// touches is kept, for [`Perms::rollback`]. A second `begin` before
+    /// [`Perms::end`] keeps the images it has.
+    pub fn begin(&mut self) {
+        if self.undo.is_none() {
+            self.undo = Some(Undo::default());
+        }
+    }
+
+    /// Undoes the change since [`Perms::begin`] from the records it kept;
+    /// nothing without one.
+    pub fn rollback(&mut self) {
+        let Some(undo) = self.undo.take() else { return };
+        for (name, group) in undo.groups {
+            match group {
+                Some(g) => self.groups.insert(name, g),
+                None => self.groups.remove(&name),
+            };
+        }
+        for (uuid, user) in undo.users {
+            match user {
+                Some(u) => self.users.insert(uuid, u),
+                None => self.users.remove(&uuid),
+            };
+        }
+        for (name, track) in undo.tracks {
+            match track {
+                Some(t) => self.tracks.insert(name, t),
+                None => self.tracks.remove(&name),
+            };
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.memo = Memo::default();
+    }
+
+    /// Ends the change: what it did stays.
+    pub fn end(&mut self) {
+        self.undo = None;
+    }
+
+    /// Whether a change is in progress.
+    pub fn changing(&self) -> bool {
+        self.undo.is_some()
+    }
+
+    fn keep_group(&mut self, name: &str) {
+        if let Some(undo) = &mut self.undo
+            && !undo.groups.contains_key(name)
+        {
+            undo.groups.insert(name.to_string(), self.groups.get(name).cloned());
+        }
+    }
+
+    fn keep_user(&mut self, uuid: &str) {
+        if let Some(undo) = &mut self.undo
+            && !undo.users.contains_key(uuid)
+        {
+            undo.users.insert(uuid.to_string(), self.users.get(uuid).cloned());
+        }
+    }
+
+    fn keep_track(&mut self, name: &str) {
+        if let Some(undo) = &mut self.undo
+            && !undo.tracks.contains_key(name)
+        {
+            undo.tracks.insert(name.to_string(), self.tracks.get(name).cloned());
+        }
     }
 
     /// Counts the change and forgets what was computed from the data it
@@ -507,3 +588,6 @@ impl Perms {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,5 +1,5 @@
-//! Property tests: parsers never panic on any input, and an import taken back
-//! leaves the database as it was.
+//! Property tests: parsers never panic on any input, an import taken back
+//! leaves the database as it was, and so does any change undone.
 
 use proptest::prelude::*;
 use proptest::test_runner::Config;
@@ -125,8 +125,117 @@ fn snapshot() -> impl Strategy<Value = Snapshot> {
     })
 }
 
+/// One change of the database.
+#[derive(Debug, Clone)]
+enum Change {
+    CreateGroup(String),
+    DeleteGroup(String),
+    RenameGroup(String, String),
+    GroupNode(String, PermNode),
+    GroupParent(String, ParentNode),
+    UserNode(String, PermNode),
+    UserParent(String, ParentNode),
+    ClearUser(String),
+    CreateTrack(String),
+    DeleteTrack(String),
+    TrackInsert(String, String),
+    TrackRemove(String, String),
+    TrackClear(String),
+    Step(String, String, bool),
+    Expire(u64),
+}
+
+const GROUPS: &[&str] = &["default", "vip", "mod", "new"];
+const PLAYERS: &[&str] = &[
+    "00000000-0000-0000-0000-000000000001",
+    "00000000-0000-0000-0000-000000000002",
+    "00000000-0000-0000-0000-000000000003",
+];
+const TRACKS: &[&str] = &["ranks", "other"];
+
+/// Nothing, or an end within the first 200 ms.
+fn ending() -> impl Strategy<Value = Option<u64>> {
+    prop_oneof![Just(None), (1u64..200).prop_map(Some)]
+}
+
+fn change() -> impl Strategy<Value = Change> {
+    let perm = || {
+        (pick(&["a", "a.b", "*"]), any::<bool>(), contexts(), ending())
+            .prop_map(|(node, value, context, expiry)| PermNode { node, value, context, expiry })
+    };
+    let parent = || {
+        (pick(GROUPS), contexts(), ending()).prop_map(|(group, context, expiry)| ParentNode { group, context, expiry })
+    };
+    prop_oneof![
+        pick(GROUPS).prop_map(Change::CreateGroup),
+        pick(GROUPS).prop_map(Change::DeleteGroup),
+        (pick(GROUPS), pick(GROUPS)).prop_map(|(a, b)| Change::RenameGroup(a, b)),
+        (pick(GROUPS), perm()).prop_map(|(g, n)| Change::GroupNode(g, n)),
+        (pick(GROUPS), parent()).prop_map(|(g, p)| Change::GroupParent(g, p)),
+        (pick(PLAYERS), perm()).prop_map(|(u, n)| Change::UserNode(u, n)),
+        (pick(PLAYERS), parent()).prop_map(|(u, p)| Change::UserParent(u, p)),
+        pick(PLAYERS).prop_map(Change::ClearUser),
+        pick(TRACKS).prop_map(Change::CreateTrack),
+        pick(TRACKS).prop_map(Change::DeleteTrack),
+        (pick(TRACKS), pick(GROUPS)).prop_map(|(t, g)| Change::TrackInsert(t, g)),
+        (pick(TRACKS), pick(GROUPS)).prop_map(|(t, g)| Change::TrackRemove(t, g)),
+        pick(TRACKS).prop_map(Change::TrackClear),
+        (pick(PLAYERS), pick(TRACKS), any::<bool>()).prop_map(|(u, t, up)| Change::Step(u, t, up)),
+        (0u64..250).prop_map(Change::Expire),
+    ]
+}
+
+/// Makes one change; a refused one changes nothing.
+fn make(p: &mut Perms, change: &Change) {
+    match change {
+        Change::CreateGroup(g) => drop(p.create_group(g)),
+        Change::DeleteGroup(g) => drop(p.delete_group(g)),
+        Change::RenameGroup(a, b) => drop(p.rename_group(a, b)),
+        Change::GroupNode(g, n) => drop(p.edit_group(g, |g| g.data.set_permission(n.clone()))),
+        Change::GroupParent(g, parent) => drop(p.add_group_parent(g, parent.clone())),
+        Change::UserNode(u, n) => drop(p.edit_user(u, "P", |d| d.set_permission(n.clone()))),
+        Change::UserParent(u, parent) => drop(p.edit_user(u, "P", |d| d.add_parent(parent.clone()))),
+        Change::ClearUser(u) => drop(p.edit_user(u, "", |d| *d = Data::default())),
+        Change::CreateTrack(t) => drop(p.create_track(t)),
+        Change::DeleteTrack(t) => drop(p.delete_track(t)),
+        Change::TrackInsert(t, g) => drop(p.track_insert(t, g, None)),
+        Change::TrackRemove(t, g) => drop(p.track_remove(t, g)),
+        Change::TrackClear(t) => drop(p.track_clear(t)),
+        Change::Step(u, t, true) => drop(p.promote(u, "P", t, &Contexts::global(), 100)),
+        Change::Step(u, t, false) => drop(p.demote(u, "P", t, &Contexts::global(), 100)),
+        Change::Expire(now) => drop(p.expire(*now)),
+    }
+}
+
+/// The export of the database and every user record, also one without data.
+fn all_of(p: &Perms) -> (Snapshot, Vec<User>) {
+    let mut users: Vec<User> = p.users().cloned().collect();
+    users.sort_by(|a, b| a.uuid.cmp(&b.uuid));
+    (export::snapshot(p, 0), users)
+}
+
 proptest! {
     #![proptest_config(cases())]
+
+    #[test]
+    fn any_change_can_be_undone(base in snapshot(), changes in proptest::collection::vec(change(), 1..12)) {
+        let mut perms = Perms::new();
+        let setup = merge::plan(&perms, &base);
+        merge::apply(&mut perms, &setup);
+        for (track, groups) in [("ranks", ["default", "vip"]), ("other", ["mod", "vip"])] {
+            perms.create_track(track).ok();
+            for g in groups {
+                perms.track_insert(track, g, None).ok();
+            }
+        }
+        let before = all_of(&perms);
+        perms.begin();
+        for c in &changes {
+            make(&mut perms, c);
+        }
+        perms.rollback();
+        prop_assert_eq!(all_of(&perms), before);
+    }
 
     #[test]
     fn node_parse_never_panics(input in text()) {

@@ -16,6 +16,7 @@ impl Perms {
         if self.groups.contains_key(name) {
             return Err(PermsError::GroupExists(name.to_string()));
         }
+        self.keep_group(name);
         self.groups.insert(name.to_string(), Group::new(name));
         let dirty = Dirty { groups: [name.to_string()].into(), ..Dirty::default() };
         self.touch(&dirty);
@@ -27,33 +28,54 @@ impl Perms {
         if name == self.default_group {
             return Err(PermsError::DefaultGroup);
         }
-        if self.groups.remove(name).is_none() {
+        if !self.groups.contains_key(name) {
             return Err(PermsError::NoGroup(name.to_string()));
         }
+        self.keep_group(name);
+        self.groups.remove(name);
         let mut dirty = Dirty { deleted_groups: [name.to_string()].into(), ..Dirty::default() };
-        for g in self.groups.values_mut() {
-            if g.data.remove_group(name) > 0 {
-                dirty.groups.insert(g.name.clone());
+        let (groups, users, tracks) = self.referring(name);
+        for g in groups {
+            self.keep_group(&g);
+            if let Some(group) = self.groups.get_mut(&g) {
+                group.data.remove_group(name);
             }
+            dirty.groups.insert(g);
         }
-        for u in self.users.values_mut() {
-            if u.data.remove_group(name) > 0 {
-                dirty.users.insert(u.uuid.clone());
+        for u in users {
+            self.keep_user(&u);
+            if let Some(user) = self.users.get_mut(&u) {
+                user.data.remove_group(name);
             }
+            dirty.users.insert(u);
         }
-        for t in self.tracks.values_mut() {
-            let before = t.groups.len();
-            t.groups.retain(|g| g != name);
-            if t.groups.len() != before {
-                dirty.tracks.insert(t.name.clone());
+        for t in tracks {
+            self.keep_track(&t);
+            if let Some(track) = self.tracks.get_mut(&t) {
+                track.groups.retain(|g| g != name);
             }
+            dirty.tracks.insert(t);
         }
         self.touch(&dirty);
         Ok(dirty)
     }
 
+    /// The groups and users with `group` as a parent and the tracks with it.
+    fn referring(&self, group: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let names = |data: &Data| data.parents.iter().any(|p| p.group == group);
+        (
+            self.groups.iter().filter(|(_, g)| names(&g.data)).map(|(k, _)| k.clone()).collect(),
+            self.users.iter().filter(|(_, u)| names(&u.data)).map(|(k, _)| k.clone()).collect(),
+            self.tracks.iter().filter(|(_, t)| t.groups.iter().any(|g| g == group)).map(|(k, _)| k.clone()).collect(),
+        )
+    }
+
     /// Changes a group with `f` (after checking it exists).
     pub fn edit_group<R>(&mut self, name: &str, f: impl FnOnce(&mut Group) -> R) -> Result<(R, Dirty), PermsError> {
+        if !self.groups.contains_key(name) {
+            return Err(PermsError::NoGroup(name.to_string()));
+        }
+        self.keep_group(name);
         let group = self.groups.get_mut(name).ok_or_else(|| PermsError::NoGroup(name.to_string()))?;
         let r = f(group);
         let dirty = Dirty { groups: [name.to_string()].into(), ..Dirty::default() };
@@ -63,6 +85,7 @@ impl Perms {
 
     /// Changes a user's data with `f`, creating the record when needed.
     pub fn edit_user<R>(&mut self, uuid: &str, name: &str, f: impl FnOnce(&mut Data) -> R) -> (R, Dirty) {
+        self.keep_user(uuid);
         let user = self.users.entry(uuid.to_string()).or_insert_with(|| User {
             uuid: uuid.to_string(),
             name: name.to_string(),
@@ -121,32 +144,41 @@ impl Perms {
         if self.groups.contains_key(to) {
             return Err(PermsError::GroupExists(to.to_string()));
         }
+        if !self.groups.contains_key(from) {
+            return Err(PermsError::NoGroup(from.to_string()));
+        }
+        self.keep_group(from);
+        self.keep_group(to);
         let mut group = self.groups.remove(from).ok_or_else(|| PermsError::NoGroup(from.to_string()))?;
         group.name = to.to_string();
         self.groups.insert(to.to_string(), group);
         let mut dirty =
             Dirty { groups: [to.to_string()].into(), deleted_groups: [from.to_string()].into(), ..Dirty::default() };
-        for g in self.groups.values_mut() {
-            if g.data.parents.iter().any(|p| p.group == from) {
-                g.data.rename_group(from, to);
-                dirty.groups.insert(g.name.clone());
+        let (groups, users, tracks) = self.referring(from);
+        for g in groups {
+            self.keep_group(&g);
+            if let Some(group) = self.groups.get_mut(&g) {
+                group.data.rename_group(from, to);
             }
+            dirty.groups.insert(g);
         }
-        for u in self.users.values_mut() {
-            if u.data.parents.iter().any(|p| p.group == from) {
-                u.data.rename_group(from, to);
-                dirty.users.insert(u.uuid.clone());
+        for u in users {
+            self.keep_user(&u);
+            if let Some(user) = self.users.get_mut(&u) {
+                user.data.rename_group(from, to);
             }
+            dirty.users.insert(u);
         }
-        for t in self.tracks.values_mut() {
-            if t.groups.iter().any(|g| g == from) {
-                for g in &mut t.groups {
+        for t in tracks {
+            self.keep_track(&t);
+            if let Some(track) = self.tracks.get_mut(&t) {
+                for g in &mut track.groups {
                     if g == from {
                         *g = to.to_string();
                     }
                 }
-                dirty.tracks.insert(t.name.clone());
             }
+            dirty.tracks.insert(t);
         }
         self.touch(&dirty);
         Ok(dirty)
@@ -159,6 +191,7 @@ impl Perms {
         if self.tracks.contains_key(name) {
             return Err(PermsError::TrackExists(name.to_string()));
         }
+        self.keep_track(name);
         self.tracks.insert(name.to_string(), Track { name: name.to_string(), groups: Vec::new() });
         let dirty = Dirty { tracks: [name.to_string()].into(), ..Dirty::default() };
         self.touch(&dirty);
@@ -166,6 +199,7 @@ impl Perms {
     }
 
     pub fn delete_track(&mut self, name: &str) -> Result<Dirty, PermsError> {
+        self.keep_track(name);
         self.tracks.remove(name).ok_or_else(|| PermsError::NoTrack(name.to_string()))?;
         let dirty = Dirty { deleted_tracks: [name.to_string()].into(), ..Dirty::default() };
         self.touch(&dirty);
@@ -177,6 +211,7 @@ impl Perms {
         if !self.groups.contains_key(group) {
             return Err(PermsError::NoGroup(group.to_string()));
         }
+        self.keep_track(track);
         let t = self.tracks.get_mut(track).ok_or_else(|| PermsError::NoTrack(track.to_string()))?;
         if t.groups.iter().any(|g| g == group) {
             return Err(PermsError::OnTrack(group.to_string()));
@@ -189,6 +224,7 @@ impl Perms {
     }
 
     pub fn track_remove(&mut self, track: &str, group: &str) -> Result<Dirty, PermsError> {
+        self.keep_track(track);
         let t = self.tracks.get_mut(track).ok_or_else(|| PermsError::NoTrack(track.to_string()))?;
         let before = t.groups.len();
         t.groups.retain(|g| g != group);
@@ -201,6 +237,7 @@ impl Perms {
     }
 
     pub fn track_clear(&mut self, track: &str) -> Result<Dirty, PermsError> {
+        self.keep_track(track);
         let t = self.tracks.get_mut(track).ok_or_else(|| PermsError::NoTrack(track.to_string()))?;
         t.groups.clear();
         let dirty = Dirty { tracks: [track.to_string()].into(), ..Dirty::default() };
@@ -318,16 +355,23 @@ impl Perms {
 
     /// Removes expired nodes everywhere. Returns what changed.
     pub fn expire(&mut self, now: u64) -> Dirty {
+        let ended = |data: &Data| data.next_expiry().is_some_and(|t| t <= now);
+        let groups: Vec<String> = self.groups.iter().filter(|(_, g)| ended(&g.data)).map(|(k, _)| k.clone()).collect();
+        let users: Vec<String> = self.users.iter().filter(|(_, u)| ended(&u.data)).map(|(k, _)| k.clone()).collect();
         let mut dirty = Dirty::default();
-        for g in self.groups.values_mut() {
-            if g.data.expire(now) > 0 {
-                dirty.groups.insert(g.name.clone());
+        for g in groups {
+            self.keep_group(&g);
+            if let Some(group) = self.groups.get_mut(&g) {
+                group.data.expire(now);
             }
+            dirty.groups.insert(g);
         }
-        for u in self.users.values_mut() {
-            if u.data.expire(now) > 0 {
-                dirty.users.insert(u.uuid.clone());
+        for u in users {
+            self.keep_user(&u);
+            if let Some(user) = self.users.get_mut(&u) {
+                user.data.expire(now);
             }
+            dirty.users.insert(u);
         }
         if !dirty.is_empty() {
             self.touch(&dirty);
