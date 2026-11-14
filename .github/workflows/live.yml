@@ -39,12 +39,13 @@ jobs:
           # old: the released PumboPerms 0.1.2-beta file that step J8 starts
           # first. 0.1.2-beta has no file for Pumpkin 0.2.2 and 0.2.1, so those
           # entries run the lone server steps without J8 (solo_steps). 0.2.2 has
-          # the plugin API of 0.2.1 and loads its build.
+          # the plugin API of 0.2.1 and loads its build; it has no J7 either,
+          # because PumboPerms turns Tab completion off there.
           - tag: 0.2.2+26.3-26.60
             protocol: 777
             variant: '26.3'
             sha256: 3755df414cdece664223388a93421c5c674682f5b9264387416b8a9074cd8d59
-            solo_steps: 'J1 J2 J3 J7 J4 J5 J6'
+            solo_steps: 'J1 J2 J3 J4 J5 J6'
           - tag: 0.2.1+26.3-26.51
             protocol: 777
             variant: '26.3'
