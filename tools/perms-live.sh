@@ -19,7 +19,8 @@
 # SOLO_STEPS (J1 J2 J3 J7 J4 J5 J6 J8; J7 before J4, which loads PumboPerms
 # again; J10, only when named, runs before J8 on a lone Pumpkin of its own with
 # a database of 400000 names and max_memory_mb = 64 for PumboPerms); an empty
-# list skips its phase. J8 starts the
+# list skips its phase. PERMS_LIVE_RANKED=1 makes the 400000 names of J10 and
+# N16 players with a group (names_fixture --ranked). J8 starts the
 # released PumboPerms 0.1.2-beta (OLD_PERMS_WASM), makes data, swaps in this
 # build, checks the data and goes back to the old file, which has to refuse the
 # newer database and leave its data as it is (this build reads it again). PUMPKIN_BIN
@@ -165,6 +166,7 @@ record() { # <exit code>
     echo "- code: $(basename "$L") $(git -C "$L" rev-parse --short HEAD)$(changed "$L"), $(basename "$P") $(git -C "$P" rev-parse --short HEAD)$(changed "$P")"
     echo "- steps: $(grep -oE '^(PASS|FAIL|SKIP) [A-Za-z0-9]+' "$RUN_LOG" | tr '\n' ' ' || true)"
     echo "- retries: $(grep -c '^RETRY' "$RUN_LOG" || true)"
+    [ -z "${RANKED:-}" ] || echo "- data: the names of J10 and N16$RANKED"
     grep -E '^[NJ][0-9]+[a-z]?: .*[0-9]+ (ms|MB|KB)' "$RUN_LOG" | sed 's/^/- /' || true
     grep -E '^perms-live: ' "$RUN_LOG" | tail -1 | sed 's/^/- /' || true
     echo "- log: logi/$stamp-perms-live.log"
@@ -210,15 +212,18 @@ DRIVER=${CARGO_TARGET_DIR:-$P/target}/debug/examples/perms_live
 uuid() { "$DRIVER" --uuid "$1"; }
 solo_uuid() { "$DRIVER" --solo-uuid "$1"; }
 # J10 and N16 open a database with nothing but the names Player0..Player399999
-# and their UUIDs, as names_fixture of pumbo-perms-core writes them.
+# and their UUIDs, as names_fixture of pumbo-perms-core writes them; with
+# PERMS_LIVE_RANKED=1 every one of these players also has a group.
 NAMES=400000
+RANKED=
+if [ "${PERMS_LIVE_RANKED:-}" = 1 ]; then RANKED=" with a group each"; fi
 if [ "$N16" = 1 ] || [[ " $SOLO_STEPS " = *" J10 "* ]]; then
   (cd "$L" && cargo build --release -p pumbo-perms-core --example names_fixture)
 fi
 names_db() { # <perms.redb>
   rm -f "$1"
   mkdir -p "$(dirname "$1")"
-  "${CARGO_TARGET_DIR:-$L/target}/release/examples/names_fixture" "$1" "$NAMES"
+  "${CARGO_TARGET_DIR:-$L/target}/release/examples/names_fixture" "$1" "$NAMES" ${RANKED:+--ranked}
 }
 
 ops() { # <file> (<nick> <uuid> <level>)...
@@ -321,7 +326,7 @@ if [ -n "$NETWORK_STEPS" ] || [ "$N16" = 1 ]; then
     run_network N11$P_PART
   fi
   if [ "$N16" = 1 ]; then
-    echo "== network: N16, $NAMES names and memory-mb: 64 on the proxy"
+    echo "== network: N16, $NAMES names$RANKED and memory-mb: 64 on the proxy"
     network down
     names_db "$NET/proxy/plugins/data/pumbo-perms/perms.redb"
     perl -pi -e '$_ .= "  memory-mb: 64\n" if /^plugins:$/' "$NET/proxy/pumboprox.yml"
@@ -427,7 +432,7 @@ if [ -n "$SOLO_MAIN" ]; then
 fi
 
 case " $SOLO_STEPS " in *" J10 "*)
-  echo "== solo: J10, $NAMES names and max_memory_mb = 64 in $MEMORY"
+  echo "== solo: J10, $NAMES names$RANKED and max_memory_mb = 64 in $MEMORY"
   solo_setup "$MEMORY" "$PLUGINS/PumboPerms-$VARIANT.wasm"
   names_db "$MEMORY/plugins/data/pumboperms/perms.redb"
   printf '\n[plugins.overrides.pumboperms]\nmax_memory_mb = 64\n' >> "$MEMORY/pumpkin.toml"
