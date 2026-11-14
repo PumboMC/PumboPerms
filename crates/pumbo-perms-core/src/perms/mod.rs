@@ -220,14 +220,6 @@ impl Dirty {
     }
 }
 
-/// The groups, users and tracks of [`Perms`] ([`Perms::saved`]).
-#[derive(Debug, Clone)]
-pub struct Saved {
-    groups: BTreeMap<String, Group>,
-    users: HashMap<String, User>,
-    tracks: BTreeMap<String, Track>,
-}
-
 /// Records as they were before the change in progress; each is kept the
 /// first time the change touches it (`None`: it did not exist).
 #[derive(Debug, Clone, Default)]
@@ -316,20 +308,6 @@ impl Perms {
             dirty.groups.insert(DEFAULT_GROUP.to_string());
         }
         (p, dirty)
-    }
-
-    /// Groups, users and tracks as they are now, to [`Perms::restore`] after a
-    /// change that could not be saved.
-    pub fn saved(&self) -> Saved {
-        Saved { groups: self.groups.clone(), users: self.users.clone(), tracks: self.tracks.clone() }
-    }
-
-    pub fn restore(&mut self, saved: Saved) {
-        self.groups = saved.groups;
-        self.users = saved.users;
-        self.tracks = saved.tracks;
-        self.generation = self.generation.wrapping_add(1);
-        self.memo = Memo::default();
     }
 
     /// Starts a change: from now on the first image of every record it

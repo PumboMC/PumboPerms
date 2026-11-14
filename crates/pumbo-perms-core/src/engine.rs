@@ -10,7 +10,7 @@ use pumbo_common::store::StoreError;
 use crate::config::CoreCfg;
 use crate::context::Query;
 use crate::merge::Ledger;
-use crate::perms::{Decision, Dirty, KnownName, Perms, Saved};
+use crate::perms::{Decision, Dirty, KnownName, Perms};
 use crate::store::{LogEntry, PermsStore};
 
 /// The operator fallback covers only these nodes: every other Pumbo plugin
@@ -30,9 +30,6 @@ pub struct Engine {
     /// The command in help, usage lines and clicks: [`crate::command::ROOT`],
     /// or what the platform registered instead.
     pub root: String,
-    /// The data before the change in progress ([`Engine::begin`]): a change
-    /// that cannot be saved is undone from it, without reading the disk.
-    before: Option<Saved>,
     /// The import ledgers as stored (a damaged one as its error), read once:
     /// every join looks at them.
     ledgers: Result<BTreeMap<String, Result<Ledger, String>>, String>,
@@ -67,7 +64,6 @@ impl Engine {
             broken: None,
             server_groups: BTreeMap::new(),
             root: crate::command::ROOT.to_string(),
-            before: None,
             ledgers: Err("no database".into()),
             reported: BTreeSet::new(),
             changes: None,
@@ -170,22 +166,21 @@ impl Engine {
         (level > 0 && op_level >= level && node.starts_with(OWN_NODES)).then_some(true)
     }
 
-    /// Remembers the data before a change, for [`Engine::rollback`].
+    /// Starts a change: the records it touches are kept as they were, for
+    /// [`Engine::rollback`].
     pub fn begin(&mut self) {
-        self.before = Some(self.perms.saved());
+        self.perms.begin();
     }
 
-    /// Undoes the change since [`Engine::begin`] in memory (nothing when no
-    /// change began).
+    /// Undoes the change since [`Engine::begin`] in memory, without reading
+    /// the disk (nothing when no change began).
     pub fn rollback(&mut self) {
-        if let Some(saved) = self.before.take() {
-            self.perms.restore(saved);
-        }
+        self.perms.rollback();
     }
 
-    /// Forgets the data kept by [`Engine::begin`].
+    /// Ends the change: what it did stays.
     pub fn end(&mut self) {
-        self.before = None;
+        self.perms.end();
     }
 
     /// Saves a change with its log entry. On failure the change is undone in

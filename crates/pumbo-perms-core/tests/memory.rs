@@ -218,11 +218,14 @@ fn change_among_20000_players_fits_the_budget() {
 }
 
 /// One change of a player and one of their group among 20 000 and 100 000
-/// players in the group, each counted from the state before it.
+/// players in the group, each counted from the state before it: a change
+/// keeps only the records it touches, so it costs the same at both sizes
+/// (what is left is the write transaction of redb).
 #[test]
 #[ignore = "release benchmark"]
 fn one_change_copies_what_it_touches() {
     let _one = one_at_a_time();
+    let mut peaks = Vec::new();
     for n in [20_000u32, 100_000] {
         let (dir, path) = database(&format!("touch-{n}"));
         write_ranked(&path, n);
@@ -238,8 +241,13 @@ fn one_change_copies_what_it_touches() {
         println!(
             "memory: {n} players in a group, one change of a player +{player:.2} MiB ({player_took:?}), of the group +{group:.2} MiB ({group_took:?})"
         );
+        peaks.push((player, group));
         drop(e);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    let (small, large) = (peaks[0], peaks[1]);
+    for (small, large) in [(small.0, large.0), (small.1, large.1)] {
+        assert!(small < 2.0 && large < 2.0 && (large - small).abs() <= 0.25, "{peaks:?}");
     }
 }
 
