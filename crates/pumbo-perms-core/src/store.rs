@@ -23,14 +23,14 @@
 //! the table and raises the schema to 2. A build that knows only schema 1
 //! refuses the file after that.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, BinaryHeap};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use pumbo_common::store::{Durability, ReadExt, ReadOps, Result, Store, StoreError, WriteExt, WriteOps};
 use serde::{Deserialize, Serialize};
 
 use crate::merge::Ledger;
-use crate::model::{Group, Track, User};
+use crate::model::{Group, Track, User, alive};
 use crate::perms::{Dirty, KnownName, Offline, Perms};
 
 pub const GROUPS: &str = "perms_groups";
@@ -182,6 +182,63 @@ impl PermsStore {
             }
         })?;
         Ok(Perms::from_disk(groups, tracks, offline))
+    }
+
+    /// Players with a record (with data: an empty record is removed).
+    pub fn user_count(&self) -> Result<u64> {
+        self.store.read(|tx| tx.len(USERS))
+    }
+
+    /// One page (1-based) of the players with a live parent `group` at `now`,
+    /// by name and UUID, and how many there are: `seed` (the ones in memory)
+    /// and, in one pass, the records outside `skip`. Only the first `page *
+    /// per_page` pairs stay in memory, and only records whose bytes name the
+    /// group are decoded.
+    pub fn members_page(
+        &self,
+        group: &str,
+        (page, per_page): (usize, usize),
+        now: u64,
+        skip: &dyn Fn(&str) -> bool,
+        seed: Vec<(String, String)>,
+    ) -> Result<(Vec<(String, String)>, usize)> {
+        let keep = page.saturating_mul(per_page);
+        // The largest pair on top: it goes when a smaller one comes.
+        let mut first: BinaryHeap<(String, String)> = BinaryHeap::new();
+        let mut offer = |pair: (String, String)| {
+            if first.len() < keep {
+                first.push(pair);
+            } else if first.peek().is_some_and(|top| pair < *top) {
+                first.pop();
+                first.push(pair);
+            }
+        };
+        let mut total = seed.len();
+        seed.into_iter().for_each(&mut offer);
+        let needle = format!("\"{group}\"");
+        let (mut damaged, mut records) = (None, 0);
+        self.store.read(|tx| {
+            tx.scan(USERS, "", &mut |k, v| {
+                self.pass(&mut records);
+                if skip(k) || !names(v, &needle) {
+                    return true;
+                }
+                match decode::<User>(USERS, k, v) {
+                    Ok(u) if u.data.parents.iter().any(|p| p.group == group && alive(p.expiry, now)) => {
+                        total = total.saturating_add(1);
+                        offer((u.name, k.to_string()));
+                    }
+                    Ok(_) => {}
+                    Err(e) => damaged = Some(e),
+                }
+                damaged.is_none()
+            })
+        })?;
+        if let Some(e) = damaged {
+            return Err(e);
+        }
+        let skipped = page.saturating_sub(1).saturating_mul(per_page);
+        Ok((first.into_sorted_vec().into_iter().skip(skipped).take(per_page).collect(), total))
     }
 
     /// The record of one player, `None` for a player without one.
@@ -459,7 +516,7 @@ impl PermsStore {
             let mut keys = Vec::new();
             tx.scan(USERS, &format!("{portion:02x}"), &mut |k, v| {
                 self.pass(&mut records);
-                if !skip.contains(k) && v.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                if !skip.contains(k) && names(v, &needle) {
                     keys.push(k.to_string());
                 }
                 true
@@ -483,6 +540,12 @@ impl PermsStore {
         }
         Ok(())
     }
+}
+
+/// Whether the bytes of a record hold `needle` (`"<group>"`): every record
+/// with the group as a parent does, a few others too.
+fn names(record: &[u8], needle: &str) -> bool {
+    record.windows(needle.len()).any(|w| w == needle.as_bytes())
 }
 
 fn write_records(tx: &mut dyn WriteOps, perms: &Perms, dirty: &Dirty) -> Result<()> {

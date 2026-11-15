@@ -152,6 +152,7 @@ fn run(e: &mut Engine, line: &str, now: u64) -> Outcome {
 
 #[test]
 fn ranked_fixture_gives_every_player_a_group() {
+    let _one = one_at_a_time();
     let (dir, path) = database("fixture");
     names_fixture::write(&path, 50, Ranks { ranked: true, own_node: true }).unwrap();
     let (perms, _) = PermsStore::new(Store::open(&path).unwrap()).unwrap().load().unwrap();
@@ -166,6 +167,31 @@ fn ranked_fixture_gives_every_player_a_group() {
     let (perms, dirty) = PermsStore::new(Store::open(&path).unwrap()).unwrap().load().unwrap();
     assert!(perms.users().next().is_none() && dirty.groups.contains("default"), "names only");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One page of `listmembers` among 5000 members: the pass over the database
+/// keeps the members it shows, not all of them.
+#[test]
+fn member_page_keeps_only_what_it_shows() {
+    let _one = one_at_a_time();
+    let (dir, path) = database("page");
+    write_ranked(&path, 5_000);
+    let store = PermsStore::new(Store::open(&path).unwrap()).unwrap();
+    let page = |store: &PermsStore, n: usize| store.members_page("vip", (n, 15), 0, &|_| false, Vec::new()).unwrap();
+    // The page cache of redb fills at the first pass.
+    page(&store, 1);
+    let base = start();
+    let (shown, total) = page(&store, 1);
+    let grown = peak_mib(base);
+    assert_eq!((shown.len(), total), (15, 5_000));
+    assert_eq!(shown.first(), Some(&("Player0".to_string(), uuid(0))));
+    assert_eq!(shown.get(2), Some(&("Player10".to_string(), uuid(10))), "by name");
+    let (last, _) = page(&store, 334);
+    assert_eq!(last.len(), 5_000 - 333 * 15);
+    println!("memory: one page of 5000 members, heap peak +{grown:.3} MiB");
+    drop(store);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(grown < 0.25, "{grown:.2} MiB");
 }
 
 /// 400 000 known names: the engine keeps none of them in memory.

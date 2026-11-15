@@ -533,14 +533,6 @@ impl Perms {
         }
     }
 
-    /// Users that have `group` as a direct parent (in any context).
-    pub fn members(&self, group: &str) -> Vec<&User> {
-        let mut out: Vec<&User> =
-            self.users.values().filter(|u| u.data.parents.iter().any(|p| p.group == group)).collect();
-        out.sort_by(|a, b| a.name.cmp(&b.name).then(a.uuid.cmp(&b.uuid)));
-        out
-    }
-
     /// Groups that have `group` as a direct parent.
     pub fn child_groups(&self, group: &str) -> Vec<&Group> {
         self.groups.values().filter(|g| g.data.parents.iter().any(|p| p.group == group)).collect()

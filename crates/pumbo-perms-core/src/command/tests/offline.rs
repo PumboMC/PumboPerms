@@ -21,6 +21,15 @@ fn node(node: &str, expiry: Option<u64>) -> PermNode {
     PermNode { node: node.into(), value: true, context: crate::context::Contexts::global(), expiry }
 }
 
+/// Player `i` in `vip`, under the name `Player<i>`.
+fn in_vip(i: u32) -> User {
+    User {
+        uuid: player(i),
+        name: format!("Player{i}"),
+        data: Data { parents: vec![parent("vip", None)], ..Data::default() },
+    }
+}
+
 /// Writes `users` and the groups `vip` and `mod` to the database as an earlier
 /// start left them, and reads it again.
 fn on_disk(e: &mut Engine, users: Vec<User>) {
@@ -171,4 +180,73 @@ fn import_of_many_offline_players_keeps_their_data() {
         assert!(data.parents.is_empty() && data.permissions.len() == 1, "{i}: {data:?}");
     }
     assert_eq!(e.perms.member_count("mod", 1_000), 0);
+}
+
+#[test]
+fn listmembers_shows_players_on_disk() {
+    let mut e = lazy();
+    let mut users: Vec<User> = (0..40).map(|i| User { name: format!("Disk{i:02}"), ..in_vip(i) }).collect();
+    // Gone was in vip until 500: at 1000 it is neither listed nor counted.
+    let ended = Data { parents: vec![parent("vip", Some(500))], ..Data::default() };
+    users.push(User { name: "Gone".into(), data: ended, ..in_vip(40) });
+    on_disk(&mut e, users);
+    // Two online players in vip, one of them read from the database at the join.
+    e.seen(&player(0), "Disk00", true, 1_000).unwrap();
+    console(&mut e, "user Steve parent add vip");
+    let first = console(&mut e, "group vip listmembers");
+    assert!(first.contains("Members of vip: 41"), "{first}");
+    let shown: Vec<&str> = first.lines().filter_map(|l| l.trim().strip_prefix("• ")).collect();
+    let mut want: Vec<String> = (0..40).map(|i| format!("Disk{i:02}")).collect();
+    want.push("Steve".into());
+    assert_eq!(shown, want[..15], "{first}");
+    let last = console(&mut e, "group vip listmembers 3");
+    let shown: Vec<&str> = last.lines().filter_map(|l| l.trim().strip_prefix("• ")).collect();
+    assert_eq!(shown, want[30..], "{last}");
+    assert!(console(&mut e, "group vip listmembers 9").contains("Steve"), "past the end: the last page");
+}
+
+#[test]
+fn listmembers_shows_the_recorded_name_for_players_on_disk() {
+    let mut e = lazy();
+    on_disk(&mut e, vec![User { name: "OldName".into(), ..in_vip(5) }]);
+    e.seen(&player(5), "NewName", true, 1_000).unwrap();
+    assert!(console(&mut e, "group vip listmembers").contains("NewName"), "online: the name of the join");
+    e.gone(&player(5));
+    forget(&mut e);
+    let list = console(&mut e, "group vip listmembers");
+    assert!(list.contains("OldName") && !list.contains("NewName"), "{list}");
+}
+
+#[test]
+fn group_info_counts_players_on_disk() {
+    let mut e = lazy();
+    let mut users: Vec<User> = (0..30).map(in_vip).collect();
+    users.push(User { data: Data { parents: vec![parent("vip", Some(500))], ..Data::default() }, ..in_vip(30) });
+    users.push(User { data: Data { parents: vec![parent("vip", Some(5_000))], ..Data::default() }, ..in_vip(31) });
+    on_disk(&mut e, users);
+    console(&mut e, "user Steve parent add vip");
+    let info = console(&mut e, "group vip info");
+    assert!(info.contains("Members: 32"), "30 on disk, one until 5000 and Steve: {info}");
+    assert_eq!(e.perms.users().count(), 1, "counted without reading them");
+}
+
+#[test]
+fn import_undo_keeps_a_group_with_members_on_disk() {
+    let mut e = lazy();
+    on_disk(
+        &mut e,
+        vec![User { data: Data { permissions: vec![node("keep", None)], ..Data::default() }, ..in_vip(7) }],
+    );
+    let source = export::parse(r#"{"format":"pumboperms","version":1,"groups":[{"name":"builder"}]}"#).unwrap();
+    let out = import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), source)), SourceMode::Run, 1_000);
+    assert!(out.changed, "{}", out.reply.plain());
+    // An admin puts a player who is not online into the imported group.
+    console(&mut e, &format!("user {} parent add builder", player(7)));
+    forget(&mut e);
+    assert!(!e.perms.knows(&player(7)));
+    let out = import_source(&mut e, &Who::console(), "file", Err(String::new()), SourceMode::Undo, 1_000);
+    assert!(out.reply.plain().contains("Removed 0"), "{}", out.reply.plain());
+    assert!(e.perms.group("builder").is_some(), "the group still has a member");
+    let stored = e.store().unwrap().user(&player(7)).unwrap().unwrap().data;
+    assert_eq!((stored.parents, stored.permissions), (vec![parent("builder", None)], vec![node("keep", None)]));
 }

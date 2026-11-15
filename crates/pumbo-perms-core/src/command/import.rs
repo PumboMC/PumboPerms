@@ -85,7 +85,7 @@ pub fn import_source(
         // The change first: no record read for it leaves memory before it ends.
         e.begin();
         load_players(e, &[], &ledger.entries, now);
-        let (dirty, n) = merge::undo(&mut e.perms, &ledger);
+        let (dirty, n) = merge::undo(&mut e.perms, &ledger, now);
         let entry = log(format!("import undo {source}: {n} entries"));
         // A failed save undoes the change itself.
         if let Err(why) = e.commit_import(&dirty, Some(&entry), source, &Ledger::default()) {
@@ -146,7 +146,8 @@ pub fn import_source(
         ledger.entries.iter().cloned().partition(|x| all.contains(&x.key()));
     e.begin();
     load_players(e, &snap.users, &gone, now);
-    let (mut dirty, removed) = merge::undo(&mut e.perms, &Ledger { entries: gone.clone(), ..Ledger::default() });
+    let gone_ledger = Ledger { entries: gone.clone(), ..Ledger::default() };
+    let (mut dirty, removed) = merge::undo(&mut e.perms, &gone_ledger, now);
     let mut plan = merge::plan(&e.perms, &snap);
     merge::skip_recorded(&mut plan, &e.perms, &ledger.entries);
     if mode == SourceMode::Preview {

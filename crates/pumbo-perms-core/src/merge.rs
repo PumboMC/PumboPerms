@@ -227,8 +227,9 @@ pub fn apply(perms: &mut Perms, plan: &Plan) -> (Dirty, Vec<Entry>) {
 }
 
 /// Takes back what a source added, where it is still as imported; returns
-/// what changed and how many entries went.
-pub fn undo(perms: &mut Perms, ledger: &Ledger) -> (Dirty, usize) {
+/// what changed and how many entries went. A group stays while it has
+/// members at `now`, also players whose records are on disk.
+pub fn undo(perms: &mut Perms, ledger: &Ledger, now: u64) -> (Dirty, usize) {
     let mut dirty = Dirty::default();
     let mut n = 0;
     // Groups last: an imported group may still be the parent of another one.
@@ -240,7 +241,7 @@ pub fn undo(perms: &mut Perms, ledger: &Ledger) -> (Dirty, usize) {
                 // Only a group nothing refers to and nobody changed since.
                 let untouched =
                     perms.group(group).is_some_and(|g| g.data.is_empty() && g.weight == 0 && g.display_name.is_empty());
-                let unused = perms.members(group).is_empty()
+                let unused = perms.member_count(group, now) == 0
                     && perms.child_groups(group).is_empty()
                     && perms.tracks_of(group).is_empty();
                 untouched && unused && perms.delete_group(group).map(|d| dirty.merge(d)).is_ok()
@@ -394,7 +395,7 @@ mod tests {
         // An admin adds to the imported group; undo keeps that and the group.
         perms.edit_group("builder", |g| g.data.set_permission(node("own.node", true))).unwrap();
         let ledger = Ledger { fingerprint: "f".into(), at: 0, entries: added, ..Ledger::default() };
-        let (_, n) = undo(&mut perms, &ledger);
+        let (_, n) = undo(&mut perms, &ledger, 0);
         assert!(n >= 4, "{n}");
         let builder = perms.group("builder").unwrap();
         assert_eq!(builder.data.permissions, vec![node("own.node", true)]);
@@ -485,7 +486,7 @@ mod tests {
                 g.data.add_parent(ParentNode { group: "builder".into(), context: Contexts::global(), expiry: None })
             })
             .unwrap();
-        undo(&mut perms, &ledger);
+        undo(&mut perms, &ledger, 0);
         assert!(perms.group("builder").is_some(), "a group with references stays");
         assert_eq!(perms.track("ranks").unwrap().groups, vec!["builder".to_string()]);
         assert!(perms.group("trial").unwrap().data.parents.iter().any(|p| p.group == "builder"));
@@ -494,7 +495,7 @@ mod tests {
         let planned = plan(&perms, &snap());
         let (_, added) = apply(&mut perms, &planned);
         perms.edit_group("builder", |g| g.display_name = "Builder".into()).unwrap();
-        undo(&mut perms, &Ledger { entries: added, ..Ledger::default() });
+        undo(&mut perms, &Ledger { entries: added, ..Ledger::default() }, 0);
         assert!(perms.group("builder").is_some());
     }
 

@@ -498,9 +498,37 @@ impl Engine {
         self.trim();
     }
 
-    /// Players with their own groups, permissions or meta.
+    /// Players with their own groups, permissions or meta: the records in
+    /// the database, or in memory without one.
     pub fn user_count(&self) -> u64 {
-        u64::try_from(self.perms.users().filter(|u| !u.data.is_empty()).count()).unwrap_or(u64::MAX)
+        match self.store.as_ref().map(PermsStore::user_count) {
+            Some(Ok(n)) => n,
+            _ => u64::try_from(self.perms.users().filter(|u| !u.data.is_empty()).count()).unwrap_or(u64::MAX),
+        }
+    }
+
+    /// One page (1-based) of the players with a live parent `group` at
+    /// `now`, by name and UUID, and how many there are: the records in
+    /// memory and those in the database, read in one pass.
+    pub fn members_page(
+        &self,
+        group: &str,
+        page: usize,
+        per_page: usize,
+        now: u64,
+    ) -> Result<(Vec<(String, String)>, usize), String> {
+        let seed: Vec<(String, String)> =
+            self.perms.members_at(group, now).into_iter().map(|u| (u.name.clone(), u.uuid.clone())).collect();
+        match self.store.as_ref().filter(|_| self.perms.lazy()) {
+            Some(store) => store
+                .members_page(group, (page, per_page), now, &|uuid| self.perms.knows(uuid), seed)
+                .map_err(|e| e.to_string()),
+            None => {
+                let total = seed.len();
+                let skipped = page.saturating_sub(1).saturating_mul(per_page);
+                Ok((seed.into_iter().skip(skipped).take(per_page).collect(), total))
+            }
+        }
     }
 
     /// The player online under `uuid`, as [`Engine::seen`] recorded them.

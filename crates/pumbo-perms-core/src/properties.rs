@@ -273,7 +273,7 @@ proptest! {
         let before = export::snapshot(&perms, 0);
         let plan = merge::plan(&perms, &source);
         let (_, added) = merge::apply(&mut perms, &plan);
-        merge::undo(&mut perms, &Ledger { entries: added, ..Ledger::default() });
+        merge::undo(&mut perms, &Ledger { entries: added, ..Ledger::default() }, 0);
         prop_assert_eq!(export::snapshot(&perms, 0), before);
     }
 }

@@ -251,7 +251,7 @@ pub(super) fn group_view(e: &mut Engine, t: &Target, page: usize, now: u64) -> T
         row(1, &shown_label, &format!("{}&r", group.display_name))
     };
     let mut rows = vec![shown, row(1, &e.lang.get("label-weight"), &group.weight.to_string())];
-    let members = e.perms.members(name).len();
+    let members = e.perms.member_count(name, now);
     rows.push(
         row(1, &e.lang.get("label-members"), &members.to_string())
             .on_click(Click::Run(format!("{} group {name} listmembers", e.root)))
@@ -341,26 +341,27 @@ pub(super) fn tracks_view(e: &Engine, page: usize) -> Text {
     paged(&e.lang, out, rows, page, &format!("{} tracks", e.root))
 }
 
-pub(super) fn members_view(e: &Engine, group: &str, page: usize, _now: u64) -> Text {
+/// One page of the members of `group` (players in the database too, under
+/// the name in their record).
+pub(super) fn members_view(e: &Engine, group: &str, page: usize, now: u64) -> Text {
     const PER: usize = 15;
-    let members = e.perms.members(group);
+    let page = page.clamp(1, e.perms.member_count(group, now).div_ceil(PER).max(1));
+    let Ok((members, total)) = e.members_page(group, page, PER, now) else {
+        return ui::error(&e.lang, "database-broken", &Args::new());
+    };
     let children: Vec<String> = e.perms.child_groups(group).iter().map(|g| g.name.clone()).collect();
-    let mut out = ui::header(&e.lang, "title-members", &Args::new().arg(value(group)).arg(value(members.len())));
+    let mut out = ui::header(&e.lang, "title-members", &Args::new().arg(value(group)).arg(value(total)));
     if !children.is_empty() {
         out.push(row(1, &e.lang.get("label-child-groups"), &children.join(", ")));
     }
-    let pages = members.len().div_ceil(PER).max(1);
-    let page = page.clamp(1, pages);
+    let pages = total.div_ceil(PER).max(1);
     if members.is_empty() {
         out.push(Line::parse(&format!("  {}{}", ui::MUTED, e.lang.get("label-none"))));
     }
-    for u in members.iter().skip((page - 1) * PER).take(PER) {
-        let t = Target::User { uuid: u.uuid.clone(), name: u.name.clone() };
-        let uuid = if u.name.is_empty() || is_java_name(&u.name) {
-            String::new()
-        } else {
-            format!(" {}({})", ui::MUTED, u.uuid)
-        };
+    for (name, uuid) in members {
+        let t = Target::User { uuid: uuid.clone(), name: name.clone() };
+        let uuid =
+            if name.is_empty() || is_java_name(&name) { String::new() } else { format!(" {}({uuid})", ui::MUTED) };
         out.push(
             Line::parse(&format!("  {}• {}{}{uuid}", ui::MUTED, ui::VALUE, text::escape(&t.label())))
                 .on_click(Click::Run(format!("{} info", t.command(&e.root)))),
