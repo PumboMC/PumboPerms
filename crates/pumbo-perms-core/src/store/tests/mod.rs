@@ -1,6 +1,7 @@
 //! The store: writes, the log, damaged records, schemas and the redb file.
 
 mod names;
+mod users;
 
 use super::*;
 use crate::context::{Contexts, Query};

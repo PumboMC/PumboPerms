@@ -12,9 +12,11 @@
 //! - `perms_imports`: source name -> [`Ledger`] (what an import added), from schema 2
 //! - `perms_meta`: `schema`, `log_seq` (numbers)
 //!
-//! Groups, users and tracks are read once at start; names stay on disk and
-//! are looked up when needed. Every change writes what it touched in one
-//! transaction together with its log entry, an import also with its ledger.
+//! Groups, users and tracks are read once at start ([`PermsStore::load`]), or
+//! groups and tracks with the players only counted ([`PermsStore::load_index`]:
+//! a player's record is read when needed, [`PermsStore::user`]); names stay on
+//! disk and are looked up when needed. Every change writes what it touched in
+//! one transaction together with its log entry, an import also with its ledger.
 //!
 //! Schema 1 (0.1.2-beta and older) kept the ledgers as files
 //! (`imports/<source>.json`); [`PermsStore::migrate_ledgers`] moves them into
@@ -29,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::merge::Ledger;
 use crate::model::{Group, Track, User};
-use crate::perms::{Dirty, KnownName, Perms};
+use crate::perms::{Dirty, KnownName, Offline, Perms};
 
 pub const GROUPS: &str = "perms_groups";
 pub const USERS: &str = "perms_users";
@@ -46,6 +48,10 @@ pub const SCHEMA: u64 = 2;
 
 /// One name write in this many reaches the disk at once ([`PermsStore::save_name`]).
 const DURABLE_NAME_WRITES: u32 = 1000;
+
+/// A pass over every player calls the host once per this many records
+/// ([`PermsStore::set_breathe`]).
+const BREATHE_EVERY: u64 = 1024;
 
 /// One change, as shown by `/pp log`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +85,8 @@ pub struct PermsStore {
     store: Store,
     /// Name writes so far ([`DURABLE_NAME_WRITES`]).
     name_writes: AtomicU32,
+    /// What a pass over every player calls now and then ([`PermsStore::set_breathe`]).
+    breathe: Option<fn()>,
 }
 
 impl PermsStore {
@@ -96,7 +104,29 @@ impl PermsStore {
             }
             Some(_) => {}
         }
-        Ok(Self { store, name_writes: AtomicU32::new(0) })
+        Ok(Self { store, name_writes: AtomicU32::new(0), breathe: None })
+    }
+
+    /// Sets what a pass over every player calls once per [`BREATHE_EVERY`]
+    /// records: on a host that stops a plugin working too long without a
+    /// break, a cheap call to the host that counts as one.
+    pub fn set_breathe(&mut self, breathe: fn()) {
+        self.breathe = Some(breathe);
+    }
+
+    /// What [`PermsStore::set_breathe`] set.
+    pub fn breathe(&self) -> Option<fn()> {
+        self.breathe
+    }
+
+    /// Counts one more record of a pass over every player.
+    fn pass(&self, records: &mut u64) {
+        *records = records.saturating_add(1);
+        if records.is_multiple_of(BREATHE_EVERY)
+            && let Some(breathe) = self.breathe
+        {
+            breathe();
+        }
     }
 
     pub fn in_memory() -> Result<Self> {
@@ -122,6 +152,44 @@ impl PermsStore {
             Ok((groups, users, tracks))
         })?;
         Ok(Perms::from_parts(groups, users, tracks))
+    }
+
+    /// The groups and tracks, with the players only counted: every record is
+    /// read whole and let go again. A damaged record stops the load, as in
+    /// [`PermsStore::load`].
+    pub fn load_index(&self) -> Result<(Perms, Dirty)> {
+        let (groups, tracks, offline) = self.store.read(|tx| {
+            let mut groups: Vec<Group> = Vec::new();
+            for (k, v) in tx.collect_prefix(GROUPS, "")? {
+                groups.push(decode(GROUPS, &k, &v)?);
+            }
+            let mut tracks: Vec<Track> = Vec::new();
+            for (k, v) in tx.collect_prefix(TRACKS, "")? {
+                tracks.push(decode(TRACKS, &k, &v)?);
+            }
+            let (mut offline, mut damaged, mut records) = (Offline::default(), None, 0);
+            tx.scan(USERS, "", &mut |k, v| {
+                self.pass(&mut records);
+                match decode::<User>(USERS, k, v) {
+                    Ok(user) => offline.add(&user),
+                    Err(e) => damaged = Some(e),
+                }
+                damaged.is_none()
+            })?;
+            match damaged {
+                Some(e) => Err(e),
+                None => Ok((groups, tracks, offline)),
+            }
+        })?;
+        Ok(Perms::from_disk(groups, tracks, offline))
+    }
+
+    /// The record of one player, `None` for a player without one.
+    pub fn user(&self, uuid: &str) -> Result<Option<User>> {
+        self.store.read(|tx| match tx.get(USERS, uuid)? {
+            Some(bytes) => decode(USERS, uuid, &bytes).map(Some),
+            None => Ok(None),
+        })
     }
 
     /// Writes what `dirty` names, as it is now in `perms`, and the log entry,
@@ -368,6 +436,10 @@ impl PermsStore {
 }
 
 fn write_dirty(tx: &mut dyn WriteOps, perms: &Perms, dirty: &Dirty) -> Result<()> {
+    // Memory would write such a player from nothing over the record on disk.
+    if let Some(uuid) = dirty.users.iter().find(|u| !perms.knows(u)) {
+        return Err(StoreError::new(format!("player {uuid} was not loaded before the change")));
+    }
     for g in &dirty.deleted_groups {
         tx.remove(GROUPS, g)?;
     }
