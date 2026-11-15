@@ -106,6 +106,32 @@ fn member_count_is_exact_during_a_change() {
 }
 
 #[test]
+fn rollback_restores_the_member_counts() {
+    let all = records();
+    let mut p = on_disk(&all);
+    let want = counts(&p);
+    p.begin();
+    assert!(p.admit(A, all.first().cloned()));
+    let d = p.delete_group("vip").unwrap();
+    assert_eq!(d.regroup, vec![("vip".to_string(), None)]);
+    assert_eq!((p.member_count("vip", 50), p.member_count("mod", 50)), (0, 1));
+    p.rename_group("mod", "gold").unwrap();
+    assert_eq!((p.member_count("mod", 50), p.member_count("gold", 50)), (0, 1));
+    p.rollback();
+    assert_eq!(counts(&p), want);
+    // A rename alone, then a change that ends.
+    p.begin();
+    p.rename_group("vip", "gold").unwrap();
+    assert_eq!(p.member_count("gold", 50), 3);
+    p.rollback();
+    assert_eq!(counts(&p), want);
+    p.begin();
+    p.rename_group("vip", "gold").unwrap();
+    p.end();
+    assert_eq!((p.member_count("vip", 50), p.member_count("gold", 50)), (0, 3));
+}
+
+#[test]
 fn evict_waits_for_the_change_to_end() {
     let all = records();
     let mut p = on_disk(&all);

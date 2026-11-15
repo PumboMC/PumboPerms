@@ -203,6 +203,9 @@ pub struct Dirty {
     pub tracks: BTreeSet<String>,
     pub deleted_groups: BTreeSet<String>,
     pub deleted_tracks: BTreeSet<String>,
+    /// Groups deleted (`None`) or renamed (the new name) that records of
+    /// players on disk still name, in the order of the change.
+    pub regroup: Vec<(String, Option<String>)>,
 }
 
 impl Dirty {
@@ -212,6 +215,7 @@ impl Dirty {
             && self.tracks.is_empty()
             && self.deleted_groups.is_empty()
             && self.deleted_tracks.is_empty()
+            && self.regroup.is_empty()
     }
 
     pub fn merge(&mut self, other: Dirty) {
@@ -220,6 +224,7 @@ impl Dirty {
         self.tracks.extend(other.tracks);
         self.deleted_groups.extend(other.deleted_groups);
         self.deleted_tracks.extend(other.deleted_tracks);
+        self.regroup.extend(other.regroup);
     }
 }
 
@@ -230,6 +235,9 @@ struct Undo {
     groups: BTreeMap<String, Option<Group>>,
     users: HashMap<String, Option<User>>,
     tracks: BTreeMap<String, Option<Track>>,
+    /// The member counts of the players on disk before the first group change
+    /// that reached them ([`Dirty::regroup`]).
+    members: Option<offline::Members>,
 }
 
 /// The whole permission database, in memory.
@@ -347,6 +355,7 @@ impl Perms {
                 None => self.tracks.remove(&name),
             };
         }
+        self.restore_members(undo.members);
         self.generation = self.generation.wrapping_add(1);
         self.memo = Memo::default();
     }

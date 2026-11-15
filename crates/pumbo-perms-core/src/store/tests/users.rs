@@ -1,5 +1,6 @@
-//! Players' records: one read alone, the counts at start and the guard that
-//! keeps a player nobody read from being written.
+//! Players' records: one read alone, the counts at start, the guard that
+//! keeps a player nobody read from being written, and group changes that
+//! reach the records on disk.
 
 use std::cell::Cell;
 
@@ -108,6 +109,103 @@ fn full_passes_call_the_host_hook() {
     assert_eq!(BREATHS.with(Cell::get), 0, "nothing set");
     s.set_breathe(breath);
     assert!(s.breathe().is_some());
-    s.load_index().unwrap();
+    let (mut p, _) = s.load_index().unwrap();
     assert_eq!(BREATHS.with(Cell::get), 2, "once per 1024 records");
+    BREATHS.with(|b| b.set(0));
+    let d = p.rename_group("vip", "gold").unwrap();
+    s.commit(&p, &d, None, 100).unwrap();
+    assert_eq!(BREATHS.with(Cell::get), 2, "the group change goes over every record too");
+}
+
+/// The groups of every record on disk, with its name and nodes.
+fn on_disk(s: &PermsStore) -> Vec<(String, String, Vec<String>, usize)> {
+    let (all, _) = s.load().unwrap();
+    let mut out: Vec<_> = all
+        .users()
+        .map(|u| {
+            let groups = u.data.parents.iter().map(|p| p.group.clone()).collect();
+            (u.uuid.clone(), u.name.clone(), groups, u.data.permissions.len())
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn group_rename_and_delete_reach_records_on_disk() {
+    let mut users: Vec<User> = (0..40u32)
+        .map(|i| {
+            let mut u = in_group(&format!("00000000-0000-4000-8000-{i:012}"), "vip", (i % 3 == 0).then_some(100));
+            if i % 2 == 0 {
+                u.data.parents.push(ParentNode { group: "mod".into(), context: Contexts::global(), expiry: None });
+            }
+            u
+        })
+        .collect();
+    // Named "vip" without the group: its bytes hold "vip" too.
+    let mut named = in_group(B, "mod", None);
+    named.name = "vip".into();
+    users.push(named);
+    let s = store_with(users);
+    let before = on_disk(&s);
+    let (mut p, _) = s.load_index().unwrap();
+    // One record in memory, the rest on disk.
+    let first = "00000000-0000-4000-8000-000000000000";
+    assert!(p.admit(first, s.user(first).unwrap()));
+    let d = p.rename_group("vip", "gold").unwrap();
+    assert_eq!((d.users.len(), d.regroup.clone()), (1, vec![("vip".to_string(), Some("gold".to_string()))]));
+    s.commit(&p, &d, None, 100).unwrap();
+    let renamed: Vec<_> = before
+        .iter()
+        .map(|(u, n, g, k)| (u.clone(), n.clone(), g.iter().map(|g| g.replace("vip", "gold")).collect(), *k))
+        .collect();
+    assert_eq!(on_disk(&s), renamed);
+    let (fresh, _) = s.load_index().unwrap();
+    for now in [0, 99, 100] {
+        for group in ["vip", "gold", "mod"] {
+            assert_eq!(p.member_count(group, now), fresh.member_count(group, now), "{group} at {now}");
+        }
+    }
+    assert_eq!(p.member_count("gold", 0), 40);
+    let d = p.delete_group("gold").unwrap();
+    s.commit(&p, &d, None, 100).unwrap();
+    let deleted: Vec<_> = renamed
+        .iter()
+        .filter(|(_, _, g, _)| g.iter().any(|g| g != "gold"))
+        .map(|(u, n, g, k)| (u.clone(), n.clone(), g.iter().filter(|g| *g != "gold").cloned().collect(), *k))
+        .collect();
+    assert_eq!(on_disk(&s), deleted);
+    assert_eq!(p.member_count("gold", 0), 0);
+    assert_eq!(p.member_count("mod", 0), s.load().unwrap().0.member_count("mod", 0));
+}
+
+#[test]
+fn a_record_left_empty_is_removed() {
+    let mut kept = in_group(B, "vip", None);
+    kept.data.permissions.push(fly());
+    let s = store_with(vec![in_group(A, "vip", None), kept]);
+    let (mut p, _) = s.load_index().unwrap();
+    let d = p.delete_group("vip").unwrap();
+    s.commit(&p, &d, None, 100).unwrap();
+    assert_eq!(s.user(A).unwrap(), None, "nothing left");
+    assert_eq!(s.user(B).unwrap().map(|u| (u.data.parents.len(), u.data.permissions)), Some((0, vec![fly()])));
+}
+
+#[test]
+fn load_after_a_group_change_in_the_same_change_is_refused() {
+    let s = store_with(vec![in_group(A, "vip", None), in_group(B, "vip", None)]);
+    let (mut p, _) = s.load_index().unwrap();
+    p.begin();
+    assert!(p.admit(A, s.user(A).unwrap()), "before the group change");
+    let mut d = p.delete_group("vip").unwrap();
+    assert!(!p.admit(B, s.user(B).unwrap()) && !p.knows(B), "after it");
+    d.merge(p.edit_user(B, "", |d| d.permissions.push(fly())).1);
+    assert!(s.commit(&p, &d, None, 100).is_err());
+    p.rollback();
+    assert_eq!(
+        (s.user(A).unwrap(), s.user(B).unwrap()),
+        (Some(in_group(A, "vip", None)), Some(in_group(B, "vip", None)))
+    );
+    assert_eq!(p.member_count("vip", 0), 2);
+    assert!(p.admit(B, s.user(B).unwrap()), "the change is over");
 }

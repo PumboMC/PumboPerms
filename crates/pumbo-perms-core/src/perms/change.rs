@@ -56,6 +56,7 @@ impl Perms {
             }
             dirty.tracks.insert(t);
         }
+        self.regroup(name, None, &mut dirty);
         self.touch(&dirty);
         Ok(dirty)
     }
@@ -180,6 +181,7 @@ impl Perms {
             }
             dirty.tracks.insert(t);
         }
+        self.regroup(from, Some(to), &mut dirty);
         self.touch(&dirty);
         Ok(dirty)
     }

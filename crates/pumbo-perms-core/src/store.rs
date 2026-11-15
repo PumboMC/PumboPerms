@@ -196,7 +196,7 @@ impl PermsStore {
     /// all in one transaction.
     pub fn commit(&self, perms: &Perms, dirty: &Dirty, log: Option<&LogEntry>, log_max: u64) -> Result<()> {
         self.store.write(|tx| {
-            write_dirty(tx, perms, dirty)?;
+            self.write_dirty(tx, perms, dirty)?;
             if let Some(entry) = log {
                 append_log(tx, entry, log_max)?;
             }
@@ -281,7 +281,7 @@ impl PermsStore {
         (source, ledger): (&str, &Ledger),
     ) -> Result<()> {
         self.store.write(|tx| {
-            write_dirty(tx, perms, dirty)?;
+            self.write_dirty(tx, perms, dirty)?;
             if let Some(entry) = log {
                 append_log(tx, entry, log_max)?;
             }
@@ -370,7 +370,7 @@ impl PermsStore {
                 tracks: perms.tracks().map(|t| t.name.clone()).collect(),
                 ..Dirty::default()
             };
-            write_dirty(tx, perms, &dirty)?;
+            self.write_dirty(tx, perms, &dirty)?;
             if let Some(entry) = log {
                 append_log(tx, entry, log_max)?;
             }
@@ -435,11 +435,57 @@ impl PermsStore {
     }
 }
 
-fn write_dirty(tx: &mut dyn WriteOps, perms: &Perms, dirty: &Dirty) -> Result<()> {
-    // Memory would write such a player from nothing over the record on disk.
-    if let Some(uuid) = dirty.users.iter().find(|u| !perms.knows(u)) {
-        return Err(StoreError::new(format!("player {uuid} was not loaded before the change")));
+impl PermsStore {
+    fn write_dirty(&self, tx: &mut dyn WriteOps, perms: &Perms, dirty: &Dirty) -> Result<()> {
+        // Memory would write such a player from nothing over the record on disk.
+        if let Some(uuid) = dirty.users.iter().find(|u| !perms.knows(u)) {
+            return Err(StoreError::new(format!("player {uuid} was not loaded before the change")));
+        }
+        write_records(tx, perms, dirty)?;
+        for (group, to) in &dirty.regroup {
+            self.regroup(tx, &dirty.users, group, to.as_deref())?;
+        }
+        Ok(())
     }
+
+    /// Rewrites the records on disk outside `skip` (the ones memory writes)
+    /// that name `group`: without it, or with the new name; a record left
+    /// empty goes. One portion of keys at a time, by the first two characters
+    /// of the UUID (keys are UUIDs in lower case), in the transaction of the change.
+    fn regroup(&self, tx: &mut dyn WriteOps, skip: &BTreeSet<String>, group: &str, to: Option<&str>) -> Result<()> {
+        let needle = format!("\"{group}\"");
+        let mut records = 0;
+        for portion in 0..=u8::MAX {
+            let mut keys = Vec::new();
+            tx.scan(USERS, &format!("{portion:02x}"), &mut |k, v| {
+                self.pass(&mut records);
+                if !skip.contains(k) && v.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                    keys.push(k.to_string());
+                }
+                true
+            })?;
+            for key in keys {
+                let Some(bytes) = tx.get(USERS, &key)? else { continue };
+                let mut user: User = decode(USERS, &key, &bytes)?;
+                if !user.data.parents.iter().any(|p| p.group == group) {
+                    continue;
+                }
+                match to {
+                    Some(to) => user.data.rename_group(group, to),
+                    None => drop(user.data.remove_group(group)),
+                }
+                if user.data.is_empty() {
+                    tx.remove(USERS, &key)?;
+                } else {
+                    tx.put_json(USERS, &key, &user)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn write_records(tx: &mut dyn WriteOps, perms: &Perms, dirty: &Dirty) -> Result<()> {
     for g in &dirty.deleted_groups {
         tx.remove(GROUPS, g)?;
     }

@@ -29,12 +29,15 @@ fn count(n: u32) -> usize {
     usize::try_from(n).unwrap_or(usize::MAX)
 }
 
+/// [`Counted`] per group.
+pub(super) type Members = BTreeMap<String, Counted>;
+
 /// What memory knows about the players whose records stay on disk.
 #[derive(Debug, Clone, Default)]
 pub struct Offline {
     /// Players whose record is in memory, or known to have none.
     loaded: HashSet<String>,
-    members: BTreeMap<String, Counted>,
+    members: Members,
     /// Every permission node of a record on disk; it only grows until the next load.
     nodes: BTreeSet<String>,
 }
@@ -114,11 +117,14 @@ impl Perms {
     /// none). Refused for a player memory has a record of without having read
     /// it: a change made that record, and saving it stays refused.
     pub fn admit(&mut self, uuid: &str, user: Option<User>) -> bool {
+        let regrouped = self.undo.as_ref().is_some_and(|u| u.members.is_some());
         let Some(offline) = &mut self.offline else { return true };
         if offline.loaded.contains(uuid) {
             return true;
         }
-        if self.users.contains_key(uuid) {
+        // After a group change reached the records on disk in this change,
+        // the counts it would undo are not those of a record read now.
+        if self.users.contains_key(uuid) || regrouped {
             return false;
         }
         if let Some(u) = &user {
@@ -176,6 +182,38 @@ impl Perms {
     pub fn member_count(&self, group: &str, now: u64) -> usize {
         let on_disk = self.offline.as_ref().and_then(|o| o.members.get(group)).map_or(0, |c| c.alive(now));
         self.members_at(group, now).len().saturating_add(on_disk)
+    }
+
+    /// A group named by records on disk was deleted (`to: None`) or renamed:
+    /// the counts follow, and `dirty` has the records rewritten
+    /// ([`Dirty::regroup`]). The counts as they were before the first such
+    /// change are kept for [`Perms::rollback`].
+    pub(super) fn regroup(&mut self, group: &str, to: Option<&str>, dirty: &mut Dirty) {
+        let Some(offline) = &mut self.offline else { return };
+        if !offline.members.contains_key(group) {
+            return;
+        }
+        if let Some(undo) = &mut self.undo
+            && undo.members.is_none()
+        {
+            undo.members = Some(offline.members.clone());
+        }
+        if let (Some(moved), Some(to)) = (offline.members.remove(group), to) {
+            let counted = offline.members.entry(to.to_string()).or_default();
+            counted.lasting = counted.lasting.saturating_add(moved.lasting);
+            for (end, n) in moved.ending {
+                let at = counted.ending.entry(end).or_default();
+                *at = at.saturating_add(n);
+            }
+        }
+        dirty.regroup.push((group.to_string(), to.map(str::to_string)));
+    }
+
+    /// The counts kept by [`Perms::regroup`], back.
+    pub(super) fn restore_members(&mut self, members: Option<Members>) {
+        if let (Some(members), Some(offline)) = (members, &mut self.offline) {
+            offline.members = members;
+        }
     }
 
     /// The nodes of the records on disk.
