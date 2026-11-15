@@ -22,11 +22,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
+use serde::ser::{Error as _, SerializeSeq, SerializeStruct};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::model::{Data, Group, MetaKind, Track, User, is_valid_meta_key, is_valid_text};
 use crate::node;
 use crate::perms::{DEFAULT_GROUP, Perms};
+use crate::store::PermsStore;
 
 pub const FORMAT: &str = "pumboperms";
 pub const VERSION: u32 = 1;
@@ -56,7 +58,8 @@ pub struct Snapshot {
     pub fixed: Vec<String>,
 }
 
-/// The whole database (users with data only, sorted).
+/// The database with the players in memory (users with data only, sorted).
+/// Players kept on disk are not in it: an export goes through [`write`].
 pub fn snapshot(perms: &Perms, now: u64) -> Snapshot {
     let mut users: Vec<User> = perms.users().filter(|u| !u.data.is_empty()).cloned().collect();
     users.sort_by(|a, b| a.uuid.cmp(&b.uuid));
@@ -73,9 +76,63 @@ pub fn snapshot(perms: &Perms, now: u64) -> Snapshot {
     }
 }
 
-/// The whole database as pretty JSON.
+/// [`snapshot`] as pretty JSON, so also without the players kept on disk.
 pub fn dump(perms: &Perms, now: u64) -> String {
     serde_json::to_string_pretty(&snapshot(perms, now)).unwrap_or_default()
+}
+
+/// The text of [`dump`], written to `w` with the players read from
+/// `players` one at a time instead of held in memory. Each record goes
+/// without its entries that ended by `now`; one left empty is left out.
+pub fn write(w: &mut dyn std::io::Write, perms: &Perms, players: &PermsStore, now: u64) -> std::io::Result<()> {
+    let all = Streamed { perms, players, now };
+    all.serialize(&mut serde_json::Serializer::pretty(w)).map_err(std::io::Error::other)
+}
+
+/// A [`Snapshot`] whose users come from the database as it is written.
+struct Streamed<'a> {
+    perms: &'a Perms,
+    players: &'a PermsStore,
+    now: u64,
+}
+
+impl Serialize for Streamed<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        // The fields of `Snapshot` in its order; the empty ones it leaves out stay out.
+        let mut out = s.serialize_struct("Snapshot", 6)?;
+        out.serialize_field("format", FORMAT)?;
+        out.serialize_field("version", &VERSION)?;
+        out.serialize_field("exported", &self.now)?;
+        out.serialize_field("groups", &self.perms.groups().collect::<Vec<_>>())?;
+        out.serialize_field("users", &Players { store: self.players, now: self.now })?;
+        out.serialize_field("tracks", &self.perms.tracks().collect::<Vec<_>>())?;
+        out.end()
+    }
+}
+
+/// The players of the database, serialized one by one as they are read.
+struct Players<'a> {
+    store: &'a PermsStore,
+    now: u64,
+}
+
+impl Serialize for Players<'_> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut seq = s.serialize_seq(None)?;
+        let mut failed = None;
+        let read = self.store.each_user(&mut |mut user| {
+            user.data.expire(self.now);
+            if user.data.is_empty() {
+                return true;
+            }
+            seq.serialize_element(&user).map_err(|e| failed = Some(e)).is_ok()
+        });
+        if let Some(e) = failed {
+            return Err(e);
+        }
+        read.map_err(S::Error::custom)?;
+        seq.end()
+    }
 }
 
 /// Reads and checks an export. Nodes are normalized and the entries listed in
@@ -400,6 +457,92 @@ mod tests {
         let (mut q, _) = Perms::from_parts(snap.groups, snap.users, snap.tracks);
         assert_eq!(q.check(U, "fly", &Query::default(), 0), Some(true));
         assert_eq!(q.track("ranks").unwrap().groups, vec!["vip"]);
+    }
+
+    /// Saves everything `p` holds and reads it back as an export of the database.
+    fn streamed(p: &Perms, now: u64) -> String {
+        let store = PermsStore::in_memory().unwrap();
+        let mut d = crate::perms::Dirty::default();
+        d.groups.extend(p.groups().map(|g| g.name.clone()));
+        d.users.extend(p.users().map(|u| u.uuid.clone()));
+        d.tracks.extend(p.tracks().map(|t| t.name.clone()));
+        store.commit(p, &d, None, 0).unwrap();
+        let mut out = Vec::new();
+        write(&mut out, p, &store, now).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn streamed_export_equals_the_old_text() {
+        let mut p = Perms::new();
+        assert_eq!(streamed(&p, 7), dump(&p, 7), "nothing but the default group");
+        p.create_group("vip").unwrap();
+        p.edit_group("vip", |g| {
+            g.weight = 10;
+            g.display_name = "VIP".into();
+            g.data.add_affix(MetaKind::Prefix, 5, "&6[VIP] ", &Contexts::global(), None, false);
+        })
+        .unwrap();
+        for (uuid, name) in [(U, "Steve"), ("00000000-0000-0000-0000-000000000002", "Alex \"quoted\"")] {
+            p.edit_user(uuid, name, |d| {
+                d.add_parent(ParentNode { group: "vip".into(), context: Contexts::global(), expiry: Some(99_000) });
+                d.set_permission(PermNode {
+                    node: "fly".into(),
+                    value: false,
+                    context: Contexts::parse(&["server=lobby".to_string()]).unwrap(),
+                    expiry: None,
+                });
+            });
+        }
+        p.edit_user("00000000-0000-0000-0000-000000000003", "Empty", |_| ());
+        p.create_track("ranks").unwrap();
+        p.track_insert("ranks", "vip", None).unwrap();
+        assert_eq!(streamed(&p, 1_000), dump(&p, 1_000));
+    }
+
+    #[test]
+    fn export_holds_every_player() {
+        let lang = pumbo_common::lang::Lang::load(&[pumbo_common::lang::COMMON], "en", None).0;
+        let mut e = crate::engine::Engine::lazy(crate::config::CoreCfg::default(), lang);
+        let users: Vec<User> = (0..300u32)
+            .map(|i| User {
+                uuid: format!("00000000-0000-4000-8000-{i:012}"),
+                name: format!("P{i}"),
+                data: Data { permissions: vec![perm_of(&format!("n.{i}"))], ..Data::default() },
+            })
+            .collect();
+        let (all, mut d) = Perms::from_parts(Vec::new(), users, Vec::new());
+        d.users.extend(all.users().map(|u| u.uuid.clone()));
+        e.store().unwrap().commit(&all, &d, None, 0).unwrap();
+        e.reload_data();
+        assert!(e.perms.users().next().is_none(), "nobody in memory");
+        let dir = std::env::temp_dir().join(format!("pumbo-perms-export-all-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = crate::files::export_to(&e, &dir, "all", 5).unwrap();
+        let snap = parse(&std::fs::read_to_string(dir.join(file)).unwrap()).unwrap();
+        assert_eq!(snap.users, snapshot(&all, 5).users);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_leaves_out_expired_entries() {
+        let mut p = Perms::new();
+        p.create_group("vip").unwrap();
+        p.edit_user(U, "Steve", |d| {
+            d.add_parent(ParentNode { group: "vip".into(), context: Contexts::global(), expiry: Some(100) });
+            d.set_permission(perm_of("fly"));
+        });
+        p.edit_user("00000000-0000-0000-0000-000000000002", "Alex", |d| {
+            d.add_parent(ParentNode { group: "vip".into(), context: Contexts::global(), expiry: Some(100) })
+        });
+        let snap = parse(&streamed(&p, 100)).unwrap();
+        assert_eq!(snap.users.len(), 1, "one with nothing left is left out");
+        assert_eq!((snap.users[0].data.parents.len(), snap.users[0].data.permissions.len()), (0, 1));
+        assert_eq!(parse(&streamed(&p, 99)).unwrap().users.len(), 2, "not ended yet");
+    }
+
+    fn perm_of(node: &str) -> PermNode {
+        PermNode { node: node.into(), value: true, context: Contexts::global(), expiry: None }
     }
 
     #[test]

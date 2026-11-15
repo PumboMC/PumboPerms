@@ -115,6 +115,9 @@ fn full_passes_call_the_host_hook() {
     let d = p.rename_group("vip", "gold").unwrap();
     s.commit(&p, &d, None, 100).unwrap();
     assert_eq!(BREATHS.with(Cell::get), 2, "the group change goes over every record too");
+    BREATHS.with(|b| b.set(0));
+    crate::export::write(&mut Vec::new(), &p, &s, 0).unwrap();
+    assert_eq!(BREATHS.with(Cell::get), 2, "and an export");
 }
 
 /// The groups of every record on disk, with its name and nodes.

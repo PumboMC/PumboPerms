@@ -241,6 +241,25 @@ impl PermsStore {
         Ok((first.into_sorted_vec().into_iter().skip(skipped).take(per_page).collect(), total))
     }
 
+    /// Every player's record, one at a time in the order of the UUIDs, until
+    /// `visit` returns false. A damaged record stops the pass with its error.
+    pub fn each_user(&self, visit: &mut dyn FnMut(User) -> bool) -> Result<()> {
+        let (mut damaged, mut records) = (None, 0);
+        self.store.read(|tx| {
+            tx.scan(USERS, "", &mut |k, v| {
+                self.pass(&mut records);
+                match decode::<User>(USERS, k, v) {
+                    Ok(user) => visit(user),
+                    Err(e) => {
+                        damaged = Some(e);
+                        false
+                    }
+                }
+            })
+        })?;
+        damaged.map_or(Ok(()), Err)
+    }
+
     /// The record of one player, `None` for a player without one.
     pub fn user(&self, uuid: &str) -> Result<Option<User>> {
         self.store.read(|tx| match tx.get(USERS, uuid)? {

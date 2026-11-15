@@ -346,7 +346,8 @@ fn offline_players_stay_on_disk() {
     }
 }
 
-/// `/pp export` of 100 000 players in a group, counted from the state after the start.
+/// `/pp export` of 100 000 players in a group, counted from the state after
+/// the start: the players go to the file one at a time.
 #[test]
 #[ignore = "release benchmark"]
 fn export_of_100000_players_stays_flat() {
@@ -363,6 +364,7 @@ fn export_of_100000_players_stays_flat() {
     assert_eq!(snap.users.len(), 100_000);
     println!("memory: export of 100000 players in a group, heap peak +{grown:.1} MiB ({took:?})");
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(grown <= 2.0, "{grown:.1} MiB: the export holds one player at a time");
 }
 
 /// `/pp group vip rename vip2` with 100 000 players in `vip`.

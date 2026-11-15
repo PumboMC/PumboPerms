@@ -1,7 +1,7 @@
 //! Files in the plugin's data folder, the same on every platform: exports
 //! (`exports/<name>.json`) and the import of a whole export file.
 
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use pumbo_common::text::Args;
@@ -12,13 +12,14 @@ use crate::export;
 use crate::ui::{self, Text, value};
 
 /// Writes the whole database to `<dir>/exports/<name>.json` and returns that
-/// path as `exports/<name>.json`. Refused while the database is broken (memory
+/// path as `exports/<name>.json`, the players straight from the database one
+/// at a time ([`export::write`]). Refused while the database is broken (memory
 /// then holds nothing worth saving) and when the file exists. The data goes to
 /// `<name>.json.tmp` first, so a crash never leaves half a file.
 pub fn export_to(e: &Engine, dir: &Path, name: &str, now: u64) -> Result<String, Text> {
-    if e.broken.is_some() {
+    let (None, Some(store)) = (&e.broken, e.store()) else {
         return Err(ui::error(&e.lang, "database-broken", &Args::new()));
-    }
+    };
     let shown = format!("exports/{name}.json");
     let folder = dir.join("exports");
     let path = folder.join(format!("{name}.json"));
@@ -26,12 +27,12 @@ pub fn export_to(e: &Engine, dir: &Path, name: &str, now: u64) -> Result<String,
         return Err(ui::error(&e.lang, "export-exists", &Args::new().arg(value(&shown))));
     }
     let tmp = folder.join(format!("{name}.json.tmp"));
-    let json = export::dump(&e.perms, now);
     let written = std::fs::create_dir_all(&folder)
         .and_then(|()| {
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(json.as_bytes())?;
-            f.sync_all()
+            let mut f = BufWriter::new(std::fs::File::create(&tmp)?);
+            export::write(&mut f, &e.perms, store, now)?;
+            f.flush()?;
+            f.get_ref().sync_all()
         })
         .and_then(|()| std::fs::rename(&tmp, &path));
     match written {
