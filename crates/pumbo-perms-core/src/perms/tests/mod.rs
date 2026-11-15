@@ -1,9 +1,10 @@
-//! The database in memory: undoing a change.
+//! The database in memory: undoing a change, and players kept on disk.
 
 use super::*;
 use crate::context::Contexts;
 use crate::model::{ParentNode, PermNode};
 
+mod offline;
 mod undo;
 
 const U: &str = "00000000-0000-0000-0000-000000000001";

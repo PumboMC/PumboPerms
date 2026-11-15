@@ -48,7 +48,7 @@ impl Perms {
     /// distance (1 = direct parent).
     pub fn inheritance(&self, uuid: &str, query: &Query, now: u64) -> Vec<(String, usize)> {
         let empty = Data::default();
-        let data = self.users.get(uuid).map(|u| &u.data).unwrap_or(&empty);
+        let data = self.record(uuid).map(|u| &u.data).unwrap_or(&empty);
         self.inheritance_of(data, query, now)
     }
 
@@ -85,7 +85,7 @@ impl Perms {
 
     fn compute(&self, uuid: &str, query: &Query, now: u64) -> Effective {
         let empty = Data::default();
-        let user_data = self.users.get(uuid).map(|u| &u.data).unwrap_or(&empty);
+        let user_data = self.record(uuid).map(|u| &u.data).unwrap_or(&empty);
         self.compute_with(user_data, query, now)
     }
 

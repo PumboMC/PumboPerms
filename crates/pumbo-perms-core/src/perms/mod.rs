@@ -37,6 +37,9 @@ use crate::model::{Data, Group, Track, User};
 
 mod change;
 mod decide;
+mod offline;
+
+pub use offline::Offline;
 
 /// Default name of the group everyone without other groups is in.
 pub const DEFAULT_GROUP: &str = "default";
@@ -240,6 +243,8 @@ pub struct Perms {
     memo: Memo,
     /// The change in progress ([`Perms::begin`]); `None`: nothing changes now.
     undo: Option<Undo>,
+    /// The players whose records stay on disk; `None`: every record is in memory.
+    offline: Option<Offline>,
 }
 
 /// What is computed from the data and kept until the data changes. A copy of
@@ -285,6 +290,7 @@ impl Perms {
             generation: 1,
             memo: Memo::default(),
             undo: None,
+            offline: None,
         }
     }
 
@@ -408,6 +414,13 @@ impl Perms {
         }
     }
 
+    /// The record of a player whose record memory has (or knows to be
+    /// missing): every answer about a player reads it.
+    fn record(&self, uuid: &str) -> Option<&User> {
+        debug_assert!(self.knows(uuid), "{uuid} was not loaded before it was read");
+        self.users.get(uuid)
+    }
+
     /// Every `server=` and `group=` value in what the user has or can inherit:
     /// on a server named nowhere there, directly or by a server group, the
     /// decisions are the global ones.
@@ -421,7 +434,7 @@ impl Perms {
             }
         }
         let mut stack: Vec<&str> = vec![&self.default_group];
-        if let Some(user) = self.users.get(uuid) {
+        if let Some(user) = self.record(uuid) {
             note(&mut out, &user.data);
             stack.extend(user.data.parents.iter().map(|p| p.group.as_str()));
         }
@@ -441,7 +454,7 @@ impl Perms {
     /// Whether the user can inherit one of `groups` anywhere, at any time
     /// (also through a parent that names a group not created yet).
     pub fn reaches(&self, uuid: &str, groups: &[&str]) -> bool {
-        let Some(user) = self.users.get(uuid) else { return false };
+        let Some(user) = self.record(uuid) else { return false };
         self.inherits(user.data.parents.iter().map(|p| p.group.as_str()).collect(), groups)
     }
 
@@ -556,13 +569,16 @@ impl Perms {
         worlds
     }
 
-    /// Every permission node written anywhere (for platforms that have to set
-    /// nodes one by one), kept until the data changes.
+    /// Every permission node written anywhere, also in the records on disk
+    /// (for platforms that have to set nodes one by one), kept until the data
+    /// changes.
     pub fn all_nodes(&self) -> &BTreeSet<String> {
         self.memo.nodes.get_or_init(|| {
             let g = self.groups.values().flat_map(|g| g.data.permissions.iter());
             let u = self.users.values().flat_map(|u| u.data.permissions.iter());
-            g.chain(u).map(|p| p.node.clone()).collect()
+            let mut all: BTreeSet<String> = g.chain(u).map(|p| p.node.clone()).collect();
+            all.extend(self.offline_nodes().into_iter().flatten().cloned());
+            all
         })
     }
 }

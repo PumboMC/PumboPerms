@@ -313,7 +313,7 @@ impl Perms {
         let ladder = t.groups.clone();
         let first = ladder.first().cloned().ok_or_else(|| PermsError::EmptyTrack(track.to_string()))?;
         let empty = Data::default();
-        let data = self.users.get(uuid).map(|u| &u.data).unwrap_or(&empty);
+        let data = self.record(uuid).map(|u| &u.data).unwrap_or(&empty);
         let ends = |g: &str| -> Vec<Option<u64>> {
             let live = data.parents.iter().filter(|p| p.group == g && &p.context == context && alive(p.expiry, now));
             live.map(|p| p.expiry).collect()
