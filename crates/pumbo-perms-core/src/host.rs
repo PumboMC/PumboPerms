@@ -149,6 +149,7 @@ pub fn wanted_and_hidden(
     now: u64,
     catalog: &Catalog,
 ) -> (HashMap<String, bool>, Vec<(String, String)>) {
+    e.load_user(uuid, now);
     let q = e.query(world);
     let mut set = BTreeMap::new();
     let effective = e.perms.effective(uuid, &q, now);
@@ -222,6 +223,7 @@ fn shadowed(set: &mut BTreeMap<String, bool>, catalog: &BTreeSet<String>) -> Vec
 /// wildcard is not sent; under either, a node outside the catalogs gets
 /// Pumpkin's answer, not PumboPerms'.
 pub fn hidden(e: &mut Engine, uuid: &str, q: &Query, now: u64) -> Vec<(String, String)> {
+    e.load_user(uuid, now);
     let effective = e.perms.effective(uuid, q, now);
     // Only a wildcard hides anything.
     if !effective.nodes().any(|(n, _)| node::is_wildcard(n)) {
@@ -255,6 +257,7 @@ pub fn hidden(e: &mut Engine, uuid: &str, q: &Query, now: u64) -> Vec<(String, S
 /// Pumpkin's own catalog gets it, [`drop_shadowed`]), and `pumbo.perms.command`
 /// (also as `pumboperms:command`): whether `/pp` shows. Sorted.
 pub fn decisions(e: &mut Engine, uuid: &str, server: &str, now: u64) -> Vec<(String, bool)> {
+    e.load_user(uuid, now);
     let q = e.place(server, "");
     let mut out: Vec<(String, bool)> = Vec::new();
     let mut global = false;

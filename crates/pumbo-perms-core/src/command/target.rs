@@ -97,9 +97,14 @@ pub(super) fn checked_key(e: &Engine, key: &str, usage: &str) -> Result<(), Text
     if is_valid_meta_key(key) { Ok(()) } else { Err(ui::usage(&e.lang, usage)) }
 }
 
-pub(super) fn find_user(e: &Engine, env: &Env, name: &str) -> Result<KnownName, Text> {
-    if let Some(k) = (env.online)(name) {
-        return Ok(k);
-    }
-    e.find_user(name).ok_or_else(|| ui::error(&e.lang, "command-player-not-found", &Args::new().arg(value(name))))
+/// The player a command names, with their record in memory.
+pub(super) fn find_user(e: &mut Engine, env: &Env, name: &str) -> Result<KnownName, Text> {
+    let known = match (env.online)(name) {
+        Some(k) => k,
+        None => e
+            .find_user(name)
+            .ok_or_else(|| ui::error(&e.lang, "command-player-not-found", &Args::new().arg(value(name))))?,
+    };
+    e.load_user(&known.uuid, env.now);
+    Ok(known)
 }

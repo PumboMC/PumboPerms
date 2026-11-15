@@ -82,7 +82,9 @@ pub fn import_source(
         Err(why) => return fail(e, why),
     };
     if mode == SourceMode::Undo {
+        // The change first: no record read for it leaves memory before it ends.
         e.begin();
+        load_players(e, &[], &ledger.entries, now);
         let (dirty, n) = merge::undo(&mut e.perms, &ledger);
         let entry = log(format!("import undo {source}: {n} entries"));
         // A failed save undoes the change itself.
@@ -143,6 +145,7 @@ pub fn import_source(
     let (kept, gone): (Vec<merge::Entry>, Vec<merge::Entry>) =
         ledger.entries.iter().cloned().partition(|x| all.contains(&x.key()));
     e.begin();
+    load_players(e, &snap.users, &gone, now);
     let (mut dirty, removed) = merge::undo(&mut e.perms, &Ledger { entries: gone.clone(), ..Ledger::default() });
     let mut plan = merge::plan(&e.perms, &snap);
     merge::skip_recorded(&mut plan, &e.perms, &ledger.entries);
@@ -241,8 +244,9 @@ pub fn import_pending(e: &mut Engine, source: &str, uuid: &str, name: &str, onli
     }
     let waiting = ledger.pending.remove(pos);
     let user = crate::model::User { uuid: uuid.to_string(), name: name.to_string(), data: waiting.data };
-    let plan = merge::plan(&e.perms, &Snapshot { users: vec![user], ..Snapshot::default() });
     e.begin();
+    e.load_user(uuid, now);
+    let plan = merge::plan(&e.perms, &Snapshot { users: vec![user], ..Snapshot::default() });
     let (dirty, added) = merge::apply(&mut e.perms, &plan);
     let log = LogEntry {
         time: now,
@@ -265,6 +269,19 @@ pub fn import_pending(e: &mut Engine, source: &str, uuid: &str, name: &str, onli
         log: Some(log),
         action: None,
     })
+}
+
+/// Reads the records an import plans with or changes: the players of the
+/// source and those of the entries it takes back. Inside the change, so they
+/// all stay in memory until it ends.
+fn load_players(e: &mut Engine, users: &[crate::model::User], entries: &[merge::Entry], now: u64) {
+    let named = entries.iter().filter_map(|x| match x {
+        merge::Entry::UserNode { uuid, .. } | merge::Entry::UserParent { uuid, .. } => Some(uuid),
+        _ => None,
+    });
+    for uuid in users.iter().map(|u| &u.uuid).chain(named) {
+        e.load_user(uuid, now);
+    }
 }
 
 /// `text` cut to at most `max` bytes, at a character boundary.

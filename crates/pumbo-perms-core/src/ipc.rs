@@ -70,6 +70,7 @@ pub struct Info {
 /// What PumboPerms shows for player `uuid` at `q`; `None` for a bad UUID.
 pub fn info(e: &mut Engine, uuid: &str, q: &Query, now: u64) -> Option<Info> {
     let uuid = uuid_of(uuid)?;
+    e.load_user(&uuid, now);
     let eff = e.perms.effective(&uuid, q, now);
     let (rank, prefix, suffix) = (eff.primary.clone(), eff.prefix.clone(), eff.suffix.clone());
     let (groups, meta) = (eff.groups.clone(), eff.meta.clone());
