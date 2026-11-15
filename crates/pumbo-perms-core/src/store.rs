@@ -540,7 +540,10 @@ impl PermsStore {
                 }
                 true
             })?;
+            // Rewriting counts too: one portion may hold every player (UUIDs
+            // that start alike), and its rewrite would be one long stretch.
             for key in keys {
+                self.pass(&mut records);
                 let Some(bytes) = tx.get(USERS, &key)? else { continue };
                 let mut user: User = decode(USERS, &key, &bytes)?;
                 if !user.data.parents.iter().any(|p| p.group == group) {

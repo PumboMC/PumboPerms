@@ -114,7 +114,8 @@ fn full_passes_call_the_host_hook() {
     BREATHS.with(|b| b.set(0));
     let d = p.rename_group("vip", "gold").unwrap();
     s.commit(&p, &d, None, 100).unwrap();
-    assert_eq!(BREATHS.with(Cell::get), 2, "the group change goes over every record too");
+    // All 3000 UUIDs start with "00", one portion: read 3000, then rewrite 3000.
+    assert_eq!(BREATHS.with(Cell::get), 5, "the group change reads and rewrites every record");
     BREATHS.with(|b| b.set(0));
     crate::export::write(&mut Vec::new(), &p, &s, 0).unwrap();
     assert_eq!(BREATHS.with(Cell::get), 2, "and an export");
