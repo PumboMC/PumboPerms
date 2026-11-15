@@ -1,15 +1,23 @@
 //! Property tests: parsers never panic on any input, an import taken back
-//! leaves the database as it was, and so does any change undone.
+//! leaves the database as it was, and so does any change undone; an engine
+//! that reads players' records when needed answers like one with all of
+//! them in memory.
+
+use std::collections::BTreeSet;
 
 use proptest::prelude::*;
 use proptest::test_runner::Config;
+use pumbo_common::lang::{COMMON, Lang};
 
+use crate::command::{self, Env, SourceMode, Who};
+use crate::config::CoreCfg;
 use crate::context::Contexts;
+use crate::engine::Engine;
 use crate::export::{self, Snapshot};
 use crate::merge::{self, Ledger};
 use crate::model::{Data, Group, MetaKind, MetaNode, ParentNode, PermNode, User};
 use crate::node;
-use crate::perms::Perms;
+use crate::perms::{KnownName, Perms};
 
 fn cases() -> Config {
     Config { cases: 10_000, failure_persistence: None, ..Config::default() }
@@ -275,5 +283,209 @@ proptest! {
         let (_, added) = merge::apply(&mut perms, &plan);
         merge::undo(&mut perms, &Ledger { entries: added, ..Ledger::default() }, 0);
         prop_assert_eq!(export::snapshot(&perms, 0), before);
+    }
+}
+
+/// Players of [`lazy_and_eager_agree`]: more than the records a lazy engine
+/// keeps of players who are not online, so records go and come back.
+const PEOPLE: usize = 130;
+
+fn person(i: usize) -> (String, String) {
+    (format!("00000000-0000-4000-8000-{i:012}"), format!("P{i}"))
+}
+
+/// One step of [`lazy_and_eager_agree`].
+#[derive(Debug, Clone)]
+enum Step {
+    /// `/pp <line>` from the console.
+    Pp(String),
+    Join(usize),
+    Leave(usize),
+    /// Time passes (ms).
+    Wait(u64),
+    /// Another plugin asks about a player.
+    Ask(usize),
+    /// The source `file` gives 110 players `group` (and every `every`th one a node).
+    Import(SourceMode, String, usize),
+    Export,
+}
+
+fn step() -> impl Strategy<Value = Step> {
+    let who = || (0..PEOPLE).prop_map(|i| person(i).0);
+    let group = || pick(&["default", "vip", "mod", "gold"]);
+    let node = || pick(&["fly", "build", "kit.*", "pumbo.perms.user.info"]);
+    let user = prop_oneof![
+        (node(), any::<bool>()).prop_map(|(n, v)| format!("permission set {n} {v}")),
+        (node(), pick(&["1s", "2s"])).prop_map(|(n, d)| format!("permission settemp {n} true {d}")),
+        node().prop_map(|n| format!("permission unset {n}")),
+        group().prop_map(|g| format!("parent add {g}")),
+        (group(), pick(&["1s", "3s"])).prop_map(|(g, d)| format!("parent addtemp {g} {d}")),
+        group().prop_map(|g| format!("parent remove {g}")),
+        group().prop_map(|g| format!("parent set {g}")),
+        Just("meta set color red".to_string()),
+        Just("meta setprefix 5 \"[x] \"".to_string()),
+        Just("clear".to_string()),
+        Just("promote ranks".to_string()),
+        Just("demote ranks".to_string()),
+        Just("info".to_string()),
+        Just("parent info".to_string()),
+        node().prop_map(|n| format!("permission check {n}")),
+    ];
+    let group_cmd = prop_oneof![
+        Just("create".to_string()),
+        Just("delete".to_string()),
+        group().prop_map(|g| format!("rename {g}")),
+        node().prop_map(|n| format!("permission set {n}")),
+        group().prop_map(|g| format!("parent add {g}")),
+        Just("info".to_string()),
+        (1u32..4).prop_map(|p| format!("listmembers {p}")),
+    ];
+    let track = prop_oneof![
+        Just("createtrack ranks".to_string()),
+        Just("deletetrack ranks".to_string()),
+        group().prop_map(|g| format!("track ranks append {g}")),
+        group().prop_map(|g| format!("track ranks remove {g}")),
+    ];
+    let mode = proptest::sample::select(vec![SourceMode::Run, SourceMode::Preview, SourceMode::Undo]);
+    prop_oneof![
+        6 => (who(), user).prop_map(|(u, c)| Step::Pp(format!("user {u} {c}"))),
+        3 => (group(), group_cmd).prop_map(|(g, c)| Step::Pp(format!("group {g} {c}"))),
+        1 => track.prop_map(Step::Pp),
+        2 => (0..PEOPLE).prop_map(Step::Join),
+        2 => (0..PEOPLE).prop_map(Step::Leave),
+        2 => (0u64..1_500).prop_map(Step::Wait),
+        2 => (0..PEOPLE).prop_map(Step::Ask),
+        1 => (mode, pick(&["vip", "mod", "gold"]), 1usize..4).prop_map(|(m, g, n)| Step::Import(m, g, n)),
+        1 => Just(Step::Export),
+    ]
+}
+
+/// What a step answers: replies, outcomes and the answers to another plugin.
+fn answer(e: &mut Engine, step: &Step, online: &BTreeSet<usize>, now: u64, turn: usize) -> Vec<String> {
+    let names: Vec<KnownName> =
+        online.iter().map(|i| KnownName { uuid: person(*i).0, name: person(*i).1, online: true }).collect();
+    let lookup = |name: &str| names.iter().find(|k| k.name.eq_ignore_ascii_case(name)).cloned();
+    match step {
+        Step::Pp(line) => {
+            let env = Env { now, online: &lookup, version: "0", version_rows: Vec::new() };
+            vec![format!("{:?}", command::run(e, &Who::console(), &command::split_args(line), &env))]
+        }
+        Step::Join(i) => {
+            let (uuid, name) = person(*i);
+            let mut out = vec![format!("{:?}", e.seen(&uuid, &name, true, now))];
+            out.extend(command::on_join(e, &uuid, &name, true, now).iter().map(|o| format!("{o:?}")));
+            out
+        }
+        Step::Leave(i) => {
+            e.gone(&person(*i).0);
+            Vec::new()
+        }
+        Step::Wait(_) => Vec::new(),
+        Step::Ask(i) => {
+            let uuid = person(*i).0;
+            let mut out = Vec::new();
+            for request in [
+                format!(r#"{{"op":"info","uuid":"{uuid}"}}"#),
+                format!(r#"{{"op":"check","uuid":"{uuid}","node":"fly"}}"#),
+                format!(r#"{{"op":"check","uuid":"{uuid}","node":"kit.a"}}"#),
+            ] {
+                out.push(String::from_utf8_lossy(&crate::ipc::handle(e, request.as_bytes(), now, "0")).into_owned());
+            }
+            out.push(format!("{:?}", crate::host::decisions(e, &uuid, "", now)));
+            out
+        }
+        Step::Import(mode, group, every) => {
+            let parent = |g: &str| ParentNode { group: g.to_string(), context: Contexts::global(), expiry: None };
+            let users = (0..110)
+                .map(|i| {
+                    let (uuid, name) = person(i);
+                    let mut data = Data { parents: vec![parent(group)], ..Data::default() };
+                    if i % every == 0 {
+                        data.permissions.push(PermNode {
+                            node: format!("kit.{group}"),
+                            value: true,
+                            context: Contexts::global(),
+                            expiry: None,
+                        });
+                    }
+                    User { uuid, name, data }
+                })
+                .collect();
+            let snap = Snapshot {
+                format: export::FORMAT.into(),
+                version: export::VERSION,
+                groups: vec![Group::new(group)],
+                users,
+                ..Snapshot::default()
+            };
+            let source = Ok((format!("f{turn}"), snap));
+            vec![format!("{:?}", command::import_source(e, &Who::console(), "file", source, *mode, now))]
+        }
+        Step::Export => vec![exported(e, now)],
+    }
+}
+
+/// The export of the database, as `/pp export` writes it.
+fn exported(e: &Engine, now: u64) -> String {
+    let mut out = Vec::new();
+    let written = e.store().map(|s| export::write(&mut out, &e.perms, s, now));
+    format!("{written:?} {}", String::from_utf8_lossy(&out))
+}
+
+/// Both engines with the same start: every player joined once (the names are
+/// in the database), and 80 of them have a group from an earlier import.
+fn engines() -> [Engine; 2] {
+    let lang = || Lang::load(&[COMMON, crate::LANG], "en", None).0;
+    let mut both = [Engine::in_memory(CoreCfg::default(), lang()), Engine::lazy(CoreCfg::default(), lang())];
+    for e in &mut both {
+        for i in 0..PEOPLE {
+            let (uuid, name) = person(i);
+            e.seen(&uuid, &name, true, 0).ok();
+            e.gone(&uuid);
+        }
+        let earlier = Snapshot {
+            format: export::FORMAT.into(),
+            version: export::VERSION,
+            groups: vec![Group::new("mod"), Group::new("vip")],
+            users: (50..PEOPLE)
+                .map(|i| {
+                    let parent = ParentNode { group: "mod".into(), context: Contexts::global(), expiry: None };
+                    User {
+                        uuid: person(i).0,
+                        name: person(i).1,
+                        data: Data { parents: vec![parent], ..Data::default() },
+                    }
+                })
+                .collect(),
+            ..Snapshot::default()
+        };
+        command::import_source(e, &Who::console(), "earlier", Ok(("e1".into(), earlier)), SourceMode::Run, 0);
+    }
+    both
+}
+
+proptest! {
+    #![proptest_config(Config { cases: 64, failure_persistence: None, ..Config::default() })]
+
+    #[test]
+    fn lazy_and_eager_agree(steps in proptest::collection::vec(step(), 1..40)) {
+        let [mut eager, mut lazy] = engines();
+        let (mut now, mut online) = (1_000u64, BTreeSet::new());
+        for (turn, step) in steps.iter().enumerate() {
+            if let Step::Wait(ms) = step {
+                now += ms;
+            }
+            // As from the platform, before every step.
+            let _ = (eager.expire(now), lazy.expire(now));
+            let want = answer(&mut eager, step, &online, now, turn);
+            let got = answer(&mut lazy, step, &online, now, turn);
+            prop_assert_eq!(&got, &want, "step {}: {:?}", turn, step);
+            match step {
+                Step::Join(i) => drop(online.insert(*i)),
+                Step::Leave(i) => drop(online.remove(i)),
+                _ => {}
+            }
+        }
+        prop_assert_eq!(exported(&lazy, now), exported(&eager, now));
     }
 }
