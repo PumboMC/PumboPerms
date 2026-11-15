@@ -68,6 +68,44 @@ fn plugin_after(config: Option<&str>, store: PermsStore, before: impl FnOnce()) 
     (p, dir)
 }
 
+/// [`plugin`] whose engine reads players' records from `store` when they are
+/// needed, as it does on a database file.
+fn plugin_reading(store: PermsStore) -> PumboPerms {
+    let (p, _) = plugin(None);
+    p.with(|s| {
+        let mut engine = Engine::lazy_on(Ok(store), s.engine.cfg.clone(), s.engine.lang.clone());
+        engine.server_groups = std::mem::take(&mut s.engine.server_groups);
+        engine.root = s.engine.root.clone();
+        s.engine = engine;
+    });
+    p
+}
+
+/// Writes players in `vip` (and the group) to the database as an earlier
+/// start left them, and reads it again.
+fn in_vip(p: &PumboPerms, uuids: &[String]) {
+    use pumbo_perms_core::model::{Data, Group, ParentNode, User};
+    let parent =
+        ParentNode { group: "vip".into(), context: pumbo_perms_core::context::Contexts::global(), expiry: None };
+    let users = uuids
+        .iter()
+        .map(|u| User {
+            uuid: u.clone(),
+            name: String::new(),
+            data: Data { parents: vec![parent.clone()], ..Data::default() },
+        })
+        .collect();
+    let (perms, mut dirty) =
+        pumbo_perms_core::perms::Perms::from_parts(vec![Group::new("default"), Group::new("vip")], users, Vec::new());
+    dirty.groups.extend(perms.groups().map(|g| g.name.clone()));
+    dirty.users.extend(perms.users().map(|u| u.uuid.clone()));
+    p.with(|s| {
+        s.engine.store().unwrap().commit(&perms, &dirty, None, 0).unwrap();
+        s.engine.reload_data();
+    })
+    .unwrap();
+}
+
 fn console(p: &PumboPerms, line: &str) {
     block_on(p.run(None, split_args(line)));
 }

@@ -154,6 +154,13 @@ fn who_of(p: &PlayerInfo) -> Who {
     Who { server, ..Who::player(&p.profile.name, &uuid_of(p), 0, "") }
 }
 
+/// A cheap call to the host, which counts as a break in the plugin's work: a
+/// pass over every player of a large database calls it now and then, so it
+/// stays inside the plugin time budget of the proxy.
+fn breathe() {
+    let _ = players::get(0);
+}
+
 fn json(t: &Rich) -> Text {
     Text::Json(pumbo_common::rich::json(t))
 }
@@ -245,6 +252,10 @@ impl PumboPerms {
                 log::warn(&format!("PumboPerms: config: {w}"));
             }
         }
+        let store = store.map(|mut s| {
+            s.set_breathe(breathe);
+            s
+        });
         let mut engine = Engine::new(store, cfg.core(), lang);
         if let Some(line) = engine.migrate_ledgers(std::path::Path::new(&format!("{}/imports", self.data_dir))) {
             log::info(&line);

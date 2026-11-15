@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use pumbo_common::lang::Lang;
+use pumbo_common::store::StoreError;
 
 use crate::config::CoreCfg;
 use crate::engine::Engine;
@@ -20,7 +21,12 @@ impl Engine {
     /// An engine on a fresh in-memory store that keeps players' records in
     /// the database until they are needed.
     pub fn lazy(cfg: CoreCfg, lang: Lang) -> Self {
-        Self::open(PermsStore::in_memory(), cfg, lang, true)
+        Self::lazy_on(PermsStore::in_memory(), cfg, lang)
+    }
+
+    /// [`Engine::lazy`] on a given store.
+    pub fn lazy_on(store: Result<PermsStore, StoreError>, cfg: CoreCfg, lang: Lang) -> Self {
+        Self::open(store, cfg, lang, true)
     }
 }
 

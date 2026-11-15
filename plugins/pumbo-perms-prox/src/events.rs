@@ -92,6 +92,11 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 if let Some(why) = &s.engine.broken {
                     return Err(format!("the database is not available: {why}"));
                 }
+                // A record that cannot be read refuses the login before the player counts as online.
+                s.engine.load_user(&uuid, now);
+                if let Some(why) = &s.engine.broken {
+                    return Err(format!("the database is not available: {why}"));
+                }
                 s.not_provider = false;
                 s.engine.server_groups = groups;
                 match s.engine.seen(&uuid, &name, p.online_mode, now) {
@@ -168,6 +173,7 @@ impl pumbo_sdk::Plugin for PumboPerms {
                 let value = self
                     .with(|s| {
                         let q = query_of(&s.engine, &req.context);
+                        s.engine.load_user(&uuid, now);
                         s.engine.perms.check(&uuid, &node, &q, now)
                     })
                     .ok_or_else(|| CallReject::Rejected("PumboPerms is busy".into()))?;
