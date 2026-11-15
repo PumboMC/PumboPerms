@@ -3,7 +3,7 @@
 
 use pumbo_common::config::{self, Check, Commands, Settings, Warning};
 use pumbo_common::lang::{Bundle, COMMON, Lang};
-use pumbo_perms_core::config::{self as core_config, CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
+use pumbo_perms_core::config::{self as core_config, CoreCfg, DefaultsCfg, ImportCfg, LimitsCfg, LogCfg};
 use pumbo_perms_core::engine::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,7 @@ pub const BUNDLES: [Bundle; 3] = [COMMON, pumbo_perms_core::LANG, LANG];
 pub struct Config {
     pub language: String,
     pub log: LogCfg,
+    pub limits: LimitsCfg,
     pub import: ImportCfg,
     pub commands: Commands,
 }
@@ -36,6 +37,7 @@ impl Default for Config {
         Self {
             language: "en".into(),
             log: LogCfg::default(),
+            limits: LimitsCfg::default(),
             import: ImportCfg::default(),
             commands: core_config::default_commands(),
         }
@@ -49,6 +51,7 @@ impl Config {
         CoreCfg {
             defaults: DefaultsCfg { op_level: 0 },
             log: self.log.clone(),
+            limits: self.limits.clone(),
             worlds: false,
             disabled: self.commands.disabled.clone(),
             ..CoreCfg::default()

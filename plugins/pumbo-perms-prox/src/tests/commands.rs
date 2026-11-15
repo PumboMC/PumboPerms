@@ -71,6 +71,44 @@ fn template_messages_and_manifest() {
     let _ = std::fs::remove_file(dir.join("config.yml"));
 }
 
+/// A switch of the staff limits that is not `true` or `false`, a section that
+/// is not one and a misspelt switch leave the limits off, each with a warning.
+#[test]
+fn bad_limits_values_fall_back_to_off() {
+    let off = pumbo_perms_core::config::LimitsCfg::default();
+    let (cfg, w) =
+        common_config::load::<setup::Config>("limits:\n  argument-permissions: on\n  require-group-membership: yes\n");
+    assert_eq!(cfg.limits, off);
+    let mut named: Vec<String> = w.iter().filter_map(|w| w.option.clone()).collect();
+    named.sort();
+    assert_eq!(named, ["limits.argument-permissions", "limits.require-group-membership"], "{w:?}");
+    let (cfg, w) = common_config::load::<setup::Config>("limits: true\n");
+    assert_eq!((cfg.limits, w.len()), (off.clone(), 1), "{w:?}");
+    let (cfg, w) = common_config::load::<setup::Config>("limits:\n  argument-permission: true\n");
+    assert_eq!(cfg.limits, off);
+    assert!(w.len() == 1 && w[0].message.contains("did you mean 'limits.argument-permissions'"), "{w:?}");
+}
+
+/// The switches reach the engine at start and again on `/pp reload`.
+#[test]
+fn limits_from_the_file_reach_the_engine() {
+    let (p, dir) = plugin(Some("limits:\n  argument-permissions: true\n"));
+    let limits = || p.with(|s| s.engine.cfg.limits.clone()).unwrap();
+    assert!(limits().argument_permissions && !limits().require_group_membership);
+    std::fs::write(dir.join("config.yml"), "limits:\n  require-group-membership: true\n").unwrap();
+    console(&p, "reload");
+    assert!(!limits().argument_permissions && limits().require_group_membership);
+    let _ = std::fs::remove_file(dir.join("config.yml"));
+}
+
+/// A `config.yml` written before the limits existed keeps them off.
+#[test]
+fn edited_config_without_limits_keeps_them_off() {
+    let (p, dir) = plugin(Some("language: pl\nimport:\n  enabled: false\n"));
+    assert_eq!(p.with(|s| s.engine.cfg.limits.clone()).unwrap(), pumbo_perms_core::config::LimitsCfg::default());
+    let _ = std::fs::remove_file(dir.join("config.yml"));
+}
+
 /// A `config.yml` that is not valid YAML at start: the last good copy, not the
 /// defaults (which would import permissions.yml again, for one).
 #[test]

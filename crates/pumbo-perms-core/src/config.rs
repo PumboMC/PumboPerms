@@ -1,4 +1,4 @@
-//! The `context`, `defaults`, `log` and `import` sections of `config.yml`.
+//! The `context`, `defaults`, `log`, `limits` and `import` sections of `config.yml`.
 
 use pumbo_common::config::{Check, Commands};
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,17 @@ impl Default for LogCfg {
     }
 }
 
+/// Staff limits of `/pp`. Both are off by default; turn them on before staff
+/// who are not admins get `/pp`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct LimitsCfg {
+    /// Targets, arguments and contexts of `/pp` need their own nodes.
+    pub argument_permissions: bool,
+    /// Staff give, take and edit only groups they are in.
+    pub require_group_membership: bool,
+}
+
 /// Taking over other permission sources: PumboProx's `permissions.yml`
 /// (`file`), on Pumpkin the proxy's table through PumboBridge, other plugins
 /// and the attachments of other plugins.
@@ -74,6 +85,7 @@ pub struct CoreCfg {
     pub context: ContextCfg,
     pub defaults: DefaultsCfg,
     pub log: LogCfg,
+    pub limits: LimitsCfg,
     /// Whether the platform sees worlds (`world=`); not in the file, the
     /// proxy sets it to false.
     #[serde(skip, default = "yes")]
@@ -98,6 +110,7 @@ impl Default for CoreCfg {
             context: ContextCfg::default(),
             defaults: DefaultsCfg::default(),
             log: LogCfg::default(),
+            limits: LimitsCfg::default(),
             worlds: true,
             names_checked: true,
             disabled: Vec::new(),

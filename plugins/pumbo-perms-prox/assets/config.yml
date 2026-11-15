@@ -15,6 +15,13 @@ log:
   notify: true               # tell players with pumbo.perms.log.notify about changes
 
 
+# ── Staff limits ──────────────────────────────────────────────
+# Both are off by default. Turn them on before staff who are not admins get /pp.
+limits:
+  argument-permissions: false       # targets, arguments and contexts of /pp need their own nodes
+  require-group-membership: false   # staff give, take and edit only groups they are in
+
+
 # ── Taking over permissions.yml ───────────────────────────────
 import:
   enabled: true              # at the first start: groups and players of the proxy's permissions.yml

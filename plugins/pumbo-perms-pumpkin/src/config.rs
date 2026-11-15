@@ -1,7 +1,7 @@
 //! `config.yml`: the core sections and the Pumpkin-only `provider`.
 
 use pumbo_common::config::{Check, Commands, Settings, Warning};
-use pumbo_perms_core::config::{self as core_config, ContextCfg, CoreCfg, DefaultsCfg, ImportCfg, LogCfg};
+use pumbo_perms_core::config::{self as core_config, ContextCfg, CoreCfg, DefaultsCfg, ImportCfg, LimitsCfg, LogCfg};
 use serde::{Deserialize, Serialize};
 
 /// The file written at the first start.
@@ -14,6 +14,7 @@ pub struct Config {
     pub context: ContextCfg,
     pub defaults: DefaultsCfg,
     pub log: LogCfg,
+    pub limits: LimitsCfg,
     pub provider: ProviderCfg,
     pub import: ImportCfg,
     pub commands: Commands,
@@ -26,6 +27,7 @@ impl Default for Config {
             context: ContextCfg::default(),
             defaults: DefaultsCfg::default(),
             log: LogCfg::default(),
+            limits: LimitsCfg::default(),
             provider: ProviderCfg::default(),
             import: ImportCfg::default(),
             commands: core_config::default_commands(),
@@ -61,6 +63,7 @@ impl Config {
             context: self.context.clone(),
             defaults: self.defaults.clone(),
             log: self.log.clone(),
+            limits: self.limits.clone(),
             worlds: true,
             // Pumpkin does not tell whether Mojang checked an account.
             names_checked: false,
@@ -102,6 +105,7 @@ impl Settings for Config {
         self.context = core.context;
         self.defaults = core.defaults;
         self.log = core.log;
+        self.limits = core.limits;
         check.clamp("provider.refresh-seconds", &mut self.provider.refresh_seconds, 1, 3600);
         core_config::validate_commands(&mut self.commands, check);
         let plugins = self.import.plugins.clone();
@@ -139,6 +143,62 @@ mod tests {
         let (c, w) = config::load::<Config>("language: \"bad lang!\"\n");
         assert_eq!(c.language, "en");
         assert_eq!(w.len(), 1);
+    }
+
+    /// A switch of the staff limits that is not `true` or `false`, a section
+    /// that is not one and a misspelt switch leave the limits off, each with a
+    /// warning.
+    #[test]
+    fn bad_limits_values_fall_back_to_off() {
+        let (c, w) = config::load::<Config>("limits:\n  argument-permissions: on\n  require-group-membership: yes\n");
+        assert_eq!(c.limits, LimitsCfg::default());
+        let mut named: Vec<String> = w.iter().filter_map(|w| w.option.clone()).collect();
+        named.sort();
+        assert_eq!(named, ["limits.argument-permissions", "limits.require-group-membership"], "{w:?}");
+        let (c, w) = config::load::<Config>("limits: true\n");
+        assert_eq!((c.limits, w.len()), (LimitsCfg::default(), 1), "{w:?}");
+        let (c, w) = config::load::<Config>("limits:\n  argument-permission: true\n");
+        assert_eq!(c.limits, LimitsCfg::default());
+        assert!(w.len() == 1 && w[0].message.contains("did you mean 'limits.argument-permissions'"), "{w:?}");
+    }
+
+    /// Start and `/pp reload` give the engine `Config::core()`.
+    #[test]
+    fn limits_from_the_file_reach_the_engine() {
+        let (c, w) =
+            config::load::<Config>("limits:\n  argument-permissions: true\n  require-group-membership: true\n");
+        assert!(w.is_empty(), "{w:?}");
+        let limits = c.core().limits;
+        assert!(limits.argument_permissions && limits.require_group_membership);
+        assert_eq!(Config::default().core().limits, LimitsCfg::default());
+    }
+
+    /// An update writes the new section into a `config.yml` nobody changed;
+    /// a changed one stays, with a warning, and the limits stay off.
+    #[test]
+    fn edited_config_without_limits_keeps_them_off() {
+        let start = TEMPLATE.find("# ── Staff limits").unwrap();
+        let end = start + TEMPLATE[start..].find("\n\n\n").unwrap() + 3;
+        let before = format!("{}{}", &TEMPLATE[..start], &TEMPLATE[end..]);
+        assert!(!before.contains("limits"));
+        let dir = std::env::temp_dir().join(format!("pumbo-perms-pumpkin-limits-{}", std::process::id()));
+        let path = dir.join("config.yml");
+        let file = path.to_string_lossy().to_string();
+        for (text, updated) in [(before.clone(), true), (before.replace("language: en", "language: pl"), false)] {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join(".generated")).unwrap();
+            std::fs::write(&path, &text).unwrap();
+            std::fs::write(dir.join(".generated/config.yml"), &before).unwrap();
+            let (read, notes) = config::read_or_create(&file, TEMPLATE);
+            assert_eq!(read == TEMPLATE, updated, "{notes:?}");
+            if !updated {
+                assert!(notes.iter().any(|n| n.message.ends_with("their defaults apply: limits")), "{notes:?}");
+            }
+            let (c, w) = config::load::<Config>(&read);
+            assert!(w.is_empty(), "{w:?}");
+            assert_eq!(c.core().limits, LimitsCfg::default());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

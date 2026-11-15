@@ -19,6 +19,13 @@ defaults:
   op-level: 3                # operators from this level may use /pp where no group decides (0 = off)
 
 
+# ── Staff limits ──────────────────────────────────────────────
+# Both are off by default. Turn them on before staff who are not admins get /pp.
+limits:
+  argument-permissions: false       # targets, arguments and contexts of /pp need their own nodes
+  require-group-membership: false   # staff give, take and edit only groups they are in
+
+
 # ── Change log ────────────────────────────────────────────────
 log:
   max-entries: 10000         # changes kept for /pp log (0 = unlimited)
