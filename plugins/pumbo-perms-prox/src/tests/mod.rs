@@ -68,19 +68,6 @@ fn plugin_after(config: Option<&str>, store: PermsStore, before: impl FnOnce()) 
     (p, dir)
 }
 
-/// [`plugin`] whose engine reads players' records from `store` when they are
-/// needed, as it does on a database file.
-fn plugin_reading(store: PermsStore) -> PumboPerms {
-    let (p, _) = plugin(None);
-    p.with(|s| {
-        let mut engine = Engine::lazy_on(Ok(store), s.engine.cfg.clone(), s.engine.lang.clone());
-        engine.server_groups = std::mem::take(&mut s.engine.server_groups);
-        engine.root = s.engine.root.clone();
-        s.engine = engine;
-    });
-    p
-}
-
 /// Writes players in `vip` (and the group) to the database as an earlier
 /// start left them, and reads it again.
 fn in_vip(p: &PumboPerms, uuids: &[String]) {

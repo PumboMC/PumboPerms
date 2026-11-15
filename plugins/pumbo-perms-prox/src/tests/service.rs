@@ -54,7 +54,7 @@ fn uuids(n: u64) -> Vec<String> {
 
 #[test]
 fn check_offline_reads_the_record_from_the_database() {
-    let p = plugin_reading(PermsStore::in_memory().unwrap());
+    let (p, _) = plugin(None);
     let players = uuids(2);
     in_vip(&p, &players[..1]);
     assert_eq!(offline_check(&p, &players[0]), Some(true));
@@ -64,7 +64,7 @@ fn check_offline_reads_the_record_from_the_database() {
 
 #[test]
 fn disconnect_lets_the_record_go() {
-    let p = plugin_reading(PermsStore::in_memory().unwrap());
+    let (p, _) = plugin(None);
     let steve = testing::add_player("Steve", Some("lobby"));
     let uuid = uuid_of(&players::get(steve).unwrap());
     let mut all = uuids(100);
@@ -91,7 +91,7 @@ fn refused_login_leaves_no_online_player() {
     use std::sync::atomic::Ordering;
     let backend = pumbo_common::store::FaultyBackend::default();
     let reads = backend.fail_reads.clone();
-    let p = plugin_reading(PermsStore::new(Store::new(backend)).unwrap());
+    let (p, _) = plugin_on(None, PermsStore::new(Store::new(backend)).unwrap());
     let steve = testing::add_player("Steve", Some("lobby"));
     let uuid = uuid_of(&players::get(steve).unwrap());
     in_vip(&p, std::slice::from_ref(&uuid));

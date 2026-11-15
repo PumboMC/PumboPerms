@@ -9,12 +9,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
 use pumbo_common::lang::{COMMON, Lang};
-use pumbo_common::store::Store;
+use pumbo_common::store::{ReadExt, Store};
+use pumbo_perms_core::command::{self, Env, Who, split_args};
 use pumbo_perms_core::config::CoreCfg;
-use pumbo_perms_core::context::Query;
+use pumbo_perms_core::context::{Contexts, Query};
 use pumbo_perms_core::engine::Engine;
-use pumbo_perms_core::model::MetaKind;
-use pumbo_perms_core::store::{PermsStore, SCHEMA};
+use pumbo_perms_core::model::{Data, Group, MetaKind, ParentNode, User};
+use pumbo_perms_core::perms::{KnownName, Perms};
+use pumbo_perms_core::store::{GROUPS, META, PermsStore, SCHEMA, USERS};
 
 /// `PpMod7x` on a lone Pumpkin (offline UUID from SHA-256).
 const MODERATOR: &str = "fef4de34-7728-2a0f-199b-48e23053c1bd";
@@ -35,6 +37,9 @@ fn opens_database_from_0_1_2_beta() {
     assert!(line.contains("schema 1 -> 2"), "{line}");
     assert_eq!(e.store().unwrap().schema().unwrap(), SCHEMA);
 
+    // The player's record stays in the database until it is needed.
+    assert_eq!(e.user_count(), 1);
+    e.load_user(MODERATOR, 0);
     let p = &mut e.perms;
     let helper = p.group("helper").expect("helper");
     assert!(helper.data.is_empty());
@@ -101,6 +106,9 @@ fn opens_database_written_before_name_keys() {
     assert_eq!(e.broken, None);
     assert_eq!(e.migrate_ledgers(&dir.join("imports")), None, "nothing to migrate");
 
+    for player in [STEVE, ALEX, RENAMED, FIRST] {
+        e.load_user(player, 0);
+    }
     let p = &mut e.perms;
     let vip = p.group("vip").expect("vip");
     assert_eq!(vip.weight, 10);
@@ -142,4 +150,65 @@ fn opens_database_written_before_name_keys() {
     assert_eq!(log[1].action, "parent add vip");
     drop(e);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// After the changes of a build that keeps players in the database (groups
+/// renamed and deleted with members there), the file is what an earlier
+/// build reads: schema 2, and every record decodes as the same types.
+#[test]
+fn database_stays_readable_by_the_previous_schema() {
+    let dir = std::env::temp_dir().join(format!("pumbo-perms-upgrade-readable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("perms.redb");
+    let player = |i: u32| format!("00000000-0000-4000-8000-{i:012}");
+    {
+        // 300 players in vip or mod, as an earlier build left them.
+        let store = PermsStore::new(Store::open(&path).unwrap()).unwrap();
+        let in_group = |i: u32| {
+            let group = if i.is_multiple_of(3) { "mod" } else { "vip" };
+            let parent = ParentNode { group: group.into(), context: Contexts::global(), expiry: None };
+            User {
+                uuid: player(i),
+                name: format!("Player{i}"),
+                data: Data { parents: vec![parent], ..Data::default() },
+            }
+        };
+        let groups = ["default", "vip", "mod"].map(Group::new).into();
+        let (all, mut dirty) = Perms::from_parts(groups, (0..300).map(in_group).collect(), Vec::new());
+        dirty.groups.extend(all.groups().map(|g| g.name.clone()));
+        dirty.users.extend(all.users().map(|u| u.uuid.clone()));
+        store.commit(&all, &dirty, None, 0).unwrap();
+    }
+    let mut e = Engine::new(PermsStore::new(Store::open(&path).unwrap()), CoreCfg::default(), lang());
+    e.seen(&player(1), "Player1", true, 1).unwrap();
+    let nobody = |_: &str| -> Option<KnownName> { None };
+    let env = Env { now: 1, online: &nobody, version: "0", version_rows: Vec::new() };
+    for line in [
+        "group vip rename gold".to_string(),
+        "deletegroup mod".to_string(),
+        format!("user {} permission set fly", player(299)),
+        format!("user {} parent add gold", player(3)),
+    ] {
+        assert!(command::run(&mut e, &Who::console(), &split_args(&line), &env).changed, "{line}");
+    }
+    drop(e);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.read(|tx| tx.get_u64(META, "schema")).unwrap(), Some(2));
+    let users = store.read(|tx| tx.collect_prefix(USERS, "")).unwrap();
+    assert_eq!(users.len(), 201, "the players only in mod have nothing left");
+    for (key, bytes) in &users {
+        let user: User = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(&user.uuid, key);
+        assert!(user.data.parents.iter().all(|p| p.group == "gold"), "{user:?}");
+    }
+    let groups = store.read(|tx| tx.collect_prefix(GROUPS, "")).unwrap();
+    let names: Vec<String> = groups.iter().map(|(_, g)| serde_json::from_slice::<Group>(g).unwrap().name).collect();
+    assert_eq!(names, ["default", "gold"]);
+    drop(store);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn lang() -> Lang {
+    Lang::load(&[COMMON, pumbo_perms_core::LANG], "en", None).0
 }

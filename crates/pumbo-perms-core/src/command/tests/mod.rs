@@ -26,9 +26,11 @@ const ALEX: &str = "00000000-0000-0000-0000-00000000000b";
 
 const PLATFORM: Bundle = Bundle { name: "test", files: &[("en", "prefix: \"&8[&#f28c28&lP&#ffd54f&lP&8] \"\n")] };
 
+/// An engine that reads players' records when needed, as on a database file,
+/// with Steve and Alex online.
 fn engine() -> Engine {
     let lang = Lang::load(&[COMMON, LANG, PLATFORM], "en", None).0;
-    let mut e = Engine::in_memory(CoreCfg::default(), lang);
+    let mut e = Engine::lazy(CoreCfg::default(), lang);
     e.seen(STEVE, "Steve", true, 0).unwrap();
     e.seen(ALEX, "Alex", true, 0).unwrap();
     e

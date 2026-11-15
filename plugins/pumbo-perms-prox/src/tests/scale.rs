@@ -45,6 +45,12 @@ fn at_scale(online: usize) -> (PumboPerms, Vec<PlayerId>) {
     let uuids: Vec<String> = ids.iter().map(|id| uuid_of(&players::get(*id).unwrap())).collect();
     p.with(|s| {
         s.engine.server_groups = server_groups();
+        // One change: the records it reads stay in memory until it is saved.
+        s.engine.begin();
+        let players: Vec<String> = (0..3000).map(|k| format!("00000000-0000-4000-8000-{k:012}")).collect();
+        for uuid in players.iter().chain(&uuids) {
+            s.engine.load_user(uuid, 0);
+        }
         let perms = &mut s.engine.perms;
         let mut dirty = Dirty::default();
         for g in 0..20 {
@@ -72,9 +78,8 @@ fn at_scale(online: usize) -> (PumboPerms, Vec<PlayerId>) {
             dirty.merge(d);
         }
         let parent = |g: usize, context: Contexts| ParentNode { group: format!("g{}", g % 20), context, expiry: None };
-        for k in 0..3000 {
-            let uuid = format!("00000000-0000-4000-8000-{k:012}");
-            dirty.merge(perms.edit_user(&uuid, "", |d| d.add_parent(parent(k, Contexts::global()))).1);
+        for (k, uuid) in players.iter().enumerate() {
+            dirty.merge(perms.edit_user(uuid, "", |d| d.add_parent(parent(k, Contexts::global()))).1);
         }
         for (k, uuid) in uuids.iter().enumerate() {
             let (_, d) = perms.edit_user(uuid, &format!("P{k}"), |d| {
@@ -193,7 +198,7 @@ fn import_of_3000_players_scale() {
     let start = std::time::Instant::now();
     console(&p, "import run file");
     let again = start.elapsed();
-    assert_eq!(p.with(|s| s.engine.perms.users().count()).unwrap(), 3000);
+    assert_eq!(p.with(|s| s.engine.user_count()).unwrap(), 3000);
     println!("import of 3000 players: first {first:?}, again after a change {again:?}");
     drop(p);
     let _ = std::fs::remove_dir_all(&dir);

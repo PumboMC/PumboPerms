@@ -146,6 +146,8 @@ fn export_answer_fits_the_host_payload_limit() {
     console(&p, "creategroup vip");
     p.with(|s| {
         let mut dirty = pumbo_perms_core::perms::Dirty::default();
+        // One change: the records it reads stay in memory until it is saved.
+        s.engine.begin();
         for i in 0..3000u64 {
             let uuid = Uuid::from_high_low(1, i).to_string();
             let parent = pumbo_perms_core::model::ParentNode {
@@ -153,6 +155,7 @@ fn export_answer_fits_the_host_payload_limit() {
                 context: pumbo_perms_core::context::Contexts::global(),
                 expiry: None,
             };
+            s.engine.load_user(&uuid, 0);
             let (_, d) = s.engine.perms.edit_user(&uuid, &format!("Player{i}"), |d| d.add_parent(parent));
             dirty.merge(d);
         }

@@ -111,10 +111,11 @@ fn held_mib(base: usize) -> f64 {
 /// cache of redb is 16 MiB of it.
 const NAMES_BUDGET_MIB: f64 = 24.0;
 
-/// With 20 000 players in a group: their data takes about 11 MiB here (8-byte
-/// pointers; less in WebAssembly) and a change copies it once to be able to
-/// undo it, next to the page cache of redb.
-const CHANGE_BUDGET_MIB: f64 = 32.0;
+/// With 20 000 players in a group, the start and one change: the players stay
+/// in the database and the change keeps only what it touches, so this is
+/// mostly the page cache of redb (measured 6.0 MiB, with half of it again to
+/// spare).
+const CHANGE_BUDGET_MIB: f64 = 9.0;
 
 /// A fresh database file in a folder of its own.
 fn database(test: &str) -> (PathBuf, PathBuf) {
@@ -223,8 +224,7 @@ fn known_names_memory_stays_flat() {
     assert!(grown <= NAMES_BUDGET_MIB, "{grown:.1} MiB");
 }
 
-/// 20 000 players in one group and one `/pp` change: a change copies the
-/// groups and the players with data, so that it can be undone.
+/// 20 000 players in one group, the start and one `/pp` change.
 #[test]
 #[ignore = "release benchmark"]
 fn change_among_20000_players_fits_the_budget() {
@@ -311,7 +311,9 @@ fn pending_import_at_join_copies_nothing() {
 
 /// 100 000 and 400 000 players in a group, counted from before the start: the
 /// start, then 200 joins and leaves and 50 commands on players who are not
-/// online. Each player with a node of its own: printed only.
+/// online. The records stay in the database, so the heap stays within the
+/// budget of the names at both sizes. Each player with a node of its own:
+/// printed only (the nodes of the records on disk are kept).
 #[test]
 #[ignore = "release benchmark"]
 fn offline_players_stay_on_disk() {
@@ -343,6 +345,9 @@ fn offline_players_stay_on_disk() {
         );
         drop(e);
         let _ = std::fs::remove_dir_all(&dir);
+        if !ranks.own_node {
+            assert!(peak <= NAMES_BUDGET_MIB && held <= NAMES_BUDGET_MIB, "{n}: {peak:.1} MiB, {held:.1} MiB");
+        }
     }
 }
 
@@ -367,7 +372,8 @@ fn export_of_100000_players_stays_flat() {
     assert!(grown <= 2.0, "{grown:.1} MiB: the export holds one player at a time");
 }
 
-/// `/pp group vip rename vip2` with 100 000 players in `vip`.
+/// `/pp group vip rename vip2` with 100 000 players in `vip`, in the database:
+/// one transaction rewrites every record, a portion of keys at a time.
 #[test]
 #[ignore = "release benchmark"]
 fn group_rename_among_100000_players() {
@@ -383,4 +389,5 @@ fn group_rename_among_100000_players() {
     println!("memory: rename of a group with 100000 players, heap peak +{grown:.1} MiB ({took:?})");
     drop(e);
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(grown <= NAMES_BUDGET_MIB, "{grown:.1} MiB");
 }

@@ -66,10 +66,12 @@ impl std::fmt::Debug for Engine {
 }
 
 impl Engine {
-    /// Loads the database. Without a usable store the engine still answers
-    /// (nobody has anything, the platform defaults decide) but refuses changes.
+    /// Loads the groups and tracks of the database and counts the players,
+    /// whose records stay in it until they are needed ([`Engine::load_user`]).
+    /// Without a usable store the engine still answers (nobody has anything,
+    /// the platform defaults decide) but refuses changes.
     pub fn new(store: Result<PermsStore, StoreError>, cfg: CoreCfg, lang: Lang) -> Self {
-        Self::open(store, cfg, lang, false)
+        Self::open(store, cfg, lang, true)
     }
 
     /// [`Engine::new`], with the players' records read when needed

@@ -181,6 +181,8 @@ fn expiry_due_plans_when_commit_fails() {
     let engine = Engine::new(Ok(store), cfg.core(), Lang::load(&crate::BUNDLES, "en", None).0);
     let mut rt = Rt::new(String::new(), cfg, engine, false);
     rt.ready = true;
+    // The player's record, read before it is changed, as at a join.
+    rt.engine.load_user(U, 0);
     give(&mut rt, "vip", "minecraft:command.gamemode", Some(10_000));
     join(&mut rt, U, 0);
     writes.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
