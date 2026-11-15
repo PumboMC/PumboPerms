@@ -1,6 +1,7 @@
 //! The engine: the operator fallback, a broken store, ledgers and expiry.
 
 mod names;
+mod offline;
 mod undo;
 
 use super::*;

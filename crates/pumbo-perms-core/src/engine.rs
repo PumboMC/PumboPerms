@@ -2,7 +2,7 @@
 //! config and the messages, and the operations the platform calls.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use pumbo_common::lang::Lang;
 use pumbo_common::store::StoreError;
@@ -16,6 +16,10 @@ use crate::store::{LogEntry, PermsStore};
 /// The operator fallback covers only these nodes: every other Pumbo plugin
 /// registers its own operator levels on Pumpkin.
 pub const OWN_NODES: &str = "pumbo.perms.";
+
+/// Records of players who are not online kept in memory at most, besides
+/// those a change in progress needs ([`Engine::load_user`]).
+pub const VISITORS: usize = 64;
 
 pub struct Engine {
     pub perms: Perms,
@@ -44,6 +48,15 @@ pub struct Engine {
     /// Damaged name records already reported, and the lines for
     /// [`Engine::take_warnings`].
     damaged_names: RefCell<(BTreeSet<String>, Vec<String>)>,
+    /// Players' records stay in the database until a player is needed
+    /// ([`Engine::load_user`]); otherwise all of them are read at start.
+    on_demand: bool,
+    /// The records in memory of players who are not online, oldest first.
+    visitors: VecDeque<String>,
+    /// Players whose record lost ended entries when it was read: memory has
+    /// them without, the database still with them until [`Engine::expire`]
+    /// saves them, so they stay in memory until then.
+    swept: BTreeSet<String>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -56,6 +69,12 @@ impl Engine {
     /// Loads the database. Without a usable store the engine still answers
     /// (nobody has anything, the platform defaults decide) but refuses changes.
     pub fn new(store: Result<PermsStore, StoreError>, cfg: CoreCfg, lang: Lang) -> Self {
+        Self::open(store, cfg, lang, false)
+    }
+
+    /// [`Engine::new`], with the players' records read when needed
+    /// (`on_demand`) or all at start.
+    pub(crate) fn open(store: Result<PermsStore, StoreError>, cfg: CoreCfg, lang: Lang, on_demand: bool) -> Self {
         let mut engine = Self {
             perms: Perms::new(),
             store: None,
@@ -69,9 +88,12 @@ impl Engine {
             changes: None,
             connected: HashMap::new(),
             damaged_names: RefCell::default(),
+            on_demand,
+            visitors: VecDeque::new(),
+            swept: BTreeSet::new(),
         };
         match store {
-            Ok(store) => match store.load() {
+            Ok(store) => match engine.read(&store) {
                 Ok((perms, dirty)) => {
                     engine.perms = perms;
                     if !dirty.is_empty()
@@ -112,9 +134,79 @@ impl Engine {
         };
     }
 
-    /// An engine on a fresh in-memory store (tests).
+    /// An engine on a fresh in-memory store with every record in memory
+    /// (tests).
     pub fn in_memory(cfg: CoreCfg, lang: Lang) -> Self {
-        Self::new(PermsStore::in_memory(), cfg, lang)
+        Self::open(PermsStore::in_memory(), cfg, lang, false)
+    }
+
+    /// The groups and tracks, and the players' records or only their counts.
+    fn read(&self, store: &PermsStore) -> pumbo_common::store::Result<(Perms, Dirty)> {
+        if self.on_demand { store.load_index() } else { store.load() }
+    }
+
+    /// Brings a player's record into memory before anything reads or changes
+    /// it, without its ended entries: memory drops them at once and
+    /// [`Engine::expire`] saves that. A record that cannot be read leaves the
+    /// database refusing changes and the player without data. Outside a
+    /// change, the oldest records of players who are not online go back.
+    pub fn load_user(&mut self, uuid: &str, now: u64) {
+        if self.perms.knows(uuid) {
+            return;
+        }
+        let record = match self.store.as_ref().map(|s| s.user(uuid)) {
+            Some(Ok(record)) => record,
+            Some(Err(e)) => {
+                self.broken = Some(e.to_string());
+                None
+            }
+            None => None,
+        };
+        if !self.perms.admit(uuid, record) {
+            return;
+        }
+        if self.perms.user(uuid).is_some_and(|u| u.data.next_expiry().is_some_and(|t| t <= now)) {
+            self.perms.edit_user(uuid, "", |d| d.expire(now));
+            self.swept.insert(uuid.to_string());
+        }
+        if !self.connected.contains_key(uuid) {
+            self.visitors.push_back(uuid.to_string());
+        }
+        self.trim();
+    }
+
+    /// Lets the oldest records of players who are not online go while more
+    /// than [`VISITORS`] are in memory; nothing during a change. A record
+    /// whose ended entries are not saved yet stays and waits at the end.
+    fn trim(&mut self) {
+        if self.perms.changing() {
+            return;
+        }
+        // The newest stays: whoever read it is about to use it.
+        let mut turns = self.visitors.len().saturating_sub(1);
+        while self.visitors.len() > VISITORS && turns > 0 {
+            turns = turns.saturating_sub(1);
+            let Some(uuid) = self.visitors.pop_front() else { break };
+            if self.connected.contains_key(&uuid) {
+                continue;
+            }
+            if self.swept.contains(&uuid) {
+                self.visitors.push_back(uuid);
+                continue;
+            }
+            self.perms.evict(&uuid);
+        }
+    }
+
+    /// After the data was read again: the online players' records come back
+    /// (their ended entries go with the next [`Engine::expire`]).
+    fn reread(&mut self) {
+        self.visitors.clear();
+        self.swept.clear();
+        let online: Vec<String> = self.connected.keys().cloned().collect();
+        for uuid in online {
+            self.load_user(&uuid, 0);
+        }
     }
 
     pub fn store(&self) -> Option<&PermsStore> {
@@ -148,6 +240,7 @@ impl Engine {
 
     /// [`Engine::decide`] at a given place.
     pub fn decide_in(&mut self, uuid: &str, node: &str, q: &Query, op_level: u8, now: u64) -> Option<bool> {
+        self.load_user(uuid, now);
         if let Some(v) = self.perms.check(uuid, node, q, now) {
             return Some(v);
         }
@@ -156,6 +249,7 @@ impl Engine {
 
     /// Like [`Engine::decide`] with the deciding node, when the data decides.
     pub fn explain(&mut self, uuid: &str, node: &str, world: &str, now: u64) -> Option<Decision> {
+        self.load_user(uuid, now);
         let q = self.query(world);
         self.perms.explain(uuid, node, &q, now)
     }
@@ -176,11 +270,13 @@ impl Engine {
     /// the disk (nothing when no change began).
     pub fn rollback(&mut self) {
         self.perms.rollback();
+        self.trim();
     }
 
     /// Ends the change: what it did stays.
     pub fn end(&mut self) {
         self.perms.end();
+        self.trim();
     }
 
     /// Saves a change with its log entry. On failure the change is undone in
@@ -188,7 +284,16 @@ impl Engine {
     pub fn commit(&mut self, dirty: &Dirty, log: Option<&LogEntry>) -> Result<(), String> {
         self.changed(dirty);
         let max = self.cfg.log.max_entries;
-        self.save(|store, perms| store.commit(perms, dirty, log, max))
+        self.save(|store, perms| store.commit(perms, dirty, log, max))?;
+        self.saved(dirty);
+        Ok(())
+    }
+
+    /// The records a saved change wrote no longer wait in [`Engine::swept`].
+    fn saved(&mut self, dirty: &Dirty) {
+        for uuid in &dirty.users {
+            self.swept.remove(uuid);
+        }
     }
 
     /// [`Engine::commit`] of an import, with the ledger of its source in the
@@ -203,6 +308,7 @@ impl Engine {
         self.changed(dirty);
         let max = self.cfg.log.max_entries;
         self.save(|store, perms| store.commit_import(perms, dirty, log, max, (source, ledger)))?;
+        self.saved(dirty);
         if let Ok(all) = &mut self.ledgers {
             if *ledger == Ledger::default() {
                 all.remove(source);
@@ -306,7 +412,7 @@ impl Engine {
         if store.schema().is_ok_and(|v| v < crate::store::SCHEMA) {
             return false;
         }
-        match store.load() {
+        match self.read(store) {
             Ok((perms, dirty)) => {
                 if !dirty.is_empty()
                     && let Err(e) = store.commit(&perms, &dirty, None, 0)
@@ -318,6 +424,7 @@ impl Engine {
                 self.broken = None;
                 self.load_ledgers();
                 self.changed_everything();
+                self.reread();
                 true
             }
             Err(e) => {
@@ -338,10 +445,11 @@ impl Engine {
     /// Reads the database again.
     pub fn reload_data(&mut self) {
         if let Some(store) = &self.store {
-            match store.load() {
+            match self.read(store) {
                 Ok((perms, _)) => {
                     self.perms = perms;
                     self.changed_everything();
+                    self.reread();
                 }
                 Err(e) => self.broken = Some(e.to_string()),
             }
@@ -352,17 +460,17 @@ impl Engine {
     /// with Mojang) at `now`: kept in memory while the player is online,
     /// written to the database for later. Returns the line to log when the
     /// name leaves a UUID that still has groups, permissions or meta.
-    pub fn seen(&mut self, uuid: &str, name: &str, online: bool, _now: u64) -> Result<Option<String>, String> {
+    pub fn seen(&mut self, uuid: &str, name: &str, online: bool, now: u64) -> Result<Option<String>, String> {
         let known = KnownName { uuid: uuid.to_string(), name: name.to_string(), online };
         self.connected.insert(uuid.to_string(), known.clone());
+        self.visitors.retain(|v| v != uuid);
+        self.load_user(uuid, now);
         self.perms.set_user_name(uuid, name);
         let Some(store) = self.store.as_ref().filter(|_| self.broken.is_none()) else { return Ok(None) };
         let mut damaged = Vec::new();
         let previous = store.save_name(&known, &mut damaged);
         self.note_damaged(damaged);
-        let left = previous
-            .map_err(|e| e.to_string())?
-            .filter(|old| old != uuid && self.perms.user(old).is_some_and(|u| !u.data.is_empty()));
+        let left = previous.map_err(|e| e.to_string())?.filter(|old| old != uuid && self.has_data(old));
         Ok(left.map(|old| {
             format!(
                 "PumboPerms: the name {name} moved from {old} to {uuid}; the groups, permissions and meta of {old} stay with {old}"
@@ -370,10 +478,24 @@ impl Engine {
         }))
     }
 
+    /// Whether a player has groups, permissions or meta of their own, in
+    /// memory or in the database (a read error counts as none).
+    fn has_data(&self, uuid: &str) -> bool {
+        if self.perms.knows(uuid) {
+            return self.perms.user(uuid).is_some_and(|u| !u.data.is_empty());
+        }
+        let stored = self.store.as_ref().map(|s| s.user(uuid));
+        stored.is_some_and(|r| r.is_ok_and(|u| u.is_some_and(|u| !u.data.is_empty())))
+    }
+
     /// A player left (the platform calls it once no session of the UUID
-    /// is left): their name comes from the database from now on.
+    /// is left): their name comes from the database from now on, and their
+    /// record waits among the others of players who are not online.
     pub fn gone(&mut self, uuid: &str) {
-        self.connected.remove(uuid);
+        if self.connected.remove(uuid).is_some() && self.perms.lazy() && self.perms.knows(uuid) {
+            self.visitors.push_back(uuid.to_string());
+        }
+        self.trim();
     }
 
     /// Players with their own groups, permissions or meta.
@@ -398,7 +520,12 @@ impl Engine {
         if let Some(known) = self.connected.get(&uuid) {
             return Some(known.clone());
         }
-        let recorded = self.perms.user(&uuid).map(|u| u.name.clone()).filter(|n| !n.is_empty());
+        let recorded = if self.perms.knows(&uuid) {
+            self.perms.user(&uuid).map(|u| u.name.clone())
+        } else {
+            self.store.as_ref().and_then(|s| s.user(&uuid).ok().flatten()).map(|u| u.name)
+        };
+        let recorded = recorded.filter(|n| !n.is_empty());
         let known = match recorded {
             Some(name) => Some(KnownName { uuid: uuid.clone(), name, online: false }),
             None => self.stored(|store, damaged| store.name_of(&uuid, damaged)),
@@ -439,21 +566,25 @@ impl Engine {
         std::mem::take(&mut self.damaged_names.borrow_mut().1)
     }
 
-    /// Drops expired nodes and saves that. Returns whether something was due
-    /// and the result of saving: a node past its time is gone from every
-    /// answer either way (they skip expired nodes), so the platform sends the
-    /// new decisions even when saving failed; the next call tries again.
+    /// Drops expired nodes and saves that, with the records whose ended
+    /// entries went when they were read. Returns whether something in memory
+    /// was due and the result of saving: a node past its time is gone from
+    /// every answer either way (they skip expired nodes), so the platform
+    /// sends the new decisions even when saving failed; the next call tries
+    /// again.
     pub fn expire(&mut self, now: u64) -> (bool, Result<(), String>) {
-        if self.perms.next_expiry().is_none_or(|t| t > now) {
+        let due = self.perms.next_expiry().is_some_and(|t| t <= now);
+        if !due && self.swept.is_empty() {
             return (false, Ok(()));
         }
         self.begin();
-        let dirty = self.perms.expire(now);
+        let mut dirty = if due { self.perms.expire(now) } else { Dirty::default() };
+        dirty.users.extend(self.swept.iter().cloned());
         if dirty.is_empty() {
             self.end();
-            return (true, Ok(()));
+            return (due, Ok(()));
         }
-        (true, self.commit(&dirty, None))
+        (due, self.commit(&dirty, None))
     }
 
     /// Whether changes can be saved.

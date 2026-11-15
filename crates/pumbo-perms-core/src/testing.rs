@@ -1,11 +1,28 @@
 //! Test helpers shared with the platform crates (feature `testing`).
 //!
+//! [`Engine::lazy`] is an engine on a store in memory that reads players'
+//! records when needed, as it does on a database file.
+//!
 //! `pumpkin_has` models how Pumpkin 0.2.0 reads the attributes a player gets:
 //! `PermissionManager::has_permission`, `pumpkin-util/src/permission.rs:330-392`.
 //! PumboProx keeps a copy with the same case table
 //! (`pumbo-host/tests/pumpkin_model`); a new Pumpkin release changes both.
 
 use std::collections::HashMap;
+
+use pumbo_common::lang::Lang;
+
+use crate::config::CoreCfg;
+use crate::engine::Engine;
+use crate::store::PermsStore;
+
+impl Engine {
+    /// An engine on a fresh in-memory store that keeps players' records in
+    /// the database until they are needed.
+    pub fn lazy(cfg: CoreCfg, lang: Lang) -> Self {
+        Self::open(PermsStore::in_memory(), cfg, lang, true)
+    }
+}
 
 /// Pumpkin's answer from the attributes alone; `None`: its registry decides.
 pub fn pumpkin_has(attachments: &HashMap<String, bool>, node: &str) -> Option<bool> {
