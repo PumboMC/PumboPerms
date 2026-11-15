@@ -360,6 +360,80 @@ mod storage_and_import {
         }
     }
 
+    /// What memory holds: the export and every user record.
+    fn held(e: &Engine) -> (export::Snapshot, Vec<crate::model::User>) {
+        let mut users: Vec<crate::model::User> = e.perms.users().cloned().collect();
+        users.sort_by(|a, b| a.uuid.cmp(&b.uuid));
+        (export::snapshot(&e.perms, 0), users)
+    }
+
+    #[test]
+    fn import_preview_changes_nothing() {
+        let mut e = engine();
+        import(&mut e, "f1", ranks_source(""));
+        console(&mut e, "user Alex parent add mod");
+        let (before, ledger) = (held(&e), e.ledger("file").unwrap());
+        // Steve's parent goes and mod gets a node.
+        let mut next = ranks_source(r#",{"node":"a.new","value":true}"#);
+        next.users.clear();
+        let out = import_source(&mut e, &Who::console(), "file", Ok(("f2".into(), next)), SourceMode::Preview, 2_000);
+        assert!(out.reply.plain().contains("would add 1 entries"), "{}", out.reply.plain());
+        assert!(!out.changed && out.log.is_none());
+        assert_eq!((held(&e), e.ledger("file").unwrap()), (before.clone(), ledger));
+        e.reload_data();
+        assert_eq!(held(&e), before, "memory is what the disk has");
+    }
+
+    #[test]
+    fn failed_import_leaves_the_data() {
+        const JEB: &str = "00000000-0000-0000-0000-0000000000e1";
+        let (mut e, faults) = faulty_engine();
+        let mut first = ranks_source("");
+        let in_mod = crate::model::Data {
+            parents: vec![crate::model::ParentNode {
+                group: "mod".into(),
+                context: crate::context::Contexts::global(),
+                expiry: None,
+            }],
+            ..crate::model::Data::default()
+        };
+        first.by_name = vec![crate::model::User { uuid: String::new(), name: "Jeb_".into(), data: in_mod }];
+        import(&mut e, "f1", first);
+        console(&mut e, "user Steve parent add mod");
+        let before = (held(&e), e.ledger("file").unwrap());
+        type Attempt = fn(&mut Engine) -> command::Outcome;
+        let attempts: [(&str, Attempt); 3] = [
+            ("run", |e| {
+                let next = ranks_source(r#",{"node":"a.new","value":true}"#);
+                import_source(e, &Who::console(), "file", Ok(("f2".into(), next)), SourceMode::Run, 2_000)
+            }),
+            ("undo", |e| import_source(e, &Who::console(), "file", Err(String::new()), SourceMode::Undo, 2_000)),
+            ("file", |e| {
+                let json = r#"{"format":"pumboperms","version":1,"groups":[{"name":"other"}]}"#;
+                command::import(e, &Who::console(), "b", json, "before", 2_000)
+            }),
+        ];
+        for (name, attempt) in attempts {
+            faults.writes.store(1, Ordering::SeqCst);
+            let out = attempt(&mut e);
+            assert!(!out.changed && out.reply.plain().contains("write failed"), "{name}: {}", out.reply.plain());
+            assert_eq!((held(&e), e.ledger("file").unwrap()), before, "{name}");
+        }
+        // The player the import waits for joins while the write fails.
+        e.seen(JEB, "Jeb_", true, 2_000).unwrap();
+        let before = (held(&e), e.ledger("file").unwrap());
+        faults.writes.store(1, Ordering::SeqCst);
+        let out = command::on_join(&mut e, JEB, "Jeb_", true, 2_000);
+        assert!(out.len() == 1 && !out[0].changed, "{:?}", out.iter().map(|o| o.reply.plain()).collect::<Vec<_>>());
+        assert_eq!((held(&e), e.ledger("file").unwrap()), before, "pending");
+        assert!(
+            command::on_join(&mut e, JEB, "Jeb_", true, 3_000).iter().any(|o| o.changed),
+            "it waits for the next join"
+        );
+        e.reload_data();
+        assert_eq!(held(&e).0.groups, before.0.0.groups, "memory is what the disk has");
+    }
+
     #[test]
     fn noop_command_on_read_error_does_not_break_engine() {
         let (mut e, faults) = faulty_engine();

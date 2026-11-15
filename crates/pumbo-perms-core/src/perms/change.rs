@@ -378,11 +378,4 @@ impl Perms {
         }
         dirty
     }
-
-    /// Replaces everything (import). Missing default group is added.
-    pub fn replace_all(&mut self, groups: Vec<Group>, users: Vec<User>, tracks: Vec<Track>) {
-        let (mut fresh, _) = Self::from_parts(groups, users, tracks);
-        fresh.generation = self.generation.wrapping_add(1);
-        *self = fresh;
-    }
 }

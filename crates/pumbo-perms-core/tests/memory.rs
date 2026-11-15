@@ -251,7 +251,8 @@ fn one_change_copies_what_it_touches() {
     }
 }
 
-/// A player joins for whom an import waits, among 20 000 players in a group.
+/// A player joins for whom an import waits, among 20 000 players in a group:
+/// the import adds to that player alone and copies nothing else.
 #[test]
 #[ignore = "release benchmark"]
 fn pending_import_at_join_copies_nothing() {
@@ -279,6 +280,7 @@ fn pending_import_at_join_copies_nothing() {
     println!("memory: 20000 players in a group, a join with an import waiting for it, heap peak +{grown:.2} MiB");
     drop(e);
     let _ = std::fs::remove_dir_all(&dir);
+    assert!(grown < 1.0, "{grown:.2} MiB");
 }
 
 /// 100 000 and 400 000 players in a group, counted from before the start: the

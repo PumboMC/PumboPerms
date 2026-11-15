@@ -397,8 +397,7 @@ mod tests {
         p.track_insert("ranks", "vip", None).unwrap();
         let json = dump(&p, 5);
         let snap = parse(&json).unwrap();
-        let mut q = Perms::new();
-        q.replace_all(snap.groups, snap.users, snap.tracks);
+        let (mut q, _) = Perms::from_parts(snap.groups, snap.users, snap.tracks);
         assert_eq!(q.check(U, "fly", &Query::default(), 0), Some(true));
         assert_eq!(q.track("ranks").unwrap().groups, vec!["vip"]);
     }

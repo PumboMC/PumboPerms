@@ -8,13 +8,15 @@ use crate::context;
 use crate::engine::Engine;
 use crate::export::Snapshot;
 use crate::merge::{self, Ledger};
+use crate::perms::Perms;
 use crate::store::LogEntry;
 use crate::ui::{self, Text, value};
 
 use super::{Outcome, SourceMode, Who};
 
-/// Runs an import after the platform read the file: replaces everything and
-/// saves it (the platform exports a backup first).
+/// Runs an import after the platform read the file: replaces everything in
+/// the database in one transaction and reads it again (the platform exports
+/// a backup first). Memory changes only once the database has the file.
 pub fn import(e: &mut Engine, who: &Who, file: &str, json: &str, backup: &str, now: u64) -> Outcome {
     let mut snap = match crate::export::parse(json) {
         Ok(s) => s,
@@ -23,8 +25,6 @@ pub fn import(e: &mut Engine, who: &Who, file: &str, json: &str, backup: &str, n
     let counts = (snap.groups.len(), snap.users.len(), snap.tracks.len());
     let fixed = std::mem::take(&mut snap.fixed);
     let worlds = world_warning(e, &snap);
-    let before = e.perms.clone();
-    e.perms.replace_all(snap.groups, snap.users, snap.tracks);
     let log = LogEntry {
         time: now,
         actor: who.name.clone(),
@@ -35,14 +35,15 @@ pub fn import(e: &mut Engine, who: &Who, file: &str, json: &str, backup: &str, n
     };
     let saved = match e.store() {
         Some(store) if e.broken.is_none() => {
-            store.replace_all(&e.perms, Some(&log), e.cfg.log.max_entries).map_err(|x| x.to_string())
+            let (fresh, _) = Perms::from_parts(snap.groups, snap.users, snap.tracks);
+            store.replace_all(&fresh, Some(&log), e.cfg.log.max_entries).map_err(|x| x.to_string())
         }
         _ => Err(e.broken.clone().unwrap_or_else(|| "no database".into())),
     };
     if let Err(err) = saved {
-        e.perms = before;
         return Outcome::reply(ui::error(&e.lang, "import-failed", &Args::new().arg(value(err))));
     }
+    e.reload_data();
     e.changed_everything();
     let a =
         Args::new().arg(value(counts.0)).arg(value(counts.1)).arg(value(counts.2)).arg(value(file)).arg(value(backup));
@@ -81,11 +82,11 @@ pub fn import_source(
         Err(why) => return fail(e, why),
     };
     if mode == SourceMode::Undo {
-        let before = e.perms.clone();
+        e.begin();
         let (dirty, n) = merge::undo(&mut e.perms, &ledger);
         let entry = log(format!("import undo {source}: {n} entries"));
+        // A failed save undoes the change itself.
         if let Err(why) = e.commit_import(&dirty, Some(&entry), source, &Ledger::default()) {
-            e.perms = before;
             return fail(e, why);
         }
         let a = Args::new().arg(value(source)).arg(value(n));
@@ -141,12 +142,12 @@ pub fn import_source(
     let all: HashSet<String> = merge::candidates(&snap).iter().map(merge::Entry::key).collect();
     let (kept, gone): (Vec<merge::Entry>, Vec<merge::Entry>) =
         ledger.entries.iter().cloned().partition(|x| all.contains(&x.key()));
-    let before = e.perms.clone();
+    e.begin();
     let (mut dirty, removed) = merge::undo(&mut e.perms, &Ledger { entries: gone.clone(), ..Ledger::default() });
     let mut plan = merge::plan(&e.perms, &snap);
     merge::skip_recorded(&mut plan, &e.perms, &ledger.entries);
     if mode == SourceMode::Preview {
-        e.perms = before;
+        e.rollback();
         let a = Args::new().arg(value(source)).arg(value(plan.entries.len())).arg(value(plan.conflicts.len()));
         let mut reply = ui::header(&e.lang, "import-source-preview", &a);
         fixed_lines(e, &snap.fixed, &mut reply);
@@ -183,7 +184,6 @@ pub fn import_source(
     entries.extend(added.iter().cloned());
     let new = Ledger { fingerprint, at: now, entries, pending: pending.clone(), resolved };
     if let Err(why) = e.commit_import(&dirty, Some(&log(action)), source, &new) {
-        e.perms = before;
         return fail(e, why);
     }
     let a = Args::new().arg(value(source)).arg(value(added.len())).arg(value(plan.conflicts.len()));
@@ -242,7 +242,7 @@ pub fn import_pending(e: &mut Engine, source: &str, uuid: &str, name: &str, onli
     let waiting = ledger.pending.remove(pos);
     let user = crate::model::User { uuid: uuid.to_string(), name: name.to_string(), data: waiting.data };
     let plan = merge::plan(&e.perms, &Snapshot { users: vec![user], ..Snapshot::default() });
-    let before = e.perms.clone();
+    e.begin();
     let (dirty, added) = merge::apply(&mut e.perms, &plan);
     let log = LogEntry {
         time: now,
@@ -256,7 +256,6 @@ pub fn import_pending(e: &mut Engine, source: &str, uuid: &str, name: &str, onli
     ledger.entries.extend(added);
     ledger.resolved.insert(key, uuid.to_string());
     if let Err(why) = e.commit_import(&dirty, Some(&log), source, &ledger) {
-        e.perms = before;
         let a = Args::new().arg(value(source)).arg(value(why));
         return Some(Outcome::reply(ui::error(&e.lang, "import-source-failed", &a)));
     }
