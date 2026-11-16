@@ -10,6 +10,7 @@ use pumbo_common::command::permission;
 use pumbo_common::id::Uuid;
 use pumbo_common::text::Args;
 
+use crate::context::Contexts;
 use crate::engine::Engine;
 use crate::ui::{self, Text, value};
 
@@ -32,6 +33,20 @@ pub(super) enum Aim<'a> {
     Track(&'a str),
 }
 
+/// A change whose target passed [`target`]: the node of its action, for
+/// [`change`].
+pub(super) struct Asked(String);
+
+/// What a change asks for beyond its target.
+#[derive(Default)]
+pub(super) struct Change<'a> {
+    /// The node, group, meta key, `prefix` or `suffix`, or `<track>.<group>`
+    /// of a track step.
+    pub argument: Option<String>,
+    /// `None`: the command has no contexts; `Some(global)`: a change without one.
+    pub contexts: Option<&'a Contexts>,
+}
+
 /// Proof that the limits were checked; only this module makes one.
 pub(super) struct Checked(());
 
@@ -41,14 +56,54 @@ pub(super) struct Checked(());
 /// `.modify.<group>`, a track `.modify.<track>`; where that node has no value,
 /// the general one: `pumbo.perms.modify.user.self|others`,
 /// `pumbo.perms.modify.group.<group>`, `pumbo.perms.modify.track.<track>`.
-pub(super) fn target(e: &mut Engine, who: &Who, action: &str, aim: Aim<'_>, now: u64) -> Result<Checked, Text> {
+pub(super) fn target(e: &mut Engine, who: &Who, action: &str, aim: Aim<'_>, now: u64) -> Result<Asked, Text> {
     aimed(e, who, action, &aim, "modify", now)?;
-    Ok(Checked(()))
+    Ok(Asked(permission(PLUGIN, action)))
 }
 
 /// The target of a view: [`target`] with `view` in place of `modify`.
 pub(super) fn view(e: &mut Engine, who: &Who, action: &str, aim: Aim<'_>, now: u64) -> Result<(), Text> {
     aimed(e, who, action, &aim, "view", now)
+}
+
+/// The rest of a change, read before it is made; the refusal names every
+/// node that is missing. With `argument-permissions` on, `<action
+/// node>.<argument>` has to give `true`. A change without a context needs
+/// `<action node>.usecontext.global`, or where that has no value
+/// `pumbo.perms.usecontext.global`; a change with contexts is refused only
+/// when, for one `key=value`, `<action node>.usecontext.<key>.<value>` or,
+/// without a value, `pumbo.perms.usecontext.<key>.<value>` gives `false`.
+pub(super) fn change(e: &mut Engine, who: &Who, asked: &Asked, c: &Change<'_>, now: u64) -> Result<Checked, Text> {
+    if who.is_console() || !e.cfg.limits.argument_permissions {
+        return Ok(Checked(()));
+    }
+    let own = &asked.0;
+    let mut nodes = Vec::new();
+    match c.contexts {
+        Some(ctx) if ctx.is_global() => {
+            let general = permission(PLUGIN, "usecontext.global");
+            nodes.extend(missing(e, who, &format!("{own}.usecontext.global"), &general, now));
+        }
+        Some(ctx) => {
+            for (key, val) in ctx.iter() {
+                let mine = format!("{own}.usecontext.{key}.{val}");
+                let general = permission(PLUGIN, &format!("usecontext.{key}.{val}"));
+                let node = match decide(e, who, &mine, now) {
+                    Some(v) => (!v).then_some(mine),
+                    None => (decide(e, who, &general, now) == Some(false)).then_some(general),
+                };
+                nodes.extend(node);
+            }
+        }
+        None => {}
+    }
+    if let Some(arg) = &c.argument {
+        let node = format!("{own}.{arg}");
+        if decide(e, who, &node, now) != Some(true) {
+            nodes.push(node);
+        }
+    }
+    if nodes.is_empty() { Ok(Checked(())) } else { Err(refusal(e, &nodes)) }
 }
 
 /// A new group or track: there is nothing to limit.

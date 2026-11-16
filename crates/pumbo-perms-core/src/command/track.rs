@@ -8,7 +8,7 @@ use crate::ui::{self, Click, Line, row, value};
 
 use super::edit::{perms_error, save};
 use super::help::{track_help, unnamed_help};
-use super::limits::{self, Aim};
+use super::limits::{self, Aim, Change};
 use super::{Env, Outcome, Res, Who, allowed_prefix, lower, need, page_of, writable};
 
 pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
@@ -56,7 +56,8 @@ pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "delete" => {
             need(e, who, "track.delete", now)?;
-            let checked = limits::target(e, who, "track.delete", Aim::Track(&name), now)?;
+            let asked = limits::target(e, who, "track.delete", Aim::Track(&name), now)?;
+            let checked = limits::change(e, who, &asked, &Change::default(), now)?;
             writable(e)?;
             let dirty = e.perms.delete_track(&name).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "track-deleted", &n);
@@ -64,7 +65,8 @@ pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "append" | "insert" | "remove" | "clear" => {
             need(e, who, "track.edit", now)?;
-            let checked = limits::target(e, who, "track.edit", Aim::Track(&name), now)?;
+            let asked = limits::target(e, who, "track.edit", Aim::Track(&name), now)?;
+            let checked = limits::change(e, who, &asked, &Change::default(), now)?;
             writable(e)?;
             let group = rest.first().map(|g| g.to_lowercase());
             let (dirty, reply) = match (sub.as_str(), group) {

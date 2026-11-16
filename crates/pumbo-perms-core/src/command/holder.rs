@@ -3,7 +3,7 @@
 use pumbo_common::style;
 use pumbo_common::text::{self, Args, Style};
 
-use crate::context;
+use crate::context::{self, Contexts};
 use crate::engine::Engine;
 use crate::model::{Data, MetaKind, ParentNode, PermNode};
 use crate::node;
@@ -15,7 +15,7 @@ use super::edit::{
     save, split_any_context, split_context,
 };
 use super::help::{AFFIX_CHANGES, PARENT_CHANGES, holder_help, unnamed_help};
-use super::limits::{self, Aim};
+use super::limits::{self, Aim, Change};
 use super::target::{Target, checked_key, checked_text, find_user, is_meta_key};
 use super::view::{context_args, group_view, members_view, meta_view, nodes_view, parents_view, user_view};
 use super::{Env, Outcome, Res, Who, allowed_prefix, lower, need, page_of, view_page, writable};
@@ -46,7 +46,8 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "delete" => {
             need(e, who, "group.delete", now)?;
-            let checked = limits::target(e, who, "group.delete", Aim::Holder(&t), now)?;
+            let asked = limits::target(e, who, "group.delete", Aim::Holder(&t), now)?;
+            let checked = limits::change(e, who, &asked, &Change::default(), now)?;
             writable(e)?;
             let dirty = e.perms.delete_group(&name).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-deleted", &Args::new().arg(value(&name)));
@@ -61,7 +62,8 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
     match sub.as_str() {
         "rename" => {
             need(e, who, "group.rename", now)?;
-            let checked = limits::target(e, who, "group.rename", Aim::Holder(&t), now)?;
+            let asked = limits::target(e, who, "group.rename", Aim::Holder(&t), now)?;
+            let checked = limits::change(e, who, &asked, &Change::default(), now)?;
             writable(e)?;
             let Some(to) = rest.first().map(|n| n.to_lowercase()) else {
                 return Err(ui::usage(&e.lang, &format!("{} rename <new-name>", t.command(&e.root))));
@@ -72,7 +74,8 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "setweight" => {
             need(e, who, "group.setweight", now)?;
-            let checked = limits::target(e, who, "group.setweight", Aim::Holder(&t), now)?;
+            let asked = limits::target(e, who, "group.setweight", Aim::Holder(&t), now)?;
+            let checked = limits::change(e, who, &asked, &Change::default(), now)?;
             writable(e)?;
             let Some(raw) = rest.first() else {
                 return Err(ui::usage(&e.lang, &format!("{} setweight <weight>", t.command(&e.root))));
@@ -84,7 +87,8 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "setdisplayname" => {
             need(e, who, "group.setdisplayname", now)?;
-            let checked = limits::target(e, who, "group.setdisplayname", Aim::Holder(&t), now)?;
+            let asked = limits::target(e, who, "group.setdisplayname", Aim::Holder(&t), now)?;
+            let checked = limits::change(e, who, &asked, &Change::default(), now)?;
             writable(e)?;
             if rest.is_empty() {
                 return Err(ui::usage(&e.lang, &format!("{} setdisplayname <name|clear>", t.command(&e.root))));
@@ -141,11 +145,15 @@ fn holder_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], env: &Env)
         "promote" | "demote" if t.is_user() => step_cmd(e, who, t, &sub, rest, now),
         "clear" if t.is_user() => {
             need(e, who, "user.clear", now)?;
-            let checked = limits::target(e, who, "user.clear", Aim::Holder(t), now)?;
+            let asked = limits::target(e, who, "user.clear", Aim::Holder(t), now)?;
             if !rest.is_empty() {
                 return Err(ui::usage(&e.lang, &format!("{} clear", t.command(&e.root))));
             }
             writable(e)?;
+            // Every context at once: a change without one.
+            let global = Contexts::global();
+            let checked =
+                limits::change(e, who, &asked, &Change { contexts: Some(&global), ..Change::default() }, now)?;
             let ((), dirty) = t.edit(e, |d| *d = Data::default()).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "user-cleared", &Args::new().arg(t.shown(e)));
             save(checked, e, who, dirty, (kind, &t.label(), "clear".into()), reply, now)
@@ -178,7 +186,7 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
         "set" | "settemp" => {
             let action = format!("{kind}.permission.set");
             need(e, who, &action, now)?;
-            let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
+            let asked = limits::target(e, who, &action, Aim::Holder(t), now)?;
             writable(e)?;
             let temp = sub == "settemp";
             let usage = if temp {
@@ -204,6 +212,8 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                 Some(raw) => Some(parse_duration(e, raw)?),
                 None => None,
             };
+            let checked =
+                limits::change(e, who, &asked, &Change { argument: Some(node.clone()), contexts: Some(&ctx) }, now)?;
             // Changing an end time could cut a punishment short without a word.
             let timed = |p: &PermNode| p.node == node && p.context == ctx && p.expiry.is_some_and(|x| x > now);
             if temp && t.data(e).is_some_and(|d| d.permissions.iter().any(timed)) {
@@ -231,13 +241,15 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
         "unset" | "unsettemp" => {
             let action = format!("{kind}.permission.unset");
             need(e, who, &action, now)?;
-            let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
+            let asked = limits::target(e, who, &action, Aim::Holder(t), now)?;
             writable(e)?;
             let Some(raw) = pos.first() else {
                 return Err(ui::usage(&e.lang, &format!("{base} {sub} <node> [context...]")));
             };
             let node = parse_node(e, raw)?;
             not_group_node(e, t, &node)?;
+            let checked =
+                limits::change(e, who, &asked, &Change { argument: Some(node.clone()), contexts: Some(&ctx) }, now)?;
             let temp = sub == "unsettemp";
             let (removed, dirty) =
                 t.edit(e, |d| d.unset_permission(&node, &ctx, temp)).map_err(|err| perms_error(e, &err))?;
@@ -253,8 +265,9 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
         "clear" => {
             let action = format!("{kind}.permission.clear");
             need(e, who, &action, now)?;
-            let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
+            let asked = limits::target(e, who, &action, Aim::Holder(t), now)?;
             writable(e)?;
+            let checked = limits::change(e, who, &asked, &Change { contexts: Some(&ctx), ..Change::default() }, now)?;
             let only =
                 if ctx.is_global() && !args.iter().any(|a| context::is_context_arg(a)) { None } else { Some(&ctx) };
             let (count, dirty) = t.edit(e, |d| d.clear_permissions(only)).map_err(|err| perms_error(e, &err))?;
@@ -360,7 +373,7 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
     };
     let right = format!("{kind}.parent.{action}");
     need(e, who, &right, now)?;
-    let checked = limits::target(e, who, &right, Aim::Holder(t), now)?;
+    let asked = limits::target(e, who, &right, Aim::Holder(t), now)?;
     writable(e)?;
     let adds_temp = temp && action == "add";
     let usage = if adds_temp {
@@ -380,6 +393,7 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
     if action != "remove" && e.perms.group(&group).is_none() {
         return Err(perms_error(e, &PermsError::NoGroup(group)));
     }
+    let checked = limits::change(e, who, &asked, &Change { argument: Some(group.clone()), contexts: Some(&ctx) }, now)?;
     let a = Args::new().with("group", value(&group)).with("target", t.shown(e)).with("context", in_context(e, &ctx));
     let (key, dirty) = match (action, t) {
         ("add", Target::Group { name }) => {
@@ -452,9 +466,11 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
     let removing = sub == "unset" || affix.is_some_and(|(verb, ..)| verb == "remove");
     let action = format!("{kind}.meta.{}", if removing { "unset" } else { "set" });
     need(e, who, &action, now)?;
-    let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
+    let asked = limits::target(e, who, &action, Aim::Holder(t), now)?;
     writable(e)?;
     let mut a = Args::new().with("target", t.shown(e)).with("context", in_context(e, &ctx));
+    let change = |argument: &str| Change { argument: Some(argument.to_string()), contexts: Some(&ctx) };
+    let checked;
     let (key, dirty) = match (sub.as_str(), affix) {
         ("set", _) => {
             let (Some(k), Some(v)) = (pos.first(), pos.get(1)) else {
@@ -468,6 +484,7 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
             let v = pos.get(1..).map(|p| p.join(" ")).unwrap_or_else(|| v.clone());
             checked_text(e, &v)?;
             a = a.with("key", value(&k)).with("value", value(&v));
+            checked = limits::change(e, who, &asked, &change(&k), now)?;
             let ((), d) = t.edit(e, |data| data.set_meta(&k, &v, &ctx, None)).map_err(|err| perms_error(e, &err))?;
             ("meta-set", d)
         }
@@ -477,6 +494,7 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
             };
             checked_key(e, &k, &format!("{base} unset <key> [context...]"))?;
             a = a.with("key", value(&k));
+            checked = limits::change(e, who, &asked, &change(&k), now)?;
             let (removed, d) = t.edit(e, |data| data.unset_meta(&k, &ctx)).map_err(|err| perms_error(e, &err))?;
             if !removed {
                 e.rollback();
@@ -494,6 +512,7 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
                 let prio = parse_int(e, raw)?;
                 let text_arg = pos.get(1).cloned();
                 a = a.with("priority", value(prio));
+                checked = limits::change(e, who, &asked, &change(which), now)?;
                 let (count, d) = t
                     .edit(e, |data| data.remove_affix(mk, prio, text_arg.as_deref(), &ctx, temp))
                     .map_err(|err| perms_error(e, &err))?;
@@ -525,6 +544,7 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
                 };
                 a = a.with("priority", value(prio)).with("text", format!("{}&r", txt));
                 let exp = dur.map(|d| expiry(now, d));
+                checked = limits::change(e, who, &asked, &change(which), now)?;
                 let (changed, d) = t
                     .edit(e, |data| data.add_affix(mk, prio, txt, &ctx, exp, replace))
                     .map_err(|err| perms_error(e, &err))?;
@@ -556,7 +576,7 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
 fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], now: u64) -> Res {
     let action = format!("user.{sub}");
     need(e, who, &action, now)?;
-    let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
+    let asked = limits::target(e, who, &action, Aim::Holder(t), now)?;
     writable(e)?;
     let (pos, ctx) = split_context(e, args)?;
     let Some(track) = pos.first().map(|t| t.to_lowercase()) else {
@@ -565,11 +585,11 @@ fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], n
     let Target::User { uuid, name } = t else {
         return Err(ui::unknown(&e.lang, sub, &format!("{} help", e.root)));
     };
+    // The context before the track: where the track ends tells only who may change there.
+    limits::change(e, who, &asked, &Change { contexts: Some(&ctx), ..Change::default() }, now)?;
     let up = sub == "promote";
     let a = Args::new().with("target", t.shown(e)).with("track", value(&track)).with("context", in_context(e, &ctx));
-    let result =
-        if up { e.perms.promote(uuid, name, &track, &ctx, now) } else { e.perms.demote(uuid, name, &track, &ctx, now) };
-    let (step, dirty) = match result {
+    let plan = match e.perms.step_plan(uuid, &track, &ctx, up, now) {
         Ok(r) => r,
         Err(PermsError::TrackEnd(g)) => return Err(ui::error(&e.lang, "track-end", &a.with("group", value(g)))),
         Err(PermsError::TrackStart(g)) => return Err(ui::error(&e.lang, "track-start", &a.with("group", value(g)))),
@@ -579,6 +599,24 @@ fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], n
         }
         Err(err) => return Err(perms_error(e, &err)),
     };
+    // A step down gives the lower group too: it needs its node, as for `parent add`.
+    let lower = if up { None } else { plan.to.clone().filter(|g| g.as_str() != e.perms.default_group()) };
+    if let Some(lower) = &lower {
+        let c = Change { argument: Some(format!("{track}.{lower}")), ..Change::default() };
+        limits::change(e, who, &asked, &c, now)?;
+    }
+    // The group the player goes up to, or the one the player leaves.
+    let rung = if up { plan.to } else { plan.from }.unwrap_or_default();
+    let checked = limits::change(
+        e,
+        who,
+        &asked,
+        &Change { argument: Some(format!("{track}.{rung}")), ..Change::default() },
+        now,
+    )?;
+    let result =
+        if up { e.perms.promote(uuid, name, &track, &ctx, now) } else { e.perms.demote(uuid, name, &track, &ctx, now) };
+    let (step, dirty) = result.map_err(|err| perms_error(e, &err))?;
     let to = step.to.clone().unwrap_or_default();
     let until = match step.expiry {
         Some(x) => format!(" ({})", e.lang.format("expires-in", &Args::new().arg(value(left(now, x))))),

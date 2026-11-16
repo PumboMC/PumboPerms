@@ -277,3 +277,198 @@ fn refusal_leaves_data_ledger_and_log_unchanged() {
     }
     assert_eq!(everything(&mut e), before);
 }
+
+#[test]
+fn arguments_need_their_nodes() {
+    let mut e = limited(true, false);
+    grant(
+        &mut e,
+        &[
+            "pumbo.perms.user.permission.set",
+            "pumbo.perms.user.parent.add",
+            "pumbo.perms.user.meta.set",
+            "pumbo.perms.user.meta.unset",
+            "pumbo.perms.user.promote",
+            "pumbo.perms.user.demote",
+            "pumbo.perms.modify.user.others",
+            "pumbo.perms.usecontext.global",
+        ],
+    );
+    // A node as it is stored, with its namespace.
+    let set = "pumbo.perms.user.permission.set";
+    let gamemode = "user Steve permission set minecraft:command.gamemode";
+    assert_refused(&as_mod(&mut e, gamemode), &format!("{set}.minecraft:command.gamemode"));
+    grant(&mut e, &[&format!("{set}.minecraft.command.gamemode")]);
+    assert_refused(&as_mod(&mut e, gamemode), &format!("{set}.minecraft:command.gamemode"));
+    grant(&mut e, &[&format!("{set}.minecraft:command.gamemode")]);
+    assert_passed(&as_mod(&mut e, gamemode));
+    assert_refused(
+        &as_mod(&mut e, "user Steve permission set minecraft:command.kick"),
+        &format!("{set}.minecraft:command.kick"),
+    );
+    grant(&mut e, &[&format!("{set}.minecraft:command.*")]);
+    assert_passed(&as_mod(&mut e, "user Steve permission set minecraft:command.kick"));
+    assert_refused(&as_mod(&mut e, "user Steve permission set pumbobans:ban"), &format!("{set}.pumbo.bans.ban"));
+    // A group, a meta key and prefixes and suffixes, in lower case.
+    assert_refused(&as_mod(&mut e, "user Steve parent add VIP"), "pumbo.perms.user.parent.add.vip");
+    grant(
+        &mut e,
+        &["pumbo.perms.user.parent.add.vip", "pumbo.perms.user.meta.set.color", "pumbo.perms.user.meta.set.prefix"],
+    );
+    assert_passed(&as_mod(&mut e, "user Steve parent add VIP"));
+    assert_refused(&as_mod(&mut e, "user Steve meta set Size 2"), "pumbo.perms.user.meta.set.size");
+    assert_passed(&as_mod(&mut e, "user Steve meta set Color red"));
+    assert_passed(&as_mod(&mut e, "user Steve meta setprefix 10 [V]"));
+    assert_refused(&as_mod(&mut e, "user Steve meta addsuffix 10 [V]"), "pumbo.perms.user.meta.set.suffix");
+    assert_refused(&as_mod(&mut e, "user Steve meta removeprefix 10"), "pumbo.perms.user.meta.unset.prefix");
+    assert_refused(&as_mod(&mut e, "user Steve meta unset color"), "pumbo.perms.user.meta.unset.color");
+    // Promote names the group the player goes up to; demote the one the player
+    // leaves and the one below it, which the player gets.
+    console(&mut e, "user Alex parent add helper");
+    assert_refused(&as_mod(&mut e, "promote Alex ranks"), "pumbo.perms.user.promote.ranks.mod");
+    grant(&mut e, &["pumbo.perms.user.promote.ranks.mod"]);
+    assert!(as_mod(&mut e, "promote Alex ranks").contains("Promoted"));
+    assert_refused(&as_mod(&mut e, "demote Alex ranks"), "pumbo.perms.user.demote.ranks.helper");
+    grant(&mut e, &["pumbo.perms.user.demote.ranks.helper"]);
+    assert_refused(&as_mod(&mut e, "demote Alex ranks"), "pumbo.perms.user.demote.ranks.mod");
+    grant(&mut e, &["pumbo.perms.user.demote.ranks.mod"]);
+    assert!(as_mod(&mut e, "demote Alex ranks").contains("Demoted"));
+    // The wildcard of an action covers every argument; an explicit false refuses one.
+    grant(&mut e, &["pumbo.perms.user.parent.add.*", "pumbo.perms.user.parent.add.admin false"]);
+    assert_passed(&as_mod(&mut e, "user Steve parent add staff"));
+    assert_refused(&as_mod(&mut e, "user Steve parent add admin"), "pumbo.perms.user.parent.add.admin");
+}
+
+#[test]
+fn global_change_needs_usecontext_global() {
+    let mut e = limited(true, false);
+    grant(
+        &mut e,
+        &[
+            "pumbo.perms.user.parent.add",
+            "pumbo.perms.user.parent.add.vip",
+            "pumbo.perms.user.permission.clear",
+            "pumbo.perms.user.clear",
+            "pumbo.perms.modify.user.others",
+        ],
+    );
+    assert_refused(&as_mod(&mut e, "user Steve parent add vip"), "pumbo.perms.usecontext.global");
+    assert_passed(&as_mod(&mut e, "user Steve parent add vip server=lobby"));
+    assert_refused(&as_mod(&mut e, "user Steve permission clear"), "pumbo.perms.usecontext.global");
+    assert_passed(&as_mod(&mut e, "user Steve permission clear server=lobby"));
+    // Clearing a player takes every context at once: a change without one.
+    assert_refused(&as_mod(&mut e, "user Steve clear"), "pumbo.perms.usecontext.global");
+    // The node of the action decides first.
+    grant(&mut e, &["pumbo.perms.user.clear.usecontext.global"]);
+    assert_passed(&as_mod(&mut e, "user Steve clear"));
+    grant(&mut e, &["pumbo.perms.usecontext.global", "pumbo.perms.user.parent.add.usecontext.global false"]);
+    assert_passed(&as_mod(&mut e, "user Steve permission clear"));
+    assert_refused(&as_mod(&mut e, "user Steve parent add vip"), "pumbo.perms.user.parent.add.usecontext.global");
+}
+
+#[test]
+fn context_is_refused_only_when_set_false() {
+    let mut e = limited(true, false);
+    grant(
+        &mut e,
+        &["pumbo.perms.user.parent.add", "pumbo.perms.user.parent.add.vip", "pumbo.perms.modify.user.others"],
+    );
+    assert_passed(&as_mod(&mut e, "user Steve parent add vip server=lobby"));
+    grant(&mut e, &["pumbo.perms.usecontext.server.survival false"]);
+    let survival = "pumbo.perms.usecontext.server.survival";
+    assert_refused(&as_mod(&mut e, "user Steve parent add vip server=survival"), survival);
+    assert_refused(&as_mod(&mut e, "user Steve parent add vip server=survival world=nether"), survival);
+    assert_passed(&as_mod(&mut e, "user Steve parent add vip world=nether"));
+    // The node of the action decides before the general one.
+    grant(&mut e, &["pumbo.perms.user.parent.add.usecontext.server.survival"]);
+    assert_passed(&as_mod(&mut e, "user Steve parent add vip server=survival"));
+    grant(&mut e, &["pumbo.perms.user.parent.add.usecontext.world.end false"]);
+    assert_refused(
+        &as_mod(&mut e, "user Steve parent add vip world=end"),
+        "pumbo.perms.user.parent.add.usecontext.world.end",
+    );
+}
+
+#[test]
+fn action_wildcard_opens_its_targets_and_contexts() {
+    let mut e = limited(true, false);
+    console(&mut e, "user Mod parent add mod");
+    grant(
+        &mut e,
+        &[
+            "pumbo.perms.user.parent.add",
+            "pumbo.perms.user.parent.add.*",
+            "pumbo.perms.group.permission.set",
+            "pumbo.perms.group.permission.set.*",
+        ],
+    );
+    // Oneself, one's own group and changes without a context.
+    assert_passed(&as_mod(&mut e, "user Mod parent add admin"));
+    assert_passed(&as_mod(&mut e, "group mod permission set fly"));
+    // An explicit false on a target closes it again.
+    grant(
+        &mut e,
+        &["pumbo.perms.user.parent.add.modify.self false", "pumbo.perms.group.permission.set.modify.mod false"],
+    );
+    console(&mut e, "user Mod parent remove admin");
+    assert_refused(&as_mod(&mut e, "user Mod parent add admin"), "pumbo.perms.user.parent.add.modify.self");
+    assert_refused(&as_mod(&mut e, "group mod permission set kick"), "pumbo.perms.group.permission.set.modify.mod");
+    assert_passed(&as_mod(&mut e, "user Steve parent add admin"));
+    // Without the wildcard the same kind of change needs the context node.
+    grant(
+        &mut e,
+        &[
+            "pumbo.perms.user.permission.set",
+            "pumbo.perms.user.permission.set.modify.others",
+            "pumbo.perms.user.permission.set.fly",
+        ],
+    );
+    assert_refused(&as_mod(&mut e, "user Steve permission set fly"), "pumbo.perms.usecontext.global");
+}
+
+#[test]
+fn refusal_names_every_missing_node() {
+    let mut e = limited(true, false);
+    grant(
+        &mut e,
+        &["pumbo.perms.user.parent.add", "pumbo.perms.modify.user.others", "pumbo.perms.usecontext.server.lobby false"],
+    );
+    let both = "pumbo.perms.usecontext.global, pumbo.perms.user.parent.add.vip";
+    assert_refused(&as_mod(&mut e, "user Steve parent add vip"), both);
+    let both = "pumbo.perms.usecontext.server.lobby, pumbo.perms.user.parent.add.vip";
+    assert_refused(&as_mod(&mut e, "user Steve parent add vip server=lobby"), both);
+}
+
+#[test]
+fn checks_come_before_the_edit() {
+    let mut e = limited(true, false);
+    console(&mut e, "user Steve parent add vip");
+    console(&mut e, "user Alex parent add admin");
+    grant(
+        &mut e,
+        &[
+            "pumbo.perms.user.parent.add",
+            "pumbo.perms.user.permission.unset",
+            "pumbo.perms.user.promote",
+            "pumbo.perms.group.parent.add",
+        ],
+    );
+    // The target first, before anything about the data.
+    assert_refused(&as_mod(&mut e, "user Steve parent add vip"), "pumbo.perms.modify.user.others");
+    assert_refused(&as_mod(&mut e, "user Steve permission unset fly"), "pumbo.perms.modify.user.others");
+    assert_refused(&as_mod(&mut e, "promote Alex ranks"), "pumbo.perms.modify.user.others");
+    // Then the context and the argument, still before "already" and "has no".
+    grant(&mut e, &["pumbo.perms.modify.user.others"]);
+    let add = "pumbo.perms.usecontext.global, pumbo.perms.user.parent.add.vip";
+    assert_refused(&as_mod(&mut e, "user Steve parent add vip"), add);
+    let unset = "pumbo.perms.usecontext.global, pumbo.perms.user.permission.unset.fly";
+    assert_refused(&as_mod(&mut e, "user Steve permission unset fly"), unset);
+    // A step off the end of the track: after the target and the context, before the argument.
+    assert_refused(&as_mod(&mut e, "promote Alex ranks"), "pumbo.perms.usecontext.global");
+    grant(&mut e, &["pumbo.perms.usecontext.global"]);
+    assert!(as_mod(&mut e, "promote Alex ranks").contains("already on the highest group"));
+    // A loop of groups is an error of the edit, after the checks.
+    console(&mut e, "group admin parent add helper");
+    assert!(console(&mut e, "group helper parent add admin").contains("loop"));
+    assert_refused(&as_mod(&mut e, "group helper parent add admin"), "pumbo.perms.modify.group.helper");
+}
