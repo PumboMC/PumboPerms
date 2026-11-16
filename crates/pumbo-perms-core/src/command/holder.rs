@@ -17,7 +17,7 @@ use super::edit::{
 use super::help::{AFFIX_CHANGES, PARENT_CHANGES, holder_help, unnamed_help};
 use super::target::{Target, checked_key, checked_text, find_user, is_meta_key};
 use super::view::{context_args, group_view, members_view, meta_view, nodes_view, parents_view, user_view};
-use super::{Env, Outcome, Res, Who, allowed_prefix, lower, need, page_of, view_page, writable};
+use super::{Env, Outcome, Res, Who, allowed_prefix, limits, lower, need, page_of, view_page, writable};
 
 pub(super) fn user_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
     let Some(name) = args.first() else {
@@ -41,14 +41,14 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
             writable(e)?;
             let dirty = e.perms.create_group(&name).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-created", &Args::new().arg(value(&name)));
-            return save(e, who, dirty, ("group", &name, "create".into()), reply, now);
+            return save(limits::unlimited(), e, who, dirty, ("group", &name, "create".into()), reply, now);
         }
         "delete" => {
             need(e, who, "group.delete", now)?;
             writable(e)?;
             let dirty = e.perms.delete_group(&name).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-deleted", &Args::new().arg(value(&name)));
-            return save(e, who, dirty, ("group", &name, "delete".into()), reply, now);
+            return save(limits::unlimited(), e, who, dirty, ("group", &name, "delete".into()), reply, now);
         }
         _ => {}
     }
@@ -65,7 +65,7 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
             };
             let dirty = e.perms.rename_group(&name, &to).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-renamed", &Args::new().arg(value(&name)).arg(value(&to)));
-            save(e, who, dirty, ("group", &name, format!("rename {to}")), reply, now)
+            save(limits::unlimited(), e, who, dirty, ("group", &name, format!("rename {to}")), reply, now)
         }
         "setweight" => {
             need(e, who, "group.setweight", now)?;
@@ -76,7 +76,7 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
             let w = parse_int(e, raw)?;
             let ((), dirty) = e.perms.edit_group(&name, |g| g.weight = w).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-weight", &Args::new().arg(value(&name)).arg(value(w)));
-            save(e, who, dirty, ("group", &name, format!("setweight {w}")), reply, now)
+            save(limits::unlimited(), e, who, dirty, ("group", &name, format!("setweight {w}")), reply, now)
         }
         "setdisplayname" => {
             need(e, who, "group.setdisplayname", now)?;
@@ -95,7 +95,7 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
             } else {
                 ui::success(&e.lang, "group-displayname", &Args::new().arg(value(&name)).arg(format!("{shown}&r")))
             };
-            save(e, who, dirty, ("group", &name, format!("setdisplayname {shown}")), reply, now)
+            save(limits::unlimited(), e, who, dirty, ("group", &name, format!("setdisplayname {shown}")), reply, now)
         }
         "listmembers" => {
             need(e, who, "group.listmembers", now)?;
@@ -139,7 +139,7 @@ fn holder_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], env: &Env)
             writable(e)?;
             let ((), dirty) = t.edit(e, |d| *d = Data::default()).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "user-cleared", &Args::new().arg(t.shown(e)));
-            save(e, who, dirty, (kind, &t.label(), "clear".into()), reply, now)
+            save(limits::unlimited(), e, who, dirty, (kind, &t.label(), "clear".into()), reply, now)
         }
         _ => Err(ui::unknown(&e.lang, &sub, &format!("{} help", t.command(&e.root)))),
     }
@@ -213,7 +213,7 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                 None => "perm-set",
             };
             let reply = ui::success(&e.lang, key, &a);
-            save(e, who, dirty, (kind, &t.label(), action_log), reply, now)
+            save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
         }
         "unset" | "unsettemp" => {
             need(e, who, &format!("{kind}.permission.unset"), now)?;
@@ -233,7 +233,7 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                 return Err(ui::error(&e.lang, "perm-unset-none", &a));
             }
             let reply = ui::success(&e.lang, "perm-unset", &a);
-            save(e, who, dirty, (kind, &t.label(), action_log), reply, now)
+            save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
         }
         "clear" => {
             need(e, who, &format!("{kind}.permission.clear"), now)?;
@@ -244,7 +244,7 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
             let a =
                 Args::new().with("count", value(count)).with("target", t.shown(e)).with("context", in_context(e, &ctx));
             let reply = ui::success(&e.lang, "perm-clear", &a);
-            save(e, who, dirty, (kind, &t.label(), action_log), reply, now)
+            save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
         }
         "check" => {
             need(e, who, &format!("{kind}.permission.check"), now)?;
@@ -400,7 +400,7 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
         None => a,
     };
     let reply = ui::success(&e.lang, key, &a);
-    save(e, who, dirty, (kind, &t.label(), action_log), reply, now)
+    save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
 }
 
 fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) -> Res {
@@ -523,7 +523,7 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
         _ => return Err(ui::unknown(&e.lang, &sub, &format!("{base} help"))),
     };
     let reply = ui::success(&e.lang, key, &a);
-    save(e, who, dirty, (kind, &t.label(), action_log), reply, now)
+    save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
 }
 
 fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], now: u64) -> Res {
@@ -563,5 +563,5 @@ fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], n
             ui::success(&e.lang, key, &a.with("from", value(e.perms.display_name(from))))
         }
     };
-    save(e, who, dirty, ("user", &t.label(), format!("{sub} {}", args.join(" "))), reply, now)
+    save(limits::unlimited(), e, who, dirty, ("user", &t.label(), format!("{sub} {}", args.join(" "))), reply, now)
 }

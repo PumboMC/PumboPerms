@@ -12,10 +12,13 @@ use crate::perms::{Dirty, PermsError};
 use crate::store::LogEntry;
 use crate::ui::{self, Text, value};
 
+use super::limits::Checked;
 use super::{Outcome, Res, Who};
 
-/// Saves a change, writes the log entry, gives the success reply.
+/// Saves a change, writes the log entry, gives the success reply. Only a
+/// change that passed the staff limits ([`Checked`]) can be saved.
 pub(super) fn save(
+    _checked: Checked,
     e: &mut Engine,
     who: &Who,
     dirty: Dirty,

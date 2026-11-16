@@ -8,7 +8,7 @@ use crate::ui::{self, Click, Line, row, value};
 
 use super::edit::{perms_error, save};
 use super::help::{track_help, unnamed_help};
-use super::{Env, Outcome, Res, Who, allowed_prefix, lower, need, page_of, writable};
+use super::{Env, Outcome, Res, Who, allowed_prefix, limits, lower, need, page_of, writable};
 
 pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
     let now = env.now;
@@ -50,14 +50,14 @@ pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
             writable(e)?;
             let dirty = e.perms.create_track(&name).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "track-created", &n);
-            save(e, who, dirty, ("track", &name, log), reply, now)
+            save(limits::unlimited(), e, who, dirty, ("track", &name, log), reply, now)
         }
         "delete" => {
             need(e, who, "track.delete", now)?;
             writable(e)?;
             let dirty = e.perms.delete_track(&name).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "track-deleted", &n);
-            save(e, who, dirty, ("track", &name, log), reply, now)
+            save(limits::unlimited(), e, who, dirty, ("track", &name, log), reply, now)
         }
         "append" | "insert" | "remove" | "clear" => {
             need(e, who, "track.edit", now)?;
@@ -84,7 +84,7 @@ pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
                 _ => return Err(ui::unknown(&e.lang, &sub, &format!("{} help", e.root))),
             };
             let dirty = dirty.map_err(|err| perms_error(e, &err))?;
-            save(e, who, dirty, ("track", &name, log), reply, now)
+            save(limits::unlimited(), e, who, dirty, ("track", &name, log), reply, now)
         }
         _ => Err(ui::unknown(&e.lang, &sub, &format!("{} track {name} help", e.root))),
     }
