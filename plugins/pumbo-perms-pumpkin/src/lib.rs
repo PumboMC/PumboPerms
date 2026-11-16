@@ -50,6 +50,7 @@
 )]
 
 pub mod config;
+pub mod pie;
 pub mod state;
 pub mod suggest;
 
