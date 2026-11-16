@@ -687,3 +687,138 @@ fn new_group_needs_the_console_under_membership() {
     assert!(console(&mut e, "user Steve parent add fresh").contains("now inherits fresh"));
     assert!(console(&mut e, "group fresh permission set fly").contains("Set fly"));
 }
+
+/// Every action that changes data.
+const WRITES: &[&str] = &[
+    "user.permission.set",
+    "user.permission.unset",
+    "user.permission.clear",
+    "user.parent.add",
+    "user.parent.remove",
+    "user.parent.set",
+    "user.meta.set",
+    "user.meta.unset",
+    "user.promote",
+    "user.demote",
+    "user.clear",
+    "group.create",
+    "group.delete",
+    "group.rename",
+    "group.setweight",
+    "group.setdisplayname",
+    "group.permission.set",
+    "group.permission.unset",
+    "group.permission.clear",
+    "group.parent.add",
+    "group.parent.remove",
+    "group.parent.set",
+    "group.meta.set",
+    "group.meta.unset",
+    "track.create",
+    "track.delete",
+    "track.edit",
+];
+
+/// Actions that change nothing, or a whole import, which the limits leave alone.
+const OTHERS: &[&str] = &[
+    "version",
+    "reload",
+    "log",
+    "log.notify",
+    "export",
+    "import",
+    "editor",
+    "user.info",
+    "user.permission.info",
+    "user.permission.check",
+    "user.parent.info",
+    "user.meta.info",
+    "group.list",
+    "group.info",
+    "group.listmembers",
+    "group.permission.info",
+    "group.permission.check",
+    "group.parent.info",
+    "group.meta.info",
+    "track.list",
+    "track.info",
+];
+
+/// A usage line with every slot filled and the optional ones left out.
+fn filled(usage: &str) -> String {
+    let creates = usage.contains("create");
+    let track = usage.starts_with("track") || usage.ends_with("track <name>");
+    let words: Vec<&str> = usage
+        .split(' ')
+        .filter(|w| !w.starts_with('['))
+        .map(|w| match w {
+            "<player>" => "Alex",
+            "<name>" if creates => "fresh",
+            "<name>" if track => "ranks",
+            "<name>" => "vip",
+            "<node>" => "fly",
+            "<group>" => "staff",
+            "<track>" => "ranks",
+            "<key>" => "color",
+            "<value>" => "red",
+            "<priority>" => "10",
+            "<text>" => "[X]",
+            "<duration>" => "1h",
+            "<weight>" => "5",
+            "<new-name>" => "vip2",
+            "<position>" => "1",
+            "<name|clear>" => "VIP",
+            other => other,
+        })
+        .collect();
+    assert!(!words.iter().any(|w| w.starts_with('<')), "{usage}");
+    words.join(" ")
+}
+
+#[test]
+fn every_write_checks_the_limits() {
+    let mut sorted: Vec<&str> = WRITES.iter().chain(OTHERS).copied().collect();
+    sorted.sort_unstable();
+    let mut actions = command::ACTIONS.to_vec();
+    actions.sort_unstable();
+    assert_eq!(sorted, actions, "every action is a write or one of the others");
+    let rows: Vec<(String, String)> =
+        super::super::complete::rows().into_iter().filter(|(_, a)| WRITES.contains(&a.as_str())).collect();
+    for a in WRITES {
+        assert!(rows.iter().any(|(_, x)| x == a), "no command for {a}");
+    }
+    for (usage, action) in &rows {
+        let line = filled(usage);
+        let node = format!("pumbo.perms.{action}");
+        let creates = action.ends_with(".create");
+        // The node of the action alone: refused, except where a group or track is made.
+        let mut e = limited(true, false);
+        console(&mut e, "user Alex parent add mod");
+        grant(&mut e, &[&node]);
+        let out = as_mod(&mut e, &line);
+        assert_eq!(out.contains("Not allowed without"), !creates, "{line}: {out}");
+        // With the target node of the action the target passes.
+        let aim = if line.starts_with("track") || line.starts_with("deletetrack") {
+            "ranks"
+        } else if line.starts_with("group") || line.starts_with("deletegroup") {
+            "vip"
+        } else {
+            "others"
+        };
+        grant(&mut e, &[&format!("{node}.modify.{aim}")]);
+        let out = as_mod(&mut e, &line);
+        assert!(!out.contains(".modify."), "{line}: {out}");
+        // Membership alone: refused exactly where a group is given, taken or edited.
+        let mut e = limited(false, true);
+        console(&mut e, "user Alex parent add mod");
+        grant(&mut e, &[&node]);
+        let member = matches!(
+            action.as_str(),
+            "user.parent.add" | "user.parent.remove" | "user.parent.set" | "user.promote" | "user.demote"
+        ) || (action.starts_with("group.")
+            && [".permission.", ".parent.", ".meta."].iter().any(|p| action.contains(p)));
+        let out = as_mod(&mut e, &line);
+        assert_eq!(out.contains("Not allowed: you are not in"), member, "{line}: {out}");
+        assert!(member || !out.contains("Not allowed"), "{line}: {out}");
+    }
+}
