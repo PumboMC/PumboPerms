@@ -12,12 +12,16 @@ The config file is written on the first start, with a short comment on every opt
 | `defaults.op-level` | `3` | Pumpkin | Operators from this level may use every `/pp` subcommand that no group decides (0 turns it off). Other Pumbo plugins and Pumpkin's commands keep their own operator levels. Pumpkin's own default for the `pumboperms:` nodes changes only after a server restart. |
 | `log.max-entries` | `10000` | both | Changes kept in the log (0: no limit). |
 | `log.notify` | `true` | both | Tell staff with `pumbo.perms.log.notify` about changes. |
+| `limits.argument-permissions` | `false` | both | Targets, arguments and contexts of `/pp` need their own nodes ([staff limits](commands.md#staff-limits)). Turn it on before staff who are not admins get `/pp`. `/pp reload` applies it. |
+| `limits.require-group-membership` | `false` | both | Staff give, take and edit only groups they are in. A new group has no members, so only the console can give it. `/pp reload` applies it. |
 | `provider.check-event` | `false` | Pumpkin | Also answer each of Pumpkin's permission checks. For testing only: on Pumpkin 0.2.0 and 0.1.0-dev it can hang the server. Needs a restart. |
 | `provider.resend-commands` | `true` | Pumpkin | Send players their command list again after a change (not with `check-event: true`). |
 | `provider.refresh-seconds` | `5` | Pumpkin | How often PumboPerms checks expired nodes and the operator levels and worlds of online players. Commands, joins and calls from other plugins remove expired nodes at once. `/pp reload` changes it. |
 | `import.enabled` | `true` | both | Take over other permission sources at start (on PumboProx: `permissions.yml`). |
 | `import.follow` | `false` | both | Import a source again whenever it changes (otherwise once). |
 | `import.plugins` | `[]` | Pumpkin | Other plugins to import from. |
+
+The staff limits work in each PumboPerms on its own: the proxy and every server read their own `config.yml`, so turn them on wherever staff type `/pp`. Only `true` and `false` switch a limit; `on`, `yes` and other words leave it off, with a warning in the log.
 
 On Pumpkin, PumboPerms leaves out a short name that Pumpkin or another Pumbo plugin uses for its own command, with a warning in the log. Pumpkin does not tell plugins which commands third-party plugins registered, so do not use their names. On PumboProx, the proxy refuses a name another plugin holds, and the log says so. `/pumboperms` works in both cases.
 

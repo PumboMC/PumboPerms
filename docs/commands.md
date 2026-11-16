@@ -81,15 +81,76 @@ On PumboProx, the next start with the same `permissions.yml` imports nothing. Wh
 
 On Pumpkin, players a source names only by nickname get nothing, because Pumpkin does not tell whether Mojang checked an account. The import reply lists them; give them their ranks with `/pp`. From the source `proxy` only the copy PumboBridge got from the proxy since it last connected counts; an older one from disk is not imported. While the bridge has a proxy key and no such copy yet, PumboPerms waits before its first pass and Pumpkin's own defaults apply; after 10 seconds it says so in the log and keeps waiting, also when the proxy cannot be reached. Behind a proxy with PumboPerms, `/pp import run proxy` answers that there is nothing to import.
 
+## Staff limits
+
+Two switches in `config.yml` limit what staff can do with `/pp` (see [Configuration](configuration.md)). Both are off by default. The console and RCON are never limited, and neither is an import.
+
+With `limits.argument-permissions: true`, a change of a player, group or track needs a node for that target, and so does a view of one. The argument and the context of a change need their nodes too. `<action>` below is the node the command needs anyway, such as `pumbo.perms.user.parent.add` (also for `addtemp`) or `pumbo.perms.group.meta.set` (also for prefixes and suffixes). Where the node of the action has no value, the general node decides. A node has a value when the player or a group sets it, when a wildcard covers it or when the operator rule gives it.
+
+| Node | What it is for |
+| --- | --- |
+| `pumbo.perms.modify.user.self` | Change your own data |
+| `pumbo.perms.modify.user.others` | Change other players |
+| `pumbo.perms.view.user.self` | See your own data |
+| `pumbo.perms.view.user.others` | See other players |
+| `pumbo.perms.usecontext.global` | Make a change without a context (`user clear` counts as one) |
+| `pumbo.perms.modify.group.<group>`, `pumbo.perms.modify.track.<track>` | Change that group or track (`rename` checks the old name) |
+| `pumbo.perms.view.group.<group>`, `pumbo.perms.view.track.<track>` | See that group or track |
+| `pumbo.perms.usecontext.<key>.<value>` | Set to `false`, it refuses changes in that context, such as `server=survival`. To allow one context only, set `pumbo.perms.usecontext.*` to `false` and `pumbo.perms.usecontext.server.lobby` to `true` |
+| `<action>.modify.self\|others\|<group>\|<track>`, `<action>.view.self\|others\|<group>\|<track>`, `<action>.usecontext.global\|<key>.<value>` | The same for one command, checked before the general node |
+| `<action>.<argument>` | The argument, which has to be `true`: the node as it is stored (`pumbo.perms.user.permission.set.minecraft:command.gamemode`; `pumbobans:ban` is `pumbo.bans.ban`), the group, the meta key in lower case, `prefix` or `suffix`, and `<track>.<group>` for `promote` (the group the player goes up to) and `demote` (the group the player leaves, and the group the player goes down to unless it is `default`) |
+
+The first five are listed in Tab completion and in the proxy's list of permissions. Pumpkin's registry does not have them, because only PumboPerms checks them.
+
+With `limits.require-group-membership: true`, staff give and take only groups they are in, where the change applies: the group of `parent add`, `addtemp` and `set`, the group of `parent remove` and `removetemp`, the group a player goes up to with `promote`, and with `demote` the group a player leaves and the group the player goes down to (except `default`). A change of a group's permissions, parents or meta needs membership in that group. Membership counts groups inherited through other groups, `default` where the player has it, and a temporary membership while it lasts. Wildcards and operator levels do not count. `user clear`, `setweight`, `setdisplayname`, `rename`, `delete`, the track commands and creating a group or track need no membership.
+
+A refusal names the nodes and groups that are missing. The limits are checked before PumboPerms looks at what the change would touch: a player who may not change the target hears that, not that the target already has the group.
+
 ## Security
 
-Give write rights in `/pp` only to admins you trust with everything. Any right that changes permissions is enough to become a full admin, for example:
+With the staff limits off, any right that changes permissions is enough to become a full admin, for example:
 
 - `pumbo.perms.user.promote` on a track that leads to the admin group: promote yourself;
 - `pumbo.perms.user.permission.set`: `/pp user <you> permission set *`;
 - `pumbo.perms.group.parent.add` or `user.parent.add`: put yourself into the admin group;
 - `pumbo.perms.import`: `/pp import run <source>` brings back an old permission source;
 - on PumboProx, `*` also grants `pumbo.proxy.bridge.key`, the PumboBridge key of the network.
+
+Turn both limits on before staff who are not admins get `/pp`, in every PumboPerms where they type it: the proxy and each server read their own `config.yml`. A moderator who may give other players the group `helper` and look players up gets:
+
+```
+pumbo.perms.user.parent.add
+pumbo.perms.user.parent.add.helper
+pumbo.perms.modify.user.others
+pumbo.perms.usecontext.global
+pumbo.perms.user.info
+pumbo.perms.view.user.self
+pumbo.perms.view.user.others
+```
+
+With `require-group-membership` the moderator's group also inherits `helper`. What stays open with both limits on, and what closes each way:
+
+| Way to more rights | What closes it |
+| --- | --- |
+| Any right that changes permissions | Turning the limits on |
+| `promote`, `permission set *`, `parent add` and meta on yourself | `argument-permissions`, as long as staff do not have `pumbo.perms.modify.user.self`. A command wildcard (`pumbo.perms.user.permission.set.*`), a section wildcard (`pumbo.perms.user.*`) and `pumbo.perms.modify.*` give that node, so next to them set `<action>.modify.self` to `false` |
+| Changing a group you inherit, and `default` | `argument-permissions`: it needs `pumbo.perms.modify.group.<group>`; next to a command wildcard set `<action>.modify.<group>` to `false`. Membership does not close it, because a member may change their own group |
+| `admin` for a second account through `parent add`, `parent set` or `promote` | `require-group-membership`, or argument nodes (`pumbo.perms.user.parent.add.admin`, `pumbo.perms.user.promote.<track>.admin`), with an explicit `false` next to a wildcard |
+| `permission set` of any node on a second account | Argument nodes in the spelling of the node (`pumbo.perms.user.permission.set.minecraft:command.gamemode`). `pumbo.perms.user.permission.set.*` opens it again, also on your own account |
+| Section and command wildcards | They cover the target, argument and context nodes of their commands, so give staff single nodes of actions and arguments |
+| Tracks | `pumbo.perms.track.edit` with `pumbo.perms.modify.track.<track>` puts any group on a track. `promote` and `demote` check every group the player gets with the same nodes and membership as `parent add`, so a track gives a player only what the staff member could give with `parent add` |
+| `user clear`, `parent set` and `promote` | They take groups away without membership in them. Only the target node keeps an admin from being cleared: no `pumbo.perms.modify.user.others`, or `<action>.modify.others` set to `false` |
+| `rename`, `delete`, `setweight` and `setdisplayname` of a group | Only `pumbo.perms.modify.group.<group>`: no membership and no check of the new name. Members move to the new name |
+| `/pp import run\|undo <source>` | Nothing: the import right is a full admin right |
+| `*` and `pumbo.perms.*` | They pass `argument-permissions`, but `require-group-membership` asks everyone but the console for membership, admins too. Let the admin group inherit every group admins give out, `default` too. A new group has no members, so only the console can give it, put it under the admin group or change it, unless you do that before turning the limit on |
+| Operators from `defaults.op-level` (3 by default) on Pumpkin | The operator rule gives them every `pumbo.perms.` node, so they pass `argument-permissions` but not membership |
+| The console and RCON | Everything. The proxy knows no operator levels, so there you give the nodes |
+| A server behind a proxy with PumboPerms | `/pp` there changes the server's own copy, with the limits of the server's `config.yml`, and that copy decides again once PumboPerms leaves the proxy |
+| Membership in a context, or for a time | Membership in a context lets you give the group only in that context; a temporary membership lets you give the group for good |
+| `view` nodes | They do not hide group and track names in `groups`, `tracks` and Tab, or the entries of `log` |
+| The argument `prefix` | It also allows the meta key `prefix` (`meta set prefix ...`), because both check `<action>.prefix` |
+| `*` on PumboProx | It grants `pumbo.proxy.bridge.key` too |
+| Tracks named `modify`, `view` or `usecontext` | The argument of `promote` (`<action>.<track>.<group>`) would be the node of a target or a context. Do not give tracks these names, and do not grant argument nodes of nodes or meta keys that start with `modify.`, `view.` or `usecontext.` |
 
 `/pp import <file>` replaces the whole database, so only the console may run it (on Pumpkin also RCON, which counts as the console). `/pp` does not run from command blocks, signs or functions on Pumpkin: anyone who can place one would act as the console. Use the console or RCON for automation. `/pp log` records every change with the admin who made it.
 
