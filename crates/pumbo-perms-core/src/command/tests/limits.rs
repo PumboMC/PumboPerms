@@ -205,6 +205,10 @@ fn rights_come_from_the_data_before_the_change() {
     );
     assert_refused(&as_mod(&mut e, &format!("user Mod permission set {node}")), node);
     assert_eq!(e.decide(MOD, node, "world", 0, 1_000), None);
+    // Under membership no one joins a group they are not in yet.
+    e.cfg.limits.require_group_membership = true;
+    grant(&mut e, &[node, "pumbo.perms.user.parent.add", "pumbo.perms.user.parent.add.admin"]);
+    assert!(as_mod(&mut e, "user Mod parent add admin").contains("Not allowed: you are not in admin."));
 }
 
 /// A source that makes Steve an admin.
@@ -259,20 +263,30 @@ fn refusal_leaves_data_ledger_and_log_unchanged() {
     let mut e = limited(true, true);
     import_source(&mut e, &Who::console(), "file", Ok(("f1".into(), admin_source())), SourceMode::Run, 1_000);
     console(&mut e, "user Alex parent add vip");
+    // Every node but a few, and no group.
     grant(
         &mut e,
         &[
-            "pumbo.perms.user.parent.add",
-            "pumbo.perms.user.parent.add.*",
-            "pumbo.perms.user.parent.add.modify.others false",
-            "pumbo.perms.user.clear",
-            "pumbo.perms.group.setweight",
-            "pumbo.perms.track.edit",
-            "pumbo.perms.usecontext.global",
+            "pumbo.perms.*",
+            "pumbo.perms.user.clear.modify.others false",
+            "pumbo.perms.group.setweight.modify.admin false",
+            "pumbo.perms.track.edit.modify.ranks false",
+            "pumbo.perms.user.permission.set.fly false",
+            "pumbo.perms.user.permission.set.usecontext.server.lobby false",
         ],
     );
     let before = everything(&mut e);
-    for line in ["user Steve parent add vip", "user Alex clear", "group admin setweight 1", "track ranks clear"] {
+    for line in [
+        "user Alex clear",
+        "group admin setweight 1",
+        "track ranks clear",
+        "user Steve permission set fly",
+        "user Steve permission set kick server=lobby",
+        "user Steve parent add vip",
+        "user Alex parent remove vip",
+        "group vip permission set kick",
+        "promote Alex ranks",
+    ] {
         assert!(as_mod(&mut e, line).contains("Not allowed"), "{line}");
     }
     assert_eq!(everything(&mut e), before);
@@ -437,6 +451,17 @@ fn refusal_names_every_missing_node() {
     assert_refused(&as_mod(&mut e, "user Steve parent add vip"), both);
     let both = "pumbo.perms.usecontext.server.lobby, pumbo.perms.user.parent.add.vip";
     assert_refused(&as_mod(&mut e, "user Steve parent add vip server=lobby"), both);
+    // Missing groups are the second line of the same refusal.
+    e.cfg.limits.require_group_membership = true;
+    let out = as_mod(&mut e, "user Steve parent add vip server=lobby");
+    assert!(refused(&out, both) && out.contains("Not allowed: you are not in vip in server=lobby."), "{out}");
+    grant(
+        &mut e,
+        &["pumbo.perms.group.parent.add", "pumbo.perms.group.parent.add.*", "pumbo.perms.modify.group.admin"],
+    );
+    let out = as_mod(&mut e, "group admin parent add vip server=survival");
+    assert!(out.contains("Not allowed: you are not in admin in server=survival, vip in server=survival."), "{out}");
+    assert!(!out.contains("without"), "{out}");
 }
 
 #[test]
@@ -467,8 +492,198 @@ fn checks_come_before_the_edit() {
     assert_refused(&as_mod(&mut e, "promote Alex ranks"), "pumbo.perms.usecontext.global");
     grant(&mut e, &["pumbo.perms.usecontext.global"]);
     assert!(as_mod(&mut e, "promote Alex ranks").contains("already on the highest group"));
+    // Membership too: after the track, before the edit.
+    e.cfg.limits.require_group_membership = true;
+    assert!(as_mod(&mut e, "promote Alex ranks").contains("already on the highest group"));
+    assert!(as_mod(&mut e, "user Steve parent add vip").contains("Not allowed: you are not in vip."));
+    e.cfg.limits.require_group_membership = false;
     // A loop of groups is an error of the edit, after the checks.
     console(&mut e, "group admin parent add helper");
     assert!(console(&mut e, "group helper parent add admin").contains("loop"));
     assert_refused(&as_mod(&mut e, "group helper parent add admin"), "pumbo.perms.modify.group.helper");
+}
+
+fn not_in(groups: &str) -> String {
+    format!("Not allowed: you are not in {groups}.")
+}
+
+#[test]
+fn membership_is_needed_to_give_take_or_edit_a_group() {
+    let mut e = limited(false, true);
+    console(&mut e, "user Mod parent add staff");
+    console(&mut e, "user Steve parent add vip");
+    grant(&mut e, &["pumbo.perms.user.parent.*", "pumbo.perms.group.*"]);
+    assert_passed(&as_mod(&mut e, "user Alex parent add staff"));
+    assert!(as_mod(&mut e, "user Alex parent add vip").contains(&not_in("vip")));
+    assert!(as_mod(&mut e, "user Steve parent remove vip").contains(&not_in("vip")));
+    assert_passed(&as_mod(&mut e, "user Alex parent remove staff"));
+    assert_passed(&as_mod(&mut e, "user Alex parent addtemp staff 1h"));
+    for line in ["group vip permission set fly", "group vip meta set color red", "group vip meta setprefix 5 [V]"] {
+        assert!(as_mod(&mut e, line).contains(&not_in("vip")), "{line}");
+    }
+    assert_passed(&as_mod(&mut e, "group staff permission set fly"));
+    assert_passed(&as_mod(&mut e, "group staff meta setprefix 5 [S]"));
+    // A group's parents: the group that changes and the one given or taken.
+    assert!(as_mod(&mut e, "group staff parent add vip").contains(&not_in("vip")));
+    assert!(as_mod(&mut e, "group vip parent add staff").contains(&not_in("vip")));
+}
+
+#[test]
+fn membership_counts_inherited_groups() {
+    let mut e = limited(false, true);
+    console(&mut e, "group mod parent add helper");
+    console(&mut e, "user Mod parent add mod");
+    grant(&mut e, &["pumbo.perms.user.parent.add"]);
+    assert_passed(&as_mod(&mut e, "user Alex parent add helper"));
+    assert_passed(&as_mod(&mut e, "user Alex parent add mod"));
+    assert!(as_mod(&mut e, "user Alex parent add admin").contains(&not_in("admin")));
+    // `default` where the engine gives it: not next to a group without a context.
+    assert!(as_mod(&mut e, "user Alex parent add default").contains(&not_in("default")));
+    console(&mut e, "user Mod parent remove mod");
+    console(&mut e, "user Mod parent add mod server=lobby");
+    assert_passed(&as_mod(&mut e, "user Alex parent add default"));
+}
+
+#[test]
+fn membership_follows_the_contexts_of_the_change() {
+    let mut e = limited(false, true);
+    console(&mut e, "user Mod parent add staff server=survival");
+    grant(&mut e, &["pumbo.perms.user.parent.add", "pumbo.perms.group.permission.set"]);
+    assert_passed(&as_mod(&mut e, "user Alex parent add staff server=survival"));
+    assert_passed(&as_mod(&mut e, "user Alex parent add staff server=survival world=nether"));
+    assert!(as_mod(&mut e, "user Alex parent add staff").contains(&not_in("staff")));
+    assert!(as_mod(&mut e, "user Alex parent add staff server=lobby").contains(&not_in("staff in server=lobby")));
+    assert_passed(&as_mod(&mut e, "group staff permission set fly server=survival"));
+    assert!(as_mod(&mut e, "group staff permission set fly").contains(&not_in("staff")));
+    // A change without a context is one everywhere, even on the server called survival.
+    e.cfg.context.server = "survival".into();
+    assert!(as_mod(&mut e, "user Alex parent add staff").contains(&not_in("staff")));
+    // Membership in a server group covers its servers.
+    console(&mut e, "user Mod parent add vip group=smp");
+    e.server_groups.insert("survival".into(), vec!["smp".into()]);
+    assert_passed(&as_mod(&mut e, "user Alex parent add vip server=survival"));
+    assert_passed(&as_mod(&mut e, "user Alex parent add vip group=smp"));
+    assert!(as_mod(&mut e, "user Alex parent add vip server=lobby").contains(&not_in("vip in server=lobby")));
+    // A temporary membership counts while it lasts.
+    console(&mut e, "user Mod parent addtemp admin 1h");
+    assert_passed(&as_mod(&mut e, "user Alex parent add admin"));
+    console(&mut e, "user Alex parent remove admin");
+    let later = run_as(&mut e, &moderator(), "user Alex parent add admin", 1_000 + 3_600_001);
+    assert!(later.contains(&not_in("admin")), "{later}");
+}
+
+#[test]
+fn membership_is_checked_only_where_listed() {
+    let mut e = limited(false, true);
+    console(&mut e, "user Mod parent add staff");
+    console(&mut e, "user Mod parent add mod");
+    console(&mut e, "user Steve parent add admin");
+    grant(&mut e, &["pumbo.perms.user.*"]);
+    // `parent set` checks the group it sets, not the ones it takes away.
+    assert_passed(&as_mod(&mut e, "user Steve parent set staff"));
+    assert!(as_mod(&mut e, "user Steve parent set admin").contains(&not_in("admin")));
+    // Clearing a player names no group.
+    console(&mut e, "user Steve parent add admin");
+    assert_passed(&as_mod(&mut e, "user Steve clear"));
+    // Promote: the group the player goes up to; demote: the one the player
+    // leaves and the one below it, which the player gets.
+    console(&mut e, "user Alex parent add helper");
+    assert_passed(&as_mod(&mut e, "promote Alex ranks"));
+    assert!(as_mod(&mut e, "promote Alex ranks").contains(&not_in("admin")));
+    assert!(as_mod(&mut e, "demote Alex ranks").contains(&not_in("helper")));
+    console(&mut e, "user Mod parent add helper");
+    assert_passed(&as_mod(&mut e, "demote Alex ranks"));
+    console(&mut e, "user Alex parent set admin");
+    assert!(as_mod(&mut e, "demote Alex ranks").contains(&not_in("admin")));
+}
+
+#[test]
+fn demote_gives_only_groups_the_staff_may_give() {
+    // A track that puts admin below helper, made by staff in helper who may edit tracks.
+    let tracks = ["pumbo.perms.track.create", "pumbo.perms.track.edit", "pumbo.perms.user.parent.add"];
+    let chain = ["createtrack x", "track x append admin", "track x append helper", "user Steve parent add helper"];
+    for (argument_permissions, extra) in [
+        (false, &[][..]),
+        (
+            true,
+            &[
+                "pumbo.perms.modify.user.others",
+                "pumbo.perms.usecontext.global",
+                "pumbo.perms.user.parent.add.helper",
+                "pumbo.perms.modify.track.x",
+                "pumbo.perms.user.demote.x.helper",
+            ][..],
+        ),
+    ] {
+        let mut e = limited(argument_permissions, true);
+        console(&mut e, "user Mod parent add helper");
+        grant(&mut e, &tracks);
+        grant(&mut e, &["pumbo.perms.user.demote"]);
+        grant(&mut e, extra);
+        assert!(as_mod(&mut e, "user Steve parent add admin").contains("Not allowed"));
+        for line in chain {
+            assert_passed(&as_mod(&mut e, line));
+        }
+        let out = as_mod(&mut e, "demote Steve x");
+        assert!(out.contains("Not allowed") && !out.contains("Demoted"), "{argument_permissions}: {out}");
+        let groups = console(&mut e, "user Steve info");
+        assert!(!groups.contains("admin"), "{argument_permissions}: {groups}");
+    }
+}
+
+#[test]
+fn weight_name_rename_and_delete_skip_membership() {
+    let mut e = limited(false, true);
+    grant(&mut e, &["pumbo.perms.group.*", "pumbo.perms.track.*"]);
+    for line in [
+        "group vip setweight 5",
+        "group vip setdisplayname VIP",
+        "group vip rename vip2",
+        "deletegroup vip2",
+        "track ranks append staff",
+        "track ranks remove staff",
+        "deletetrack ranks",
+        "creategroup fresh",
+        "createtrack fresh",
+    ] {
+        assert_passed(&as_mod(&mut e, line));
+    }
+}
+
+#[test]
+fn membership_does_not_open_editing_the_own_group() {
+    let mut e = limited(true, true);
+    console(&mut e, "user Mod parent add staff");
+    grant(
+        &mut e,
+        &["pumbo.perms.group.permission.set", "pumbo.perms.group.permission.set.fly", "pumbo.perms.usecontext.global"],
+    );
+    assert_refused(&as_mod(&mut e, "group staff permission set fly"), "pumbo.perms.modify.group.staff");
+    grant(&mut e, &["pumbo.perms.modify.group.staff"]);
+    assert_passed(&as_mod(&mut e, "group staff permission set fly"));
+}
+
+#[test]
+fn wildcards_and_operators_are_not_membership() {
+    let mut e = limited(false, true);
+    grant(&mut e, &["*"]);
+    assert!(as_mod(&mut e, "user Steve parent add admin").contains(&not_in("admin")));
+    // An operator gets every PumboPerms node, not a group.
+    let op = Who::player("Op", "00000000-0000-0000-0000-0000000000e2", 4, "world");
+    assert!(run_as(&mut e, &op, "user Steve parent add admin", 1_000).contains(&not_in("admin")));
+    // With argument permissions alone the operator passes.
+    e.cfg.limits = LimitsCfg { argument_permissions: true, require_group_membership: false };
+    assert!(run_as(&mut e, &op, "user Steve parent add admin", 1_000).contains("now inherits admin"));
+}
+
+#[test]
+fn new_group_needs_the_console_under_membership() {
+    let mut e = limited(false, true);
+    grant(&mut e, &["*"]);
+    assert_passed(&as_mod(&mut e, "creategroup fresh"));
+    assert!(as_mod(&mut e, "user Steve parent add fresh").contains(&not_in("fresh")));
+    assert!(as_mod(&mut e, "group fresh permission set fly").contains(&not_in("fresh")));
+    assert!(as_mod(&mut e, "group admin parent add fresh").contains(&not_in("admin, fresh")));
+    assert!(console(&mut e, "user Steve parent add fresh").contains("now inherits fresh"));
+    assert!(console(&mut e, "group fresh permission set fly").contains("Set fly"));
 }

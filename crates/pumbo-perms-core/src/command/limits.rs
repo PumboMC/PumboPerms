@@ -10,10 +10,11 @@ use pumbo_common::command::permission;
 use pumbo_common::id::Uuid;
 use pumbo_common::text::Args;
 
-use crate::context::Contexts;
+use crate::context::{self, Contexts, Query};
 use crate::engine::Engine;
 use crate::ui::{self, Text, value};
 
+use super::edit::in_context;
 use super::target::Target;
 use super::{PLUGIN, Who};
 
@@ -45,6 +46,8 @@ pub(super) struct Change<'a> {
     pub argument: Option<String>,
     /// `None`: the command has no contexts; `Some(global)`: a change without one.
     pub contexts: Option<&'a Contexts>,
+    /// Groups the sender has to be a member of.
+    pub groups: Vec<&'a str>,
 }
 
 /// Proof that the limits were checked; only this module makes one.
@@ -66,17 +69,32 @@ pub(super) fn view(e: &mut Engine, who: &Who, action: &str, aim: Aim<'_>, now: u
     aimed(e, who, action, &aim, "view", now)
 }
 
-/// The rest of a change, read before it is made; the refusal names every
-/// node that is missing. With `argument-permissions` on, `<action
-/// node>.<argument>` has to give `true`. A change without a context needs
-/// `<action node>.usecontext.global`, or where that has no value
+/// The rest of a change, read before it is made: contexts, the argument and
+/// the groups ([`Change`]); one refusal names every missing node and group.
+pub(super) fn change(e: &mut Engine, who: &Who, asked: &Asked, c: &Change<'_>, now: u64) -> Result<Checked, Text> {
+    let Some(sender) = who.uuid.as_deref() else { return Ok(Checked(())) };
+    let nodes = if e.cfg.limits.argument_permissions { missing_nodes(e, who, asked, c, now) } else { Vec::new() };
+    let groups = if e.cfg.limits.require_group_membership { missing_groups(e, sender, c, now) } else { Vec::new() };
+    if nodes.is_empty() && groups.is_empty() {
+        return Ok(Checked(()));
+    }
+    let mut out = Text::default();
+    if !nodes.is_empty() {
+        out.lines.extend(ui::error(&e.lang, "limit-node", &Args::new().arg(nodes.join(", "))).lines);
+    }
+    if !groups.is_empty() {
+        out.lines.extend(ui::error(&e.lang, "limit-member", &Args::new().arg(groups.join(", "))).lines);
+    }
+    Err(out)
+}
+
+/// With `argument-permissions` on, `<action node>.<argument>` has to give
+/// `true`. A change without a context needs `<action
+/// node>.usecontext.global`, or where that has no value
 /// `pumbo.perms.usecontext.global`; a change with contexts is refused only
 /// when, for one `key=value`, `<action node>.usecontext.<key>.<value>` or,
 /// without a value, `pumbo.perms.usecontext.<key>.<value>` gives `false`.
-pub(super) fn change(e: &mut Engine, who: &Who, asked: &Asked, c: &Change<'_>, now: u64) -> Result<Checked, Text> {
-    if who.is_console() || !e.cfg.limits.argument_permissions {
-        return Ok(Checked(()));
-    }
+fn missing_nodes(e: &mut Engine, who: &Who, asked: &Asked, c: &Change<'_>, now: u64) -> Vec<String> {
     let own = &asked.0;
     let mut nodes = Vec::new();
     match c.contexts {
@@ -103,7 +121,45 @@ pub(super) fn change(e: &mut Engine, who: &Who, asked: &Asked, c: &Change<'_>, n
             nodes.push(node);
         }
     }
-    if nodes.is_empty() { Ok(Checked(())) } else { Err(refusal(e, &nodes)) }
+    nodes.into_iter().map(value).collect()
+}
+
+/// With `require-group-membership` on, the sender inherits each group where
+/// the change applies, directly or through other groups, `default` where the
+/// engine gives it, a temporary membership while it lasts. Wildcards and the
+/// operator rule do not count. The groups the sender is not in, each with
+/// the contexts of the change.
+fn missing_groups(e: &Engine, sender: &str, c: &Change<'_>, now: u64) -> Vec<String> {
+    if c.groups.is_empty() {
+        return Vec::new();
+    }
+    let ctx = c.contexts.cloned().unwrap_or_default();
+    let inherited = e.perms.inheritance(sender, &place_of_change(e, &ctx), now);
+    let mut out: Vec<String> = Vec::new();
+    for g in &c.groups {
+        let shown = format!("{}{}", value(g), in_context(e, &ctx));
+        if !inherited.iter().any(|(name, _)| name == g) && !out.contains(&shown) {
+            out.push(shown);
+        }
+    }
+    out
+}
+
+/// Where a change with these contexts applies: a named server with its
+/// groups, the `group=` of the change, the world; nothing named, nowhere in
+/// particular (never this server, whose name a global change does not have).
+fn place_of_change(e: &Engine, ctx: &Contexts) -> Query {
+    let world = ctx.get(context::WORLD).unwrap_or("");
+    let mut q = match ctx.get(context::SERVER) {
+        Some(server) => e.place(server, world),
+        None => Query::at("", Vec::new(), world),
+    };
+    if let Some(group) = ctx.get(context::GROUP)
+        && !q.groups.iter().any(|g| g == group)
+    {
+        q.groups.push(group.to_string());
+    }
+    q
 }
 
 /// A new group or track: there is nothing to limit.
@@ -126,7 +182,7 @@ fn aimed(e: &mut Engine, who: &Who, action: &str, aim: &Aim<'_>, verb: &str, now
     };
     let own = format!("{}.{verb}.{name}", permission(PLUGIN, action));
     match missing(e, who, &own, &permission(PLUGIN, &general), now) {
-        Some(node) => Err(refusal(e, &[node])),
+        Some(node) => Err(ui::error(&e.lang, "limit-node", &Args::new().arg(value(node)))),
         None => Ok(()),
     }
 }
@@ -154,9 +210,4 @@ fn same_player(a: &str, b: &str) -> bool {
         (Some(a), Some(b)) => a == b,
         _ => a.eq_ignore_ascii_case(b),
     }
-}
-
-fn refusal(e: &Engine, nodes: &[String]) -> Text {
-    let nodes: Vec<String> = nodes.iter().map(value).collect();
-    ui::error(&e.lang, "limit-node", &Args::new().arg(nodes.join(", ")))
 }

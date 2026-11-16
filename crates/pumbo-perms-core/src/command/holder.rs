@@ -212,8 +212,8 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                 Some(raw) => Some(parse_duration(e, raw)?),
                 None => None,
             };
-            let checked =
-                limits::change(e, who, &asked, &Change { argument: Some(node.clone()), contexts: Some(&ctx) }, now)?;
+            let c = Change { argument: Some(node.clone()), contexts: Some(&ctx), groups: edited(t) };
+            let checked = limits::change(e, who, &asked, &c, now)?;
             // Changing an end time could cut a punishment short without a word.
             let timed = |p: &PermNode| p.node == node && p.context == ctx && p.expiry.is_some_and(|x| x > now);
             if temp && t.data(e).is_some_and(|d| d.permissions.iter().any(timed)) {
@@ -248,8 +248,8 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
             };
             let node = parse_node(e, raw)?;
             not_group_node(e, t, &node)?;
-            let checked =
-                limits::change(e, who, &asked, &Change { argument: Some(node.clone()), contexts: Some(&ctx) }, now)?;
+            let c = Change { argument: Some(node.clone()), contexts: Some(&ctx), groups: edited(t) };
+            let checked = limits::change(e, who, &asked, &c, now)?;
             let temp = sub == "unsettemp";
             let (removed, dirty) =
                 t.edit(e, |d| d.unset_permission(&node, &ctx, temp)).map_err(|err| perms_error(e, &err))?;
@@ -267,7 +267,8 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
             need(e, who, &action, now)?;
             let asked = limits::target(e, who, &action, Aim::Holder(t), now)?;
             writable(e)?;
-            let checked = limits::change(e, who, &asked, &Change { contexts: Some(&ctx), ..Change::default() }, now)?;
+            let c = Change { contexts: Some(&ctx), groups: edited(t), ..Change::default() };
+            let checked = limits::change(e, who, &asked, &c, now)?;
             let only =
                 if ctx.is_global() && !args.iter().any(|a| context::is_context_arg(a)) { None } else { Some(&ctx) };
             let (count, dirty) = t.edit(e, |d| d.clear_permissions(only)).map_err(|err| perms_error(e, &err))?;
@@ -333,6 +334,14 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
     }
 }
 
+/// The group a change edits, which the membership limit asks for; none for a player.
+fn edited(t: &Target) -> Vec<&str> {
+    match t {
+        Target::Group { name } => vec![name.as_str()],
+        Target::User { .. } => Vec::new(),
+    }
+}
+
 /// `group.<name>` tells membership: it is given with `parent add`.
 fn not_group_node(e: &Engine, t: &Target, node: &str) -> Result<(), Text> {
     let Some(group) = node.strip_prefix(node::GROUP_PREFIX) else { return Ok(()) };
@@ -393,7 +402,11 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
     if action != "remove" && e.perms.group(&group).is_none() {
         return Err(perms_error(e, &PermsError::NoGroup(group)));
     }
-    let checked = limits::change(e, who, &asked, &Change { argument: Some(group.clone()), contexts: Some(&ctx) }, now)?;
+    // The group given or taken, and the group whose parents change.
+    let mut groups = edited(t);
+    groups.push(&group);
+    let c = Change { argument: Some(group.clone()), contexts: Some(&ctx), groups };
+    let checked = limits::change(e, who, &asked, &c, now)?;
     let a = Args::new().with("group", value(&group)).with("target", t.shown(e)).with("context", in_context(e, &ctx));
     let (key, dirty) = match (action, t) {
         ("add", Target::Group { name }) => {
@@ -469,7 +482,8 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
     let asked = limits::target(e, who, &action, Aim::Holder(t), now)?;
     writable(e)?;
     let mut a = Args::new().with("target", t.shown(e)).with("context", in_context(e, &ctx));
-    let change = |argument: &str| Change { argument: Some(argument.to_string()), contexts: Some(&ctx) };
+    let change =
+        |argument: &str| Change { argument: Some(argument.to_string()), contexts: Some(&ctx), groups: edited(t) };
     let checked;
     let (key, dirty) = match (sub.as_str(), affix) {
         ("set", _) => {
@@ -599,21 +613,18 @@ fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], n
         }
         Err(err) => return Err(perms_error(e, &err)),
     };
-    // A step down gives the lower group too: it needs its node, as for `parent add`.
+    // A step down gives the lower group too: its node and membership, as for `parent add`.
     let lower = if up { None } else { plan.to.clone().filter(|g| g.as_str() != e.perms.default_group()) };
     if let Some(lower) = &lower {
-        let c = Change { argument: Some(format!("{track}.{lower}")), ..Change::default() };
+        let c = Change { argument: Some(format!("{track}.{lower}")), contexts: Some(&ctx), groups: Vec::new() };
         limits::change(e, who, &asked, &c, now)?;
     }
     // The group the player goes up to, or the one the player leaves.
     let rung = if up { plan.to } else { plan.from }.unwrap_or_default();
-    let checked = limits::change(
-        e,
-        who,
-        &asked,
-        &Change { argument: Some(format!("{track}.{rung}")), ..Change::default() },
-        now,
-    )?;
+    let mut groups = vec![rung.as_str()];
+    groups.extend(lower.as_deref());
+    let c = Change { argument: Some(format!("{track}.{rung}")), contexts: Some(&ctx), groups };
+    let checked = limits::change(e, who, &asked, &c, now)?;
     let result =
         if up { e.perms.promote(uuid, name, &track, &ctx, now) } else { e.perms.demote(uuid, name, &track, &ctx, now) };
     let (step, dirty) = result.map_err(|err| perms_error(e, &err))?;
