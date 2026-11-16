@@ -140,6 +140,8 @@ no-worlds: "Proxy nie widzi światów, więc world= nie działa tutaj."
 bad-text: Tekst jest za długi albo ma znaki sterujące (najwyżej 256 bajtów, bez łamania linii).
 import-file-console: "Cały plik importuje tylko konsola: import podmienia wszystkie grupy i graczy."
 editor-later: Edytora w przeglądarce jeszcze nie ma. Na razie użyj export i import (JSON).
+limit-node: Brak uprawnienia {0}.
+limit-member: Nie należysz do grupy {0}.
 
 # części komunikatów
 in-context: " w {0}"

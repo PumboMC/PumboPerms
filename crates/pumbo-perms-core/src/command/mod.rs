@@ -26,6 +26,7 @@ mod view;
 
 pub use complete::{complete, own_nodes, tree_lines};
 pub use import::{import, import_pending, import_source, on_join};
+pub use limits::LIMIT_NODES;
 pub use view::{log_line, notification};
 
 use help::general_help;

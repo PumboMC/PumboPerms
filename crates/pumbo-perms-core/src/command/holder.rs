@@ -15,9 +15,10 @@ use super::edit::{
     save, split_any_context, split_context,
 };
 use super::help::{AFFIX_CHANGES, PARENT_CHANGES, holder_help, unnamed_help};
+use super::limits::{self, Aim};
 use super::target::{Target, checked_key, checked_text, find_user, is_meta_key};
 use super::view::{context_args, group_view, members_view, meta_view, nodes_view, parents_view, user_view};
-use super::{Env, Outcome, Res, Who, allowed_prefix, limits, lower, need, page_of, view_page, writable};
+use super::{Env, Outcome, Res, Who, allowed_prefix, lower, need, page_of, view_page, writable};
 
 pub(super) fn user_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
     let Some(name) = args.first() else {
@@ -45,10 +46,11 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "delete" => {
             need(e, who, "group.delete", now)?;
+            let checked = limits::target(e, who, "group.delete", Aim::Holder(&t), now)?;
             writable(e)?;
             let dirty = e.perms.delete_group(&name).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-deleted", &Args::new().arg(value(&name)));
-            return save(limits::unlimited(), e, who, dirty, ("group", &name, "delete".into()), reply, now);
+            return save(checked, e, who, dirty, ("group", &name, "delete".into()), reply, now);
         }
         _ => {}
     }
@@ -59,16 +61,18 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
     match sub.as_str() {
         "rename" => {
             need(e, who, "group.rename", now)?;
+            let checked = limits::target(e, who, "group.rename", Aim::Holder(&t), now)?;
             writable(e)?;
             let Some(to) = rest.first().map(|n| n.to_lowercase()) else {
                 return Err(ui::usage(&e.lang, &format!("{} rename <new-name>", t.command(&e.root))));
             };
             let dirty = e.perms.rename_group(&name, &to).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-renamed", &Args::new().arg(value(&name)).arg(value(&to)));
-            save(limits::unlimited(), e, who, dirty, ("group", &name, format!("rename {to}")), reply, now)
+            save(checked, e, who, dirty, ("group", &name, format!("rename {to}")), reply, now)
         }
         "setweight" => {
             need(e, who, "group.setweight", now)?;
+            let checked = limits::target(e, who, "group.setweight", Aim::Holder(&t), now)?;
             writable(e)?;
             let Some(raw) = rest.first() else {
                 return Err(ui::usage(&e.lang, &format!("{} setweight <weight>", t.command(&e.root))));
@@ -76,10 +80,11 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
             let w = parse_int(e, raw)?;
             let ((), dirty) = e.perms.edit_group(&name, |g| g.weight = w).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "group-weight", &Args::new().arg(value(&name)).arg(value(w)));
-            save(limits::unlimited(), e, who, dirty, ("group", &name, format!("setweight {w}")), reply, now)
+            save(checked, e, who, dirty, ("group", &name, format!("setweight {w}")), reply, now)
         }
         "setdisplayname" => {
             need(e, who, "group.setdisplayname", now)?;
+            let checked = limits::target(e, who, "group.setdisplayname", Aim::Holder(&t), now)?;
             writable(e)?;
             if rest.is_empty() {
                 return Err(ui::usage(&e.lang, &format!("{} setdisplayname <name|clear>", t.command(&e.root))));
@@ -95,10 +100,11 @@ pub(super) fn group_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
             } else {
                 ui::success(&e.lang, "group-displayname", &Args::new().arg(value(&name)).arg(format!("{shown}&r")))
             };
-            save(limits::unlimited(), e, who, dirty, ("group", &name, format!("setdisplayname {shown}")), reply, now)
+            save(checked, e, who, dirty, ("group", &name, format!("setdisplayname {shown}")), reply, now)
         }
         "listmembers" => {
             need(e, who, "group.listmembers", now)?;
+            limits::view(e, who, "group.listmembers", Aim::Holder(&t), now)?;
             Ok(Outcome::reply(members_view(e, &name, page_of(rest), now)))
         }
         _ => holder_cmd(e, who, &t, args.get(1..).unwrap_or(&[]), env),
@@ -119,7 +125,9 @@ fn holder_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], env: &Env)
             Ok(Outcome::reply(holder_help(e, who, &base, t.is_user(), "", page_of(rest), now)))
         }
         "info" | "i" => {
-            need(e, who, &format!("{kind}.info"), now)?;
+            let action = format!("{kind}.info");
+            need(e, who, &action, now)?;
+            limits::view(e, who, &action, Aim::Holder(t), now)?;
             let page = match rest {
                 [] => view_page(who, rest),
                 [p] if p.parse::<usize>().is_ok() => view_page(who, rest),
@@ -133,13 +141,14 @@ fn holder_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], env: &Env)
         "promote" | "demote" if t.is_user() => step_cmd(e, who, t, &sub, rest, now),
         "clear" if t.is_user() => {
             need(e, who, "user.clear", now)?;
+            let checked = limits::target(e, who, "user.clear", Aim::Holder(t), now)?;
             if !rest.is_empty() {
                 return Err(ui::usage(&e.lang, &format!("{} clear", t.command(&e.root))));
             }
             writable(e)?;
             let ((), dirty) = t.edit(e, |d| *d = Data::default()).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "user-cleared", &Args::new().arg(t.shown(e)));
-            save(limits::unlimited(), e, who, dirty, (kind, &t.label(), "clear".into()), reply, now)
+            save(checked, e, who, dirty, (kind, &t.label(), "clear".into()), reply, now)
         }
         _ => Err(ui::unknown(&e.lang, &sub, &format!("{} help", t.command(&e.root)))),
     }
@@ -161,11 +170,15 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
             Ok(Outcome::reply(holder_help(e, who, &base, t.is_user(), "permission", page_of(&pos), now)))
         }
         "info" | "list" => {
-            need(e, who, &format!("{kind}.permission.info"), now)?;
+            let action = format!("{kind}.permission.info");
+            need(e, who, &action, now)?;
+            limits::view(e, who, &action, Aim::Holder(t), now)?;
             Ok(Outcome::reply(nodes_view(e, t, view_page(who, &pos), now)))
         }
         "set" | "settemp" => {
-            need(e, who, &format!("{kind}.permission.set"), now)?;
+            let action = format!("{kind}.permission.set");
+            need(e, who, &action, now)?;
+            let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
             writable(e)?;
             let temp = sub == "settemp";
             let usage = if temp {
@@ -213,10 +226,12 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                 None => "perm-set",
             };
             let reply = ui::success(&e.lang, key, &a);
-            save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
+            save(checked, e, who, dirty, (kind, &t.label(), action_log), reply, now)
         }
         "unset" | "unsettemp" => {
-            need(e, who, &format!("{kind}.permission.unset"), now)?;
+            let action = format!("{kind}.permission.unset");
+            need(e, who, &action, now)?;
+            let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
             writable(e)?;
             let Some(raw) = pos.first() else {
                 return Err(ui::usage(&e.lang, &format!("{base} {sub} <node> [context...]")));
@@ -233,10 +248,12 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
                 return Err(ui::error(&e.lang, "perm-unset-none", &a));
             }
             let reply = ui::success(&e.lang, "perm-unset", &a);
-            save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
+            save(checked, e, who, dirty, (kind, &t.label(), action_log), reply, now)
         }
         "clear" => {
-            need(e, who, &format!("{kind}.permission.clear"), now)?;
+            let action = format!("{kind}.permission.clear");
+            need(e, who, &action, now)?;
+            let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
             writable(e)?;
             let only =
                 if ctx.is_global() && !args.iter().any(|a| context::is_context_arg(a)) { None } else { Some(&ctx) };
@@ -244,10 +261,12 @@ fn permission_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u
             let a =
                 Args::new().with("count", value(count)).with("target", t.shown(e)).with("context", in_context(e, &ctx));
             let reply = ui::success(&e.lang, "perm-clear", &a);
-            save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
+            save(checked, e, who, dirty, (kind, &t.label(), action_log), reply, now)
         }
         "check" => {
-            need(e, who, &format!("{kind}.permission.check"), now)?;
+            let action = format!("{kind}.permission.check");
+            need(e, who, &action, now)?;
+            limits::view(e, who, &action, Aim::Holder(t), now)?;
             let Some(raw) = pos.first() else {
                 return Err(ui::usage(&e.lang, &format!("{base} check <node> [context...]")));
             };
@@ -331,13 +350,17 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
         return Ok(Outcome::reply(holder_help(e, who, &base, t.is_user(), "parent", page_of(&pos), now)));
     }
     if matches!(sub.as_str(), "info" | "list") {
-        need(e, who, &format!("{kind}.parent.info"), now)?;
+        let action = format!("{kind}.parent.info");
+        need(e, who, &action, now)?;
+        limits::view(e, who, &action, Aim::Holder(t), now)?;
         return Ok(Outcome::reply(parents_view(e, t, view_page(who, &pos), now)));
     }
     let Some(&(_, action, temp)) = PARENT_CHANGES.iter().find(|(w, _, _)| *w == sub) else {
         return Err(ui::unknown(&e.lang, &sub, &format!("{base} help")));
     };
-    need(e, who, &format!("{kind}.parent.{action}"), now)?;
+    let right = format!("{kind}.parent.{action}");
+    need(e, who, &right, now)?;
+    let checked = limits::target(e, who, &right, Aim::Holder(t), now)?;
     writable(e)?;
     let adds_temp = temp && action == "add";
     let usage = if adds_temp {
@@ -400,7 +423,7 @@ fn parent_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) 
         None => a,
     };
     let reply = ui::success(&e.lang, key, &a);
-    save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
+    save(checked, e, who, dirty, (kind, &t.label(), action_log), reply, now)
 }
 
 fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) -> Res {
@@ -417,7 +440,9 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
         return Ok(Outcome::reply(holder_help(e, who, &base, t.is_user(), "meta", page_of(&pos), now)));
     }
     if matches!(sub.as_str(), "info" | "list") {
-        need(e, who, &format!("{kind}.meta.info"), now)?;
+        let action = format!("{kind}.meta.info");
+        need(e, who, &action, now)?;
+        limits::view(e, who, &action, Aim::Holder(t), now)?;
         return Ok(Outcome::reply(meta_view(e, t, view_page(who, &pos), now)));
     }
     let affix = AFFIX_CHANGES.iter().find(|(w, ..)| *w == sub).map(|&(_, verb, kind, temp)| (verb, kind, temp));
@@ -425,7 +450,9 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
         return Err(ui::unknown(&e.lang, &sub, &format!("{base} help")));
     }
     let removing = sub == "unset" || affix.is_some_and(|(verb, ..)| verb == "remove");
-    need(e, who, &format!("{kind}.meta.{}", if removing { "unset" } else { "set" }), now)?;
+    let action = format!("{kind}.meta.{}", if removing { "unset" } else { "set" });
+    need(e, who, &action, now)?;
+    let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
     writable(e)?;
     let mut a = Args::new().with("target", t.shown(e)).with("context", in_context(e, &ctx));
     let (key, dirty) = match (sub.as_str(), affix) {
@@ -523,11 +550,13 @@ fn meta_cmd(e: &mut Engine, who: &Who, t: &Target, args: &[String], now: u64) ->
         _ => return Err(ui::unknown(&e.lang, &sub, &format!("{base} help"))),
     };
     let reply = ui::success(&e.lang, key, &a);
-    save(limits::unlimited(), e, who, dirty, (kind, &t.label(), action_log), reply, now)
+    save(checked, e, who, dirty, (kind, &t.label(), action_log), reply, now)
 }
 
 fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], now: u64) -> Res {
-    need(e, who, &format!("user.{sub}"), now)?;
+    let action = format!("user.{sub}");
+    need(e, who, &action, now)?;
+    let checked = limits::target(e, who, &action, Aim::Holder(t), now)?;
     writable(e)?;
     let (pos, ctx) = split_context(e, args)?;
     let Some(track) = pos.first().map(|t| t.to_lowercase()) else {
@@ -563,5 +592,5 @@ fn step_cmd(e: &mut Engine, who: &Who, t: &Target, sub: &str, args: &[String], n
             ui::success(&e.lang, key, &a.with("from", value(e.perms.display_name(from))))
         }
     };
-    save(limits::unlimited(), e, who, dirty, ("user", &t.label(), format!("{sub} {}", args.join(" "))), reply, now)
+    save(checked, e, who, dirty, ("user", &t.label(), format!("{sub} {}", args.join(" "))), reply, now)
 }

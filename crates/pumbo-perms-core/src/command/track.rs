@@ -8,7 +8,8 @@ use crate::ui::{self, Click, Line, row, value};
 
 use super::edit::{perms_error, save};
 use super::help::{track_help, unnamed_help};
-use super::{Env, Outcome, Res, Who, allowed_prefix, limits, lower, need, page_of, writable};
+use super::limits::{self, Aim};
+use super::{Env, Outcome, Res, Who, allowed_prefix, lower, need, page_of, writable};
 
 pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -> Res {
     let now = env.now;
@@ -28,6 +29,7 @@ pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "info" | "i" => {
             need(e, who, "track.info", now)?;
+            limits::view(e, who, "track.info", Aim::Track(&name), now)?;
             let Some(track) = e.perms.track(&name).cloned() else {
                 return Err(perms_error(e, &PermsError::NoTrack(name)));
             };
@@ -54,13 +56,15 @@ pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
         }
         "delete" => {
             need(e, who, "track.delete", now)?;
+            let checked = limits::target(e, who, "track.delete", Aim::Track(&name), now)?;
             writable(e)?;
             let dirty = e.perms.delete_track(&name).map_err(|err| perms_error(e, &err))?;
             let reply = ui::success(&e.lang, "track-deleted", &n);
-            save(limits::unlimited(), e, who, dirty, ("track", &name, log), reply, now)
+            save(checked, e, who, dirty, ("track", &name, log), reply, now)
         }
         "append" | "insert" | "remove" | "clear" => {
             need(e, who, "track.edit", now)?;
+            let checked = limits::target(e, who, "track.edit", Aim::Track(&name), now)?;
             writable(e)?;
             let group = rest.first().map(|g| g.to_lowercase());
             let (dirty, reply) = match (sub.as_str(), group) {
@@ -84,7 +88,7 @@ pub(super) fn track_cmd(e: &mut Engine, who: &Who, args: &[String], env: &Env) -
                 _ => return Err(ui::unknown(&e.lang, &sub, &format!("{} help", e.root))),
             };
             let dirty = dirty.map_err(|err| perms_error(e, &err))?;
-            save(limits::unlimited(), e, who, dirty, ("track", &name, log), reply, now)
+            save(checked, e, who, dirty, ("track", &name, log), reply, now)
         }
         _ => Err(ui::unknown(&e.lang, &sub, &format!("{} track {name} help", e.root))),
     }

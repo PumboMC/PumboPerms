@@ -105,6 +105,8 @@ no-worlds: "The proxy does not see worlds, so world= is not available here."
 bad-text: The text is too long or has control characters (at most 256 bytes, no line breaks).
 import-file-console: "Only the console can import a whole file: it replaces every group and player."
 editor-later: The web editor is not available yet. Use export and import (JSON) meanwhile.
+limit-node: Not allowed without {0}.
+limit-member: "Not allowed: you are not in {0}."
 
 # parts of messages
 in-context: " in {0}"

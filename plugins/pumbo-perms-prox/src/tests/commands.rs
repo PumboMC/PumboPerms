@@ -58,6 +58,10 @@ fn template_messages_and_manifest() {
         assert!(declared.contains(&format!("pumbo.perms.{a}").as_str()), "{a} missing from the manifest");
     }
     assert_eq!(MANIFEST.matches("description:").count(), declared.len());
+    for (node, description) in pumbo_perms_core::command::LIMIT_NODES {
+        let entry = format!("- node: {node}\n    description: {description}\n");
+        assert!(MANIFEST.contains(&entry), "{node} missing from the manifest");
+    }
     // A bad value falls back with a warning; a broken file is refused on reload.
     let (cfg, w) = common_config::load::<setup::Config>("language: \"bad lang!\"\nimport:\n  folow: true\n");
     assert_eq!(cfg.language, "en");

@@ -114,6 +114,17 @@ permissions:
     description: Delete tracks
   - node: pumbo.perms.track.edit
     description: Change the groups of a track
+  # Staff limits (limits in config.yml); only PumboPerms checks these.
+  - node: pumbo.perms.modify.user.self
+    description: Change your own data with /pp (staff limits)
+  - node: pumbo.perms.modify.user.others
+    description: Change other players with /pp (staff limits)
+  - node: pumbo.perms.view.user.self
+    description: See your own data with /pp (staff limits)
+  - node: pumbo.perms.view.user.others
+    description: See other players with /pp (staff limits)
+  - node: pumbo.perms.usecontext.global
+    description: Make /pp changes without a context (staff limits)
 
 # %pumboperms_prefix% and friends for other plugins (meta: %pumboperms_meta:<key>%).
 placeholders:

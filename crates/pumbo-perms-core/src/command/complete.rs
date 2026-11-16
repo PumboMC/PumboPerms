@@ -8,6 +8,7 @@ use crate::engine::Engine;
 use crate::perms::KnownName;
 
 use super::help::{GENERAL, GROUP_ONLY, HOLDER, TRACK, USER_ONLY, node_of, rights};
+use super::limits::LIMIT_NODES;
 use super::target::user_arg;
 use super::{ACTIONS, PLUGIN, Who, allowed, subcommand, switched_off};
 
@@ -133,7 +134,8 @@ pub fn complete(e: &mut Engine, who: &Who, args: &[String], online: &[KnownName]
             }
             ("node", _) => {
                 let catalog = COMMAND_NODES.iter().chain(PUMBO_NODES).map(|n| n.to_string());
-                e.perms.all_nodes().iter().cloned().chain(catalog).chain(own_nodes()).collect()
+                let limits = LIMIT_NODES.iter().map(|(n, _)| n.to_string());
+                e.perms.all_nodes().iter().cloned().chain(catalog).chain(own_nodes()).chain(limits).collect()
             }
             ("true|false", _) => vec!["true".into(), "false".into()],
             ("context...", _) => context::KEYS.iter().map(|k| format!("{k}=")).collect(),
