@@ -6,8 +6,8 @@
 //! - `{"op":"hello"}` -> `{"ok":true,"plugin":"PumboPerms","version":"0.1.0","protocol":1,"ops":[...]}`
 //! - `{"op":"check","uuid":"…","node":"pumbo.bans.ban","world":"world","op-level":0}`
 //!   -> `{"ok":true,"value":true}` (`null`: nobody decides, use your default)
-//! - `{"op":"info","uuid":"…","world":"world"}` -> rank, prefix, suffix, groups
-//!   and meta (what `%rank%`, `%prefix%` and `%suffix%` show)
+//! - `{"op":"info","uuid":"…","world":"world"}` -> rank, prefix, suffix, groups,
+//!   meta and the weight of the rank (what `%rank%`, `%prefix%` and `%suffix%` show)
 //! - `{"op":"fill","uuid":"…","world":"world","text":"%pumboperms_prefix%Steve"}`
 //!   -> `{"ok":true,"text":"[VIP] Steve"}`: the placeholders of [`placeholder`]
 //!
@@ -65,6 +65,9 @@ pub struct Info {
     /// Every inherited group, most important first.
     pub groups: Vec<String>,
     pub meta: BTreeMap<String, String>,
+    /// The weight of the primary group; 0 from a version that did not send it.
+    #[serde(default)]
+    pub weight: i32,
 }
 
 /// What PumboPerms shows for player `uuid` at `q`; `None` for a bad UUID.
@@ -77,6 +80,7 @@ pub fn info(e: &mut Engine, uuid: &str, q: &Query, now: u64) -> Option<Info> {
     Some(Info {
         name: e.find_user(&uuid).map(|k| k.name).unwrap_or_default(),
         rank_display: e.perms.display_name(&rank),
+        weight: e.perms.group(&rank).map_or(0, |g| g.weight),
         rank,
         prefix: prefix.unwrap_or_default(),
         suffix: suffix.unwrap_or_default(),
@@ -86,14 +90,16 @@ pub fn info(e: &mut Engine, uuid: &str, q: &Query, now: u64) -> Option<Info> {
 }
 
 /// Placeholder `key` of the `pumboperms` namespace: `prefix`, `suffix`, `rank`
-/// (display name of the primary group), `group` (its name), `groups` and
-/// `meta` with the meta key as `arg`. `None` for an unknown key.
+/// (display name of the primary group), `group` (its name), `weight` (its
+/// weight), `groups` and `meta` with the meta key as `arg`. `None` for an
+/// unknown key.
 pub fn placeholder(info: &Info, key: &str, arg: Option<&str>) -> Option<String> {
     Some(match key {
         "prefix" => info.prefix.clone(),
         "suffix" => info.suffix.clone(),
         "rank" => info.rank_display.clone(),
         "group" => info.rank.clone(),
+        "weight" => info.weight.to_string(),
         "groups" => info.groups.join(", "),
         "meta" => info.meta.get(arg?)?.clone(),
         _ => return None,

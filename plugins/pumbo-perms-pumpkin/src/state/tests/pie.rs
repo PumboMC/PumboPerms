@@ -21,8 +21,8 @@ fn value(reply: &[u8]) -> Option<String> {
     v["on_request"].as_object().expect("a body").get("value").map(|x| x.as_str().unwrap().to_string())
 }
 
-/// Steve online in `world_nether`, in `vip` with a prefix, a suffix, a
-/// display name and the meta key `color`.
+/// Steve online in `world_nether`, in `vip` (weight 10) with a prefix, a
+/// suffix, a display name and the meta key `color`.
 fn steve_with_a_rank(rt: &mut Rt) {
     rt.join(U, Online { name: "Steve".into(), world: "world_nether".into(), op_level: 0 }, 0);
     let (_, d) = rt
@@ -30,6 +30,7 @@ fn steve_with_a_rank(rt: &mut Rt) {
         .perms
         .edit_group("vip", |g| {
             g.display_name = "VIP".into();
+            g.weight = 10;
             for (kind, key, value) in [
                 (pumbo_perms_core::model::MetaKind::Prefix, "", "[VIP] "),
                 (pumbo_perms_core::model::MetaKind::Suffix, "", " *"),
@@ -158,6 +159,7 @@ fn passive_mode_answers_from_bridge_info() {
         suffix: String::new(),
         groups: vec!["admin".into()],
         meta: [("color".to_string(), "red".to_string())].into(),
+        weight: 100,
     };
     let data = serde_json::to_string(&from_proxy).unwrap();
     let asked = std::cell::RefCell::new(Vec::new());
@@ -177,5 +179,54 @@ fn passive_mode_answers_from_bridge_info() {
     assert_eq!(asked.borrow().len(), 2);
     // Nothing from the bridge yet.
     assert_eq!(value(&Rt::pie_passive_reply(&ask("prefix", Some("Steve"), None), |_| None)), None);
+    uninstall();
+}
+
+#[test]
+fn info_carries_the_weight_of_the_primary_group() {
+    let mut rt = rt();
+    steve_with_a_rank(&mut rt);
+    let q = rt.engine.query("world_nether");
+    let info = ipc::info(&mut rt.engine, U, &q, 0).unwrap();
+    assert_eq!((info.rank.as_str(), info.weight), ("vip", 10));
+    let reply: serde_json::Value = serde_json::from_slice(
+        &ipc_reply(format!(r#"{{"op":"info","uuid":"{U}"}}"#).as_bytes(), Some(&mut rt.engine), 0).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(reply["weight"], 10, "{reply}");
+    // Below zero too; without a group of their own, the weight of `default`.
+    let (_, d) = rt.engine.perms.edit_group("vip", |g| g.weight = -5).unwrap();
+    rt.engine.commit(&d, None).unwrap();
+    assert_eq!(ipc::info(&mut rt.engine, U, &q, 0).unwrap().weight, -5);
+    const ALEX: &str = "00000000-0000-0000-0000-000000000002";
+    rt.join(ALEX, Online { name: "Alex".into(), world: "world".into(), op_level: 0 }, 0);
+    let alex = ipc::info(&mut rt.engine, ALEX, &q, 0).unwrap();
+    assert_eq!((alex.rank.as_str(), alex.weight), ("default", 0));
+}
+
+#[test]
+fn weight_placeholder_matches_info() {
+    let mut rt = rt();
+    steve_with_a_rank(&mut rt);
+    let q = rt.engine.query("world_nether");
+    let info = ipc::info(&mut rt.engine, U, &q, 0).unwrap();
+    assert_eq!(ipc::fill(&info, "%pumboperms_weight%"), "10");
+    assert_eq!(ipc::placeholder(&info, "weight", None).as_deref(), Some("10"));
+    assert_eq!(rt.pie_value(&ask("weight", Some("Steve"), None), 0).as_deref(), Some("10"));
+    assert!(pie::NAMES.contains(&"weight"));
+}
+
+#[test]
+fn info_without_weight_reads_as_zero() {
+    // What a proxy before 1.1.0 sends through PumboBridge.
+    let old =
+        r#"{"name":"Steve","rank":"vip","rank_display":"VIP","prefix":"","suffix":"","groups":["vip"],"meta":{}}"#;
+    let info: ipc::Info = serde_json::from_str(old).unwrap();
+    assert_eq!(info.weight, 0);
+    let mut rt = rt();
+    rt.join(U, steve(), 0);
+    install(rt);
+    let reply = Rt::pie_passive_reply(&ask("weight", Some("Steve"), None), |_| Some(old.to_string()));
+    assert_eq!(value(&reply).as_deref(), Some("0"));
     uninstall();
 }

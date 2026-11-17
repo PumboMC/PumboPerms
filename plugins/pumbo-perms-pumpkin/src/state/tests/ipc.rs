@@ -54,6 +54,7 @@ fn passive_ipc_answers_from_proxy_data() {
         suffix: String::new(),
         groups: vec!["vip".into(), "default".into()],
         meta: Default::default(),
+        weight: 0,
     };
     let data = serde_json::to_string(&info).unwrap();
     let bridge = serde_json::json!({

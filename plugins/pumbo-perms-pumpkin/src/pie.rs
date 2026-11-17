@@ -17,7 +17,7 @@ pub const PROTOCOL: u64 = 0;
 /// `%pumboperms_<name>%`.
 pub const NAMESPACE: &str = "pumboperms";
 /// The names PumpkinPIE shows for the namespace. It forwards any other name too.
-pub const NAMES: [&str; 6] = ["prefix", "suffix", "rank", "group", "groups", "meta"];
+pub const NAMES: [&str; 7] = ["prefix", "suffix", "rank", "group", "groups", "meta", "weight"];
 
 /// Between pings while PumpkinPIE does not answer (ms).
 pub const ABSENT_MS: u64 = 10_000;
@@ -232,7 +232,7 @@ mod tests {
         let v = json(&register());
         assert_eq!(v["op"], "register_expansion");
         assert_eq!(v["namespace"], "pumboperms");
-        assert_eq!(v["placeholders"], json!(["prefix", "suffix", "rank", "group", "groups", "meta"]));
+        assert_eq!(v["placeholders"], json!(["prefix", "suffix", "rank", "group", "groups", "meta", "weight"]));
         assert_eq!(v["cache"], json!({ "kind": "never" }));
     }
 

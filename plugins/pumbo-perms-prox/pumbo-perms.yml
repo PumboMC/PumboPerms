@@ -136,3 +136,4 @@ placeholders:
     - { name: group, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }
     - { name: groups, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }
     - { name: meta, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "" }
+    - { name: weight, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "0" }

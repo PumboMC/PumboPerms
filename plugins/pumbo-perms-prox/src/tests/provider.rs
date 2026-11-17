@@ -374,3 +374,33 @@ fn placeholder_values_close_their_tags() {
         ]
     );
 }
+
+/// The weight of the rank, for sorting the player list: `0` without a group
+/// of one's own (and while the plugin cannot answer).
+#[test]
+fn group_weight_is_a_placeholder() {
+    assert!(
+        MANIFEST
+            .contains(r#"- { name: weight, scope: player, mode: pull, public: true, ttl-ms: 1000, fallback: "0" }"#)
+    );
+    let (p, _) = plugin(None);
+    let steve = testing::add_player("Steve", Some("lobby"));
+    load(&p, steve);
+    console(&p, "creategroup admin");
+    console(&p, "group admin setweight -5");
+    let weight = || {
+        let ask = PlaceholderRequest {
+            key: "weight".into(),
+            arg: None,
+            player: Some(steve),
+            context: pumbo_sdk::PlayerContext { server: Some("lobby".into()), groups: Vec::new() },
+        };
+        match block_on(p.on_placeholder(vec![ask])).pop().flatten() {
+            Some(Text::Legacy(s)) => s,
+            other => format!("{other:?}"),
+        }
+    };
+    assert_eq!(weight(), "0");
+    console(&p, "user Steve parent add admin");
+    assert_eq!(weight(), "-5");
+}

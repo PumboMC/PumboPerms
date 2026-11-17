@@ -9,10 +9,11 @@ Your plugin can ask PumboPerms whether a player has a permission, read their ran
 | `%pumboperms_prefix%` / `%pumboperms_suffix%` | the player's prefix / suffix |
 | `%pumboperms_rank%` | display name of the primary group (`VIP`) |
 | `%pumboperms_group%` | name of the primary group (`vip`) |
+| `%pumboperms_weight%` | weight of the primary group (`100`, `0`, `-5`) |
 | `%pumboperms_groups%` | every inherited group, most important first |
 | `%pumboperms_meta:<key>%` | a meta value, e.g. `%pumboperms_meta:color%` |
 
-Unknown placeholders stay in the text as they are. On Pumpkin, `fill` keeps the `&` color codes of prefixes; on PumboProx they come as MiniMessage (see below).
+A tab list can sort players by `%pumboperms_weight%`: a higher weight means a higher place. A player whose primary group has no weight gets `0`. Unknown placeholders stay in the text as they are. On Pumpkin, `fill` keeps the `&` color codes of prefixes; on PumboProx they come as MiniMessage (see below).
 
 Available from 0.1.2-beta.
 
@@ -24,7 +25,7 @@ Send JSON to the plugin `pumboperms` with Pumpkin's inter-plugin call (`ipc::sen
 | --- | --- |
 | `{"op": "hello"}` | `{"ok": true, "plugin": "PumboPerms", "version": "…", "protocol": 1, "ops": ["hello", "check", "info", "fill"]}` |
 | `{"op": "check", "uuid": "…", "node": "myplugin.fly", "world": "world", "op-level": 0}` | `{"ok": true, "value": true}`, `false`, or `null` when nobody decides (use your own default). Works for offline players too. |
-| `{"op": "info", "uuid": "…", "world": "world"}` | name, rank, display name, prefix, suffix, all groups and meta of the player. A player without groups, permissions or meta who has not joined since the update from 0.1.2-beta has the UUID as the name until they join again. |
+| `{"op": "info", "uuid": "…", "world": "world"}` | name, rank, display name, prefix, suffix, all groups and meta of the player, and `weight`, the weight of the rank (from 1.1.0; read a missing one as `0`). A player without groups, permissions or meta who has not joined since the update from 0.1.2-beta has the UUID as the name until they join again. |
 | `{"op": "fill", "uuid": "…", "world": "world", "text": "%pumboperms_prefix%Steve"}` | `{"ok": true, "text": "&6[VIP] Steve"}` |
 
 Errors are `{"ok": false, "error": "…"}`. An `op` this version does not know answers `{"ok": false, "error": "unsupported op"}`, and a known `op` with missing or bad fields `{"ok": false, "error": "bad request: …"}`. Send only the ops that `hello` lists.
