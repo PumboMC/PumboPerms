@@ -196,7 +196,11 @@ Security hardening of the proxy plugin, the Pumpkin plugin and PumboBridge. The 
 
 ### What next? 1.1.0
 
-- Staff limits, with two switches that are off by default: argument permissions, and a rule that staff must be in a group before they change it or give it to players. They decide which players, groups and tracks your staff may change and view.
-- Rank, prefix, suffix and meta as placeholders through PumpkinPIE.
-- A change copies only what it touches, so a change in a big group no longer doubles the memory PumboPerms uses.
-- Players with their own groups, permissions or meta stay in the database while offline and load when they join or when a command changes them, so memory follows the players online.
+- ☑️ Staff limits, with two switches that are off by default: argument permissions, and a rule that staff must be in a group before they change it or give it to players. They decide which players, groups and tracks your staff may change and view.
+- ☑️ Rank, prefix, suffix and meta as placeholders through PumpkinPIE.
+- ☑️ A change copies only what it touches, so a change in a big group no longer doubles the memory PumboPerms uses.
+- ☑️ Players with their own groups, permissions or meta stay in the database while offline and load when they join or when a command changes them, so memory follows the players online.
+
+### Later
+
+- Renaming a group with 200 000 members or more on PumboProx in several steps, so it fits the default plugin time budget.

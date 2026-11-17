@@ -2,6 +2,22 @@
 
 All notable changes to PumboPerms, one section per release. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Staff limits: `limits.argument-permissions` and `limits.require-group-membership`, both off by default.
+- Placeholders through PumpkinPIE.
+- `%pumboperms_weight%` and the field `weight` in the `info` answer to other plugins: the weight of the player's rank.
+- Pumpkin 0.2.2, with the file for 0.2.1.
+
+### Changed
+
+- Players with their own groups, permissions or meta stay in the database while offline.
+- A change no longer copies all data.
+- `/pp export` no longer needs memory for the whole database.
+- `group info` and `listmembers` count only memberships that have not ended.
+
 ## [1.0.2] - 2026-11-11
 
 ### Fixed
@@ -87,6 +103,7 @@ No changes in PumboPerms; built with the shared library of 0.1.1-beta.
 
 First public beta.
 
+[Unreleased]: https://github.com/PumboMC/PumboPerms/compare/v1.0.2...HEAD
 [1.0.2]: https://github.com/PumboMC/PumboPerms/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/PumboMC/PumboPerms/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/PumboMC/PumboPerms/compare/v0.1.2-beta...v1.0.0
