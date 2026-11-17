@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0"></a>
   <img src="https://img.shields.io/badge/built%20with-Rust-orange?logo=rust" alt="Built with Rust">
   <img src="https://img.shields.io/badge/plugin-WebAssembly-654FF0?logo=webassembly&logoColor=white" alt="WebAssembly plugin">
-  <a href="https://github.com/Pumpkin-MC/Pumpkin"><img src="https://img.shields.io/badge/Pumpkin-0.2.1%20%2826.3%29-F28C28" alt="Pumpkin 0.2.1 (26.3)"></a>
+  <a href="https://github.com/Pumpkin-MC/Pumpkin"><img src="https://img.shields.io/badge/Pumpkin-0.2.2%20%7C%200.2.1%20%2826.3%29-F28C28" alt="Pumpkin 0.2.2 | 0.2.1 (26.3)"></a>
   <a href="https://github.com/PumboMC/PumboProx"><img src="https://img.shields.io/badge/PumboProx-supported-62B47A" alt="PumboProx: supported"></a>
   <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Status: stable">
 </p>
@@ -19,7 +19,7 @@ No code or parts was copied from [LuckPerms](https://github.com/LuckPerms/LuckPe
 
 ## Pumpkin versions
 
-Each Pumpkin release loads only its own file:
+Each file loads only on the Pumpkin releases it is listed for:
 
 - Pumpkin 0.2.1+26.3-26.51 and 0.2.2+26.3-26.60: `PumboPerms-v<version>-for-Pumpkin-0.2.1-and-0.2.2.wasm` from GitHub, or the file on the Pumpkin market
 - Pumpkin 0.2.0+26.3-26.51: `PumboPerms-v<version>-for-Pumpkin-0.2.0.wasm` from GitHub

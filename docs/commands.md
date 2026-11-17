@@ -59,6 +59,8 @@ On both platforms Tab completes players, groups and tracks only for those with t
 
 On PumboProx, PumboPerms answers Tab itself through the proxy's plugin suggestions: after `/pp` it offers the subcommands you may use, and on every level after that only the words you may use.
 
+On Pumpkin 0.2.2 PumboPerms registers `/pp` without Tab completion: Pumpkin 0.2.2 crashes when a player asks a plugin for completions. Players still get the subcommand words from the command tree, but no players, groups, tracks or nodes, and the log says so at start. It comes back with a PumboPerms update once Pumpkin fixes this.
+
 On Pumpkin, `/pp`, `/pumboperms` and every name in `commands.aliases` are separate commands with the whole tree of subcommands, so Tab works right after the space (Pumpkin 0.2.0 suggests nothing there for an alias). Above the chat box the client names the next argument (`<player>`, `<node> [<value>|<context>]`), and after a complete command it shows nothing more. Pumpkin 0.2.0 gives plugins no way to hide part of a command, so everyone who may use `/pp` sees all subcommand words. Pumpkin reads the line along that tree before PumboPerms sees it, which makes a few things work differently than on PumboProx:
 
 - Pumpkin matches the words of the help exactly, in lower case. Any other word in their place goes to PumboPerms with the rest of the line and works as on the proxy: the shorter names above, words in upper case (`/pp USER Steve INFO`) and `editor`, which answers that the editor is not there yet. Tab offers the words of the help, and after a shorter name the words that follow it.

@@ -39,7 +39,7 @@ On PumboProx, put `pumbo-perms.wasm` into the proxy's `plugins/` folder and star
 | **Pumpkin 0.2.0** (one server, Minecraft 26.3) | `PumboPerms-v<version>-for-Pumpkin-0.2.0.wasm` | `PumboPerms-26.3.wasm`, on the server | Stable. Ranks and permissions for that server. |
 | **Pumpkin 0.1.0-dev** (one server, Minecraft 26.2) | `PumboPerms-v<version>-for-Pumpkin-0.1.0-dev.wasm` | `PumboPerms-26.2.wasm`, on the server | Stable. Ranks and permissions for that server. |
 
-Pumpkin checks the plugin API strictly: a file only loads on the Pumpkin version it was built for. On Pumpkin 0.1.0-dev every player sees the whole command list in Tab; commands they lack are still refused.
+Pumpkin checks the plugin API strictly: a file only loads on the Pumpkin version it was built for. Pumpkin 0.2.2 has the plugin API of 0.2.1 and loads the same file. On Pumpkin 0.1.0-dev every player sees the whole command list in Tab; commands they lack are still refused.
 
 On Pumpkin 0.2.2 `/pp` has no Tab completion of player and group names: Pumpkin 0.2.2 crashes when a player asks a plugin for completions. It comes back with a PumboPerms update once Pumpkin ships [a fix](https://github.com/Pumpkin-MC/Pumpkin/pull/4149).
 

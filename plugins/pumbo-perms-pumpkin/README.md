@@ -13,7 +13,7 @@ PumboPerms is a permission and rank system for the [Pumpkin](https://github.com/
 - **Tracks**: ordered groups for `/pp promote` and `/pp demote`.
 - **Staff limits**: two switches, off by default, for staff who are not admins (see "Permissions").
 - **Log** of every change, notifications for staff, **JSON export and import**.
-- **Tab completion** for every subcommand, player, group, track and node, with the name of the next argument above the chat box.
+- **Tab completion** for every subcommand, player, group, track and node, with the name of the next argument above the chat box (on Pumpkin 0.2.2 only the subcommand words, see "Compatibility").
 - **Other plugins** can ask PumboPerms over Pumpkin's inter-plugin messages (also about offline players), and read its placeholders through PumpkinPIE.
 - English and Polish messages in the Pumbo look: "Pumbo" in orange, "Perms" and the command words in yellow, help pages with clicks and tooltips, and info views with labels, section headings, `true` in green and `false` in red.
 
@@ -55,11 +55,13 @@ Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS
 
 | File | Pumpkin | Minecraft |
 | --- | --- | --- |
-| `PumboPerms-26.3.wasm` | release `0.2.1+26.3-26.51` | 26.3 |
+| `PumboPerms-26.3.wasm` | release `0.2.2+26.3-26.60` or `0.2.1+26.3-26.51` | 26.3 |
 | `PumboPerms-0.2.0.wasm` | release `0.2.0+26.3-26.51` | 26.3 |
 | `PumboPerms-26.2.wasm` | release `0.1.0-dev+26.2-26.45` | 26.2 |
 
-Pumpkin checks the plugin API strictly: a file only loads on the server version it was built for.
+Pumpkin checks the plugin API strictly: a file only loads on the server version it was built for. Pumpkin 0.2.2 has the plugin API of 0.2.1 and loads the same file.
+
+On Pumpkin 0.2.2 `/pp` has no Tab completion: Pumpkin 0.2.2 crashes when a player asks a plugin for completions, so PumboPerms offers none there and says so in the log at start. Players still get the subcommand words, but no players, groups or nodes. Tab completion comes back with a PumboPerms update once Pumpkin fixes this.
 
 On Pumpkin 0.1.0-dev every player sees the whole command list in Tab; commands they lack are still refused.
 
@@ -91,7 +93,7 @@ Then create groups from the console (or as an operator of level 3) and give them
 
 ## Updating
 
-Replace the file with the new one of the same name (`PumboPerms-26.3.wasm` or `PumboPerms-26.2.wasm`) and restart the server. The GitHub release has the version in the file name (`PumboPerms-Pumpkin-26.3-<version>.wasm`); rename it. Keep the name, so the update overwrites the old file instead of adding a second PumboPerms next to it. `plugins/data/pumboperms/` stays.
+Replace the file with the new one of the same name (`PumboPerms-26.3.wasm` or `PumboPerms-26.2.wasm`) and restart the server. The GitHub release has the version in the file name (`PumboPerms-v<version>-for-Pumpkin-0.2.1-and-0.2.2.wasm`); rename it. Keep the name, so the update overwrites the old file instead of adding a second PumboPerms next to it. `plugins/data/pumboperms/` stays.
 
 Coming from 0.1.2-beta, run `/pp export` first. The first start of the new version moves the import ledgers (`imports/<source>.json`, renamed to `.json.migrated`) into `perms.redb` and raises its schema to 2; 0.1.2-beta then refuses that file as newer than it understands. To go back, put the old file in place and import the export with `/pp import <file>` on a fresh `perms.redb`.
 
