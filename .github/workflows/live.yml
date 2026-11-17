@@ -80,10 +80,13 @@ jobs:
           repository: PumboMC/PumboBans
           ref: main
           path: bans
+      # Each checkout builds with the Rust of its own rust-toolchain.toml;
+      # stable is for a checkout that has none yet.
       - name: Rust
         run: |
           rustup toolchain install stable --profile minimal -t wasm32-wasip2
           rustup default stable
+          (cd plugin && rustup toolchain install)
       - uses: Swatinem/rust-cache@v2.9.2
         with:
           workspaces: |

@@ -104,7 +104,7 @@ Coming from 0.1.2-beta, run `/pp export` first. The first start of the new versi
 cargo test -p pumbo-perms-core -p pumbo-perms-pumpkin
 ```
 
-Rust stable with the `wasm32-wasip2` target is required.
+Rust comes from `rust-toolchain.toml` at the workspace root: rustup installs that version and the `wasm32-wasip2` target on the first build.
 
 ## Commands
 

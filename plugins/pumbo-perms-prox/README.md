@@ -128,7 +128,7 @@ Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS
 cargo test -p pumbo-perms-core -p pumbo-perms-prox
 ```
 
-Needs Rust stable with the `wasm32-wasip2` target.
+Rust comes from `rust-toolchain.toml` at the workspace root: rustup installs that version and the `wasm32-wasip2` target on the first build.
 
 ## License
 
