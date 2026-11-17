@@ -48,6 +48,7 @@ Measured on an Apple M4 Pro laptop with release builds of the plugin code; a VPS
 - A player gets the command list again at most once a second.
 - A join with 400 000 known names: up to 0.135 ms, the first after the start up to 0.57 ms (empty database cache). Known names stay in the database, and memory holds the names of the players online: with 400 000 known names, opening the database and 200 joins raised the heap peak by 0.4 MiB (159.3 MiB in 0.1.2-beta).
 - Memory: with the numbers above the test process grew by about 13 MB. `max_memory_mb = 64` in `[plugins.overrides.pumboperms]` leaves room, also for 400 000 known names: with that limit and such a database, PumboPerms on Pumpkin 0.2.0 opened the database and read its data in 15 ms, with no plugin errors in the log.
+- Offline players stay in the database: memory holds the players online and the last 64 offline players a command asked about. With 400 000 players in one group, PumboPerms on Pumpkin 0.2.1 and 0.2.2 started in 17 MB of plugin memory; `listmembers` took about 0.7 s and `/pp export` 1.3 s with no more memory, and renaming the group took 4.3 s and 44 MB (25 MB with 100 000 members). See [Limits](../../docs/how-it-works.md#limits) for what still grows with the database.
 
 ## Compatibility
 
