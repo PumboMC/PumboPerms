@@ -45,6 +45,15 @@ If your plugin answers `{"op": "export-permissions"}` with `{"ok": true, "finger
 
 The import fixes or leaves out entries no command could write, such as a group or track whose name no command accepts (it comes in under a valid form of it), and lists each one in its reply. Players your data names only by nickname get nothing, because Pumpkin does not tell whether Mojang checked an account.
 
+### Through PumpkinPIE
+
+With [PumpkinPIE](https://github.com/PumboMC/PumpkinPIE) on the server, PumboPerms registers the namespace `pumboperms` with it, so a plugin that resolves placeholders through PumpkinPIE gets the placeholders above without asking PumboPerms itself. PumpkinPIE asks PumboPerms for every value and keeps none, so a change made with `/pp` shows at once. It asks for an online player by nickname; for a text without a player, or a player who is not online, PumboPerms declines and the placeholder stays in the text. The values are the ones `fill` gives, with the `&` color codes of prefixes and suffixes, so the plugin that shows them turns the codes into colors.
+
+- PumpkinPIE is not a dependency. PumboPerms starts and works without it, and registers within 30 seconds after PumpkinPIE loads, also when PumpkinPIE is loaded again.
+- When another plugin registers `pumboperms` too, the one that registered last gets the requests, and PumpkinPIE does not say so. `/pie expansions` from the console or as an operator shows which plugin has the namespace.
+- Behind PumboProx with PumboPerms on the proxy, the values come from the proxy, as for `fill`.
+- PumpkinPIE exists for Pumpkin 0.2.1 and 0.2.2. With older Pumpkin releases nothing changes.
+
 ## On PumboProx
 
 PumboPerms on the proxy is the network's permission provider:
