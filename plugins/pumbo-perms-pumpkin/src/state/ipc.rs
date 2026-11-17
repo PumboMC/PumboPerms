@@ -2,6 +2,10 @@
 
 use pumbo_perms_core::command::Who;
 use pumbo_perms_core::engine::Engine;
+use pumbo_perms_core::ipc;
+
+use super::{Rt, with};
+use crate::pie;
 
 /// Who sent a command, as Pumpkin tells it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,4 +96,44 @@ pub fn passive_reply(
 pub fn proxy_decision(player_info: &[u8], node: &str) -> Option<Option<bool>> {
     let v: serde_json::Value = serde_json::from_slice(player_info).ok()?;
     Some(v.get("nodes")?.as_object()?.get(node).and_then(serde_json::Value::as_bool))
+}
+
+impl Rt {
+    /// The UUID and world of an online player by nickname: as written, then
+    /// in any letter case.
+    pub fn online_named(&self, name: &str) -> Option<(String, String)> {
+        // A linear scan of the online players; a name map if PumpkinPIE asks thousands of times a second.
+        let exact = self.online.iter().find(|(_, o)| o.name == name);
+        let found = exact.or_else(|| self.online.iter().find(|(_, o)| o.name.eq_ignore_ascii_case(name)));
+        found.map(|(uuid, o)| (uuid.clone(), o.world.clone()))
+    }
+
+    /// A placeholder PumpkinPIE asks for, from this database: the value for
+    /// the online player in their world, as `fill` gives it; `None` declines.
+    pub fn pie_value(&mut self, req: &pie::Request, now: u64) -> Option<String> {
+        let (name, argument) = req.wanted()?;
+        let (uuid, world) = self.online_named(req.viewer.as_deref()?)?;
+        let q = self.engine.query(&world);
+        let info = ipc::info(&mut self.engine, &uuid, &q, now)?;
+        ipc::placeholder(&info, name, argument)
+    }
+
+    /// The reply to PumpkinPIE's `on_request` from the state. A busy state
+    /// (a nested call) or none declines: the placeholder stays in the text.
+    pub fn pie_reply(req: &pie::Request, now: u64) -> Vec<u8> {
+        pie::answer(with(|rt| rt.pie_value(req, now)).flatten())
+    }
+
+    /// [`Rt::pie_reply`] while the proxy rules: the player from the state,
+    /// which is released before `info` asks for what PumboBridge carries from
+    /// the proxy (the proxy's `ipc::Info` as JSON).
+    pub fn pie_passive_reply(req: &pie::Request, info: impl FnOnce(&str) -> Option<String>) -> Vec<u8> {
+        let value = req.wanted().and_then(|(name, argument)| {
+            let viewer = req.viewer.as_deref()?;
+            let (uuid, _) = with(|rt| rt.online_named(viewer)).flatten()?;
+            let info: ipc::Info = serde_json::from_str(&info(&uuid)?).ok()?;
+            ipc::placeholder(&info, name, argument)
+        });
+        pie::answer(value)
+    }
 }

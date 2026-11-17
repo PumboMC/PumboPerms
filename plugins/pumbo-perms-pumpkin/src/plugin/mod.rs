@@ -4,6 +4,7 @@ pub mod api;
 mod commands;
 mod events;
 mod import;
+mod pie;
 mod push;
 mod settings;
 mod state;
@@ -200,6 +201,11 @@ impl Plugin for PumboPerms {
 
     fn handle_ipc_message(&self, _sender: String, message: Vec<u8>) -> Result<Vec<u8>, String> {
         let now = now_ms();
+        // PumpkinPIE asks from inside its own handler: the answer comes from
+        // memory, before anything here calls the host.
+        if let Some(req) = crate::pie::request(&message) {
+            return Ok(pie::answer(&req, now));
+        }
         SERVER.with(|s| {
             let server = s.borrow();
             // Every entry looks at expired nodes: the periodic task may be frozen.

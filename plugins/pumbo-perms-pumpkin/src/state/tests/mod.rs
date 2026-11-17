@@ -5,6 +5,7 @@ use super::*;
 
 mod import;
 mod ipc;
+mod pie;
 mod players;
 
 const U: &str = "00000000-0000-0000-0000-000000000001";

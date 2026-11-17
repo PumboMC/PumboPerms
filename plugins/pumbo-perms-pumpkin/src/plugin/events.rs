@@ -79,8 +79,10 @@ impl EventHandler<PlayerChangeWorldEvent> for ChangeWorld {
     }
 }
 
-/// Every `refresh-seconds`: expired nodes, changed operator levels and worlds.
+/// Every `refresh-seconds`: expired nodes, changed operator levels and
+/// worlds. Every second: PumpkinPIE, when a message to it is due.
 pub fn tick(server: &Server) {
+    super::pie::tick(now_ms());
     if !state::with(|rt| rt.refresh_due(now_ms())).unwrap_or(false) {
         return;
     }
