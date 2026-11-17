@@ -18,10 +18,11 @@ At the first start it takes over the permissions your server already has, so you
 | **Tracks** | Ordered groups that form a rank ladder. |
 | **Promote** | `/pp promote <player> <track>` moves a player one step up. |
 | **Demote** | `/pp demote <player> <track>` moves a player one step down. |
+| **Staff limits** | Two switches in `config.yml`, both off by default. With the first, staff need a node for each player, group or track they change or view, and for the node, group, key and context of a change. With the second, they give, take and edit only groups they are in. See [Staff limits](commands.md#staff-limits). |
 | **Log** | Every change is logged in `/pp log`. Staff can get a message about changes made by others. |
 | **Export** | `/pp export` writes everything into one JSON file. |
 | **Import** | `/pp import` reads such a file back. At start PumboPerms also takes over ranks from PumboProx and from other plugins. `/pp import undo` takes an import back. |
-| **Placeholders** | `%pumboperms_prefix%`, `%pumboperms_rank%` and more for chat, tab and scoreboard plugins (from 0.1.2-beta). See [INTEGRATION.md](../INTEGRATION.md). |
+| **Placeholders** | `%pumboperms_prefix%`, `%pumboperms_rank%`, `%pumboperms_weight%` and more for chat, tab and scoreboard plugins (from 0.1.2-beta). On Pumpkin they also reach every plugin that reads placeholders from [PumpkinPIE](https://github.com/PumboMC/PumpkinPIE). See [INTEGRATION.md](../INTEGRATION.md). |
 | **Autocomplete** | Tab completes subcommands, players, groups, tracks and permission nodes, and offers players, groups and tracks only with the right to see them. On PumboProx it offers only the subcommands you may use; on Pumpkin everyone who may use `/pp` sees all subcommand words. See [Tab completion](commands.md#tab-completion). After a change each player's command list is updated. |
 | **Look** | "Pumbo" in orange, "Perms" and the `/pp` command words in yellow. Info views show labels with their values, section headings, `true` in green and `false` in red, and a prefix in its own colours. The console gets the same text without colours. |
 

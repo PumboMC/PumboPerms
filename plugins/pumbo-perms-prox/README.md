@@ -9,6 +9,8 @@ PumboPerms on the PumboProx proxy is the permission and rank system of a whole n
 - **Contexts per server**: `server=lobby` limits a permission, group or prefix to one server, `group=<name>` to a server group of `pumboprox.yml` (`server-group`). Server and group names ignore letter case.
 - **Takes over `permissions.yml`** at the first start: groups, inheritance and players (also players written by nickname, who get their entries when they join with an online-mode account). An import only adds; conflicts go to `/pp log`; importing the file again keeps the tracks, inheritance, weights and ranks you set since; `/pp import undo file` takes it back.
 - **Keeps the ranks while it is down**: when PumboPerms restarts, is reloaded, unloaded or cannot read its database, players online keep the permissions it gave them, and the proxy refuses new logins (`on-load-failure: deny`, the default) instead of falling back to `permissions.yml`, which still holds the ranks from before the takeover.
+- **Staff limits**: the same two switches as on Pumpkin, off by default, in the proxy's `config.yml` (see "Permissions").
+- **Placeholders** in the proxy's placeholder registry for every proxy plugin: `%pumboperms_prefix%`, `%pumboperms_rank%`, `%pumboperms_weight%` and the rest of [the list](../pumbo-perms-pumpkin/README.md#placeholders).
 
 ## How it works on PumboProx
 
@@ -90,6 +92,8 @@ Plugins on such a server keep asking the local PumboPerms (`check`, `info`, `fil
 
 `pumbo.perms.<action>` for every subcommand (the list is in the manifest `pumbo-perms.yml` and in the Pumpkin README), `pumbo.perms.log.notify` (messages about changes), `pumbo.perms.debug`, and `pumbo.perms.command`: whether a player sees `/pp` at all, set by PumboPerms for everyone with any `pumbo.perms` permission. `pumbo.perms.*` gives everything; the console may do everything.
 
+Staff limits work as on Pumpkin and read the proxy's own `config.yml`: with `limits.argument-permissions: true`, a change or view of a player, group or track needs a node for that target (`pumbo.perms.modify.user.others`, `pumbo.perms.view.group.<group>` and so on), and so do the node, group, key and context of a change; with `limits.require-group-membership: true`, staff give, take and edit only groups they are in. The five fixed nodes (`pumbo.perms.modify.user.self` and `.others`, `pumbo.perms.view.user.self` and `.others`, `pumbo.perms.usecontext.global`) are in the proxy's list of permissions. See [Staff limits](../../docs/commands.md#staff-limits).
+
 ## Configuration
 
 `plugins/pumbo-perms/config.yml` (reload with `/pp reload` or `/pumboperms reload`; the database is not reloaded). The proxy writes it at the first start and keeps a copy of what it wrote; after an update, a file that still equals that copy follows the new version, unless a default value changed. Missing options are named in the proxy log and take their defaults; a file that is not valid YAML is refused with its line and column. Each time the file loads, PumboPerms keeps a copy in `plugins/data/pumbo-perms/config.last-good.yml`; if the file is not valid YAML at start, PumboPerms starts from that copy and logs an error, and without a copy it does not start.
@@ -99,6 +103,8 @@ Plugins on such a server keep asking the local PumboPerms (`check`, `info`, `fil
 | `language` | `en` | messages (`en`, `pl` built in; `plugins/pumbo-perms/lang/<code>.yml` overrides texts) |
 | `log.max-entries` | `10000` | changes kept for `/pp log` (0: unlimited) |
 | `log.notify` | `true` | tell players with `pumbo.perms.log.notify` about changes |
+| `limits.argument-permissions` | `false` | targets, arguments and contexts of `/pp` need their own nodes (see "Permissions"). `/pp reload` applies it |
+| `limits.require-group-membership` | `false` | staff give, take and edit only groups they are in. `/pp reload` applies it |
 | `import.enabled` | `true` | import `permissions.yml` at the first start |
 | `import.follow` | `false` | import `permissions.yml` again whenever it changes |
 | `commands.aliases` | `[pp]` | short commands for `/pumboperms`, which always works; `[]`: only `/pumboperms`. A name another plugin holds is skipped with a warning. Changes after `/prox plugins reload pumbo-perms` |

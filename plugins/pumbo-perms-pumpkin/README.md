@@ -11,9 +11,10 @@ PumboPerms is a permission and rank system for the [Pumpkin](https://github.com/
 - **Contexts**: `server=<name>`, `group=<server group>`, `world=<name>` limit a permission, a group or a prefix to where the player is.
 - **Prefixes, suffixes and meta** with priorities; the rank is the heaviest group the player is in directly, shown by its display name.
 - **Tracks**: ordered groups for `/pp promote` and `/pp demote`.
+- **Staff limits**: two switches, off by default, for staff who are not admins (see "Permissions").
 - **Log** of every change, notifications for staff, **JSON export and import**.
 - **Tab completion** for every subcommand, player, group, track and node, with the name of the next argument above the chat box.
-- **Other plugins** can ask PumboPerms over Pumpkin's inter-plugin messages (also about offline players).
+- **Other plugins** can ask PumboPerms over Pumpkin's inter-plugin messages (also about offline players), and read its placeholders through PumpkinPIE.
 - English and Polish messages in the Pumbo look: "Pumbo" in orange, "Perms" and the command words in yellow, help pages with clicks and tooltips, and info views with labels, section headings, `true` in green and `false` in red.
 
 ## How it works on Pumpkin
@@ -206,6 +207,8 @@ A player without a group that applies everywhere (no context) is also in `defaul
 
 Every group a player inherits also answers `group.<name>` with `true`, whatever is set by hand. `permission set group.<name>` is refused: use `parent add <name>`, and an import leaves such permissions out with a line in its reply.
 
+Staff limits, both off by default: with `limits.argument-permissions: true`, a change or view of a player, group or track also needs a node for that target (`pumbo.perms.modify.user.self`, `pumbo.perms.modify.user.others`, `pumbo.perms.modify.group.<group>` and so on), and the node, group, key and context of a change need their own nodes too. With `limits.require-group-membership: true`, staff give, take and edit only groups they are in. The console is never limited. The nodes and rules are in [Staff limits](../../docs/commands.md#staff-limits).
+
 ## Configuration
 
 `plugins/data/pumboperms/config.yml` (reload with `/pp reload`; the database is not reloaded). The file is written with short comments on first start. Each time it loads, PumboPerms keeps a copy as `config.last-good.yml`; if the file is not valid YAML at start, PumboPerms starts from that copy and logs an error, and without a copy it does not start. The options:
@@ -218,6 +221,8 @@ Every group a player inherits also answers `group.<name>` with `true`, whatever 
 | `defaults.op-level` | `3` | operators of this level (1-4) and up may use every `/pp` subcommand that no group or user decides; other plugins and Pumpkin's own commands keep their own operator rules; 0: off, only groups and users decide. Pumpkin's own default for the `pumboperms:` nodes changes only after a server restart |
 | `log.max-entries` | `10000` | changes kept in the log (0: unlimited) |
 | `log.notify` | `true` | tell players with `pumbo.perms.log.notify` about changes |
+| `limits.argument-permissions` | `false` | targets, arguments and contexts of `/pp` need their own nodes (see "Permissions"); turn it on before staff who are not admins get `/pp`. `/pp reload` applies it |
+| `limits.require-group-membership` | `false` | staff give, take and edit only groups they are in; a new group has no members, so only the console can give it. `/pp reload` applies it |
 | `provider.check-event` | `false` | also answer each of Pumpkin's permission checks (see below, needs a restart) |
 | `provider.resend-commands` | `true` | send players their command list again after changes (never with `check-event: true`) |
 | `provider.refresh-seconds` | `5` | how often (1-3600 s) PumboPerms looks for ended temporary entries and changed operator levels and worlds; commands, joins and other plugins' calls look for ended entries at once. `/pp reload` changes it |
@@ -257,8 +262,11 @@ Send JSON to the plugin `pumboperms` with Pumpkin's inter-plugin call (`ipc::sen
 | `%pumboperms_group%` | name of the primary group |
 | `%pumboperms_groups%` | every inherited group, most important first |
 | `%pumboperms_meta:<key>%` | a meta value, e.g. `%pumboperms_meta:color%` |
+| `%pumboperms_weight%` | weight of the primary group (`0` without one) |
 
 Unknown placeholders stay in the text as they are.
+
+With [PumpkinPIE](https://github.com/PumboMC/PumpkinPIE) on the server (Pumpkin 0.2.1 and 0.2.2), PumboPerms registers these placeholders under `pumboperms`, so every plugin that reads placeholders from PumpkinPIE gets them, with a change made with `/pp` showing at once. Behind PumboProx the values come from the proxy. See [INTEGRATION.md](../../INTEGRATION.md#through-pumpkinpie).
 
 ## License
 
