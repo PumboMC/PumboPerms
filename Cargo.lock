@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "pumbo-common"
 version = "0.2.5-beta"
-source = "git+https://github.com/PumboMC/PumboProx?rev=6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f#6f7c34cb0d76de51a3acd1e92cf2a1b37b68095f"
+source = "git+https://github.com/PumboMC/PumboProx?rev=de9bc28782cd9c7dc913468ead2e2866978ba876#de9bc28782cd9c7dc913468ead2e2866978ba876"
 dependencies = [
  "md-5",
  "rand_core 0.6.4",
